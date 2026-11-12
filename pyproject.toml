@@ -1,0 +1,59 @@
+[project]
+name = "book-agent"
+version = "0.1.0"
+description = "An agent that recommends books based on the ones you've already read."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi[standard]>=0.162.5",
+    "httpx>=0.28.1",
+    "pydantic>=2.14.3",
+    "pydantic-settings>=2.16.2",
+]
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.4.1.post1",
+    "ruff>=0.17.4",
+]
+
+# --- Ruff: linter + formatter ---------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes (unused imports, undefined names)
+    "I",     # isort (import ordering)
+    "UP",    # pyupgrade (modern syntax)
+    "B",     # flake8-bugbear (likely bugs)
+    "SIM",   # flake8-simplify
+    "ASYNC", # flake8-async (blocking calls in async code)
+    "RUF",   # ruff-specific rules
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# --- Pyright: static type checker -----------------------------------------
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+# --- Pytest ---------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

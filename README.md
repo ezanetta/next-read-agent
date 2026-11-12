@@ -1,0 +1,3 @@
+# Book Recommendation Agent
+
+An agent that recommends three books based on the books you've already read (from a Goodreads CSV export or a manual list). Each pick comes with a link and a reason that cites your own books, and optional filters (language, page count, genre) are enforced in code as hard constraints. It's built with Python 3.13, FastAPI and Pydantic, and the LLM provider (Gemini or Claude) sits behind a small in-house interface. To run it: install [uv](https://docs.astral.sh/uv/), copy `.env.example` to `.env` and fill in your keys, then run `uv sync` and `uv run fastapi dev src/book_agent/main.py`. Run the tests with `uv run pytest`.
