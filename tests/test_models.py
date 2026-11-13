@@ -1,7 +1,7 @@
 import pytest
-from pydantic import ValidationError
+from pydantic import HttpUrl, ValidationError
 
-from book_agent.domain.models import Book, Profile, ReadingStatus
+from book_agent.domain.models import Book, CatalogBook, Profile, ReadingStatus
 
 
 def make_book(
@@ -113,3 +113,68 @@ def test_book_is_immutable() -> None:
     book = make_book()
     with pytest.raises(ValidationError):
         book.title = "Changed"  # pyright: ignore[reportAttributeAccessIssue]
+
+
+# --- CatalogBook -------------------------------------------------------------
+
+
+def make_catalog_book(source_id: str = "vol1", **overrides: object) -> CatalogBook:
+    fields: dict[str, object] = {
+        "source_id": source_id,
+        "title": "Dune",
+        "link": "https://books.google.com/books/about/Dune.html?id=" + source_id,
+    }
+    return CatalogBook.model_validate(fields | overrides)
+
+
+def test_catalog_book_defaults_for_missing_data() -> None:
+    book = make_catalog_book()
+    assert book.authors == ()
+    assert book.categories == ()
+    assert book.isbn is None
+    assert book.isbn13 is None
+    assert book.pages is None
+    assert book.language is None
+    assert book.description is None
+    assert book.year is None
+    assert book.cover_url is None
+
+
+def test_catalog_book_validates_link_into_a_url() -> None:
+    book = make_catalog_book()
+    assert isinstance(book.link, HttpUrl)
+    assert str(book.link) == "https://books.google.com/books/about/Dune.html?id=vol1"
+
+
+@pytest.mark.parametrize("bad_link", ["not a url", "ftp://example.com/book", ""])
+def test_catalog_book_rejects_invalid_link(bad_link: str) -> None:
+    with pytest.raises(ValidationError):
+        make_catalog_book(link=bad_link)
+
+
+def test_catalog_book_rejects_invalid_cover_url() -> None:
+    with pytest.raises(ValidationError):
+        make_catalog_book(cover_url="not a url")
+
+
+@pytest.mark.parametrize("field", ["source_id", "title"])
+def test_catalog_book_rejects_empty_required_text(field: str) -> None:
+    with pytest.raises(ValidationError):
+        make_catalog_book(**{field: ""})
+
+
+def test_catalog_book_rejects_non_positive_pages() -> None:
+    with pytest.raises(ValidationError):
+        make_catalog_book(pages=0)
+
+
+def test_catalog_book_is_hashable_so_sets_deduplicate() -> None:
+    first = make_catalog_book(authors=("Frank Herbert",), categories=("Fiction",))
+    same = make_catalog_book(authors=("Frank Herbert",), categories=("Fiction",))
+    other = make_catalog_book("vol2")
+    assert {first, same, other} == {first, other}
+
+
+def test_catalog_book_accepts_a_list_and_stores_a_tuple() -> None:
+    book = make_catalog_book(authors=["Frank Herbert"])
+    assert book.authors == ("Frank Herbert",)
