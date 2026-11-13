@@ -3,6 +3,9 @@
 ## Project
 An agent that recommends 3 books based on the books I've read (Goodreads CSV export or a manual list), each with a link and a reason that cites my own books. Supports filters (language, page count, genre) as hard constraints validated in code, not by the LLM.
 
+## Plan
+For the full plan, scope, features and open questions, read docs/PLAN.md before starting any non-trivial task.
+
 ## Stack
 Python 3.13, uv, FastAPI, Pydantic, pydantic-settings, httpx, pytest, ruff, pyright (strict).
 Later: Postgres + pgvector (Docker Compose), Langfuse, React + Vite + Tailwind for the UI.
@@ -12,6 +15,14 @@ Later: Postgres + pgvector (Docker Compose), Langfuse, React + Vite + Tailwind f
 - Per request: retrieve ~50 candidates with SQL filters + vector similarity, the LLM reranks and picks 3, code validates the hard rules (3 books, none already read, filters respected, valid links).
 - Google Books API is used live only as an agent fallback tool and for the UI book search.
 - The LLM sits behind our own LLMClient interface. Provider is selected with LLM_PROVIDER (gemini or claude). No LangChain.
+- 
+## Architecture rules
+- domain/ holds models and pure business rules. It never imports FastAPI, httpx or any LLM SDK.
+- External services sit behind Protocols in ports.py. Adapters implement them in adapters/.
+- Dependencies are passed through constructors and wired in one place (FastAPI Depends). No DI framework.
+- Prefer fakes that implement the Protocols over unittest.mock.
+- No mapper layers between identical models. Prefer functions over classes when there is no state.
+- Tests that hit real APIs are marked @pytest.mark.live and excluded by default.
 
 ## How to work with me
 - I come from Kotlin. Explain new Python concepts by comparing them to Kotlin.
