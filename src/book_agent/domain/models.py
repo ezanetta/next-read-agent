@@ -1,15 +1,17 @@
-"""Domain models (Pydantic): Book and Profile.
+"""Domain models (Pydantic): Book, Profile and CatalogBook.
 
 Book describes one entry in a reader's library, normalized from any source
 (Goodreads CSV export today, manual entry later).
 Profile is a named reader plus their books, with helpers that split the library
 into the taste signals the agent uses.
+CatalogBook is a book that exists in a catalog (a recommendation candidate),
+independent of any reader.
 """
 
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, HttpUrl
 
 LIKED_MIN_RATING = 4.0
 
@@ -73,3 +75,24 @@ class Profile(BaseModel):
         return [
             b for b in self.read_books if b.my_rating is not None and b.my_rating < LIKED_MIN_RATING
         ]
+
+
+class CatalogBook(BaseModel, frozen=True):
+    """A book that exists in a catalog (Google Books today), independent of any reader.
+
+    Unlike Book, it has no reading status or rating: it is a candidate, not a library entry.
+    Sequences are tuples so the model stays hashable (lists cannot be hashed).
+    """
+
+    source_id: str = Field(min_length=1)  # Google volume id; add a `source` field with Goodbooks
+    title: str = Field(min_length=1)
+    authors: tuple[str, ...] = ()
+    isbn: str | None = None  # ISBN-10
+    isbn13: str | None = None
+    pages: int | None = Field(default=None, gt=0)
+    language: str | None = None  # ISO 639-1 code, e.g. "en", "es"
+    categories: tuple[str, ...] = ()
+    description: str | None = None  # plain text, no HTML
+    year: int | None = None  # original publication year when known
+    cover_url: HttpUrl | None = None
+    link: HttpUrl
