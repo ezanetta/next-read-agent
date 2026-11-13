@@ -24,7 +24,7 @@ class FakeBookSearch:
             b
             for b in self.books
             if (needle in b.title.casefold() or any(needle in a.casefold() for a in b.authors))
-            and (language is None or b.language == language)
+            and (language is None or b.language in (None, language))
         ]
         return matches[:max_results]
 

@@ -21,7 +21,10 @@ class BookSearch(Protocol):
     ) -> list[CatalogBook]:
         """Return up to `max_results` books matching `query`, most relevant first.
 
-        `language` is an ISO 639-1 code ("en", "es") that restricts the results.
+        `language` is an ISO 639-1 code ("en", "es"). When given, no result has a
+        different known language, but books whose language is unknown (None) may be
+        included: deciding what to do with missing data is up to the caller.
+        Fewer than `max_results` books may be returned.
         Raises BookSearchError if the search fails.
         """
         ...

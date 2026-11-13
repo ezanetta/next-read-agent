@@ -45,6 +45,16 @@ async def test_search_filters_by_language(fake: FakeBookSearch) -> None:
     assert await fake.search("dune", language="es") == [DUNE_ES]
 
 
+async def test_search_keeps_unknown_language_when_filtering() -> None:
+    unknown = CatalogBook(
+        source_id="dune-unknown",
+        title="Dune Companion",
+        link=HttpUrl("https://books.google.com/books?id=dune-unknown"),
+    )
+    fake = FakeBookSearch([DUNE, DUNE_ES, unknown])
+    assert await fake.search("dune", language="es") == [DUNE_ES, unknown]
+
+
 async def test_search_respects_max_results(fake: FakeBookSearch) -> None:
     assert await fake.search("dune", max_results=1) == [DUNE]
 
