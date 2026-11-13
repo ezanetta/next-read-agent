@@ -11,10 +11,11 @@ from typing import Annotated
 
 from pydantic import BaseModel, Field
 
-LIKED_MIN_RATING = 4
+LIKED_MIN_RATING = 4.0
 
-Rating = Annotated[int, Field(ge=1, le=5)]
-"""A star rating from 1 to 5. Unrated books use None, never 0."""
+Rating = Annotated[float, Field(gt=0, le=5)]
+"""A star rating in (0, 5]. Goodreads allows fractional stars (e.g. 3.5, 2.75).
+Unrated books use None, never 0."""
 
 
 class ReadingStatus(StrEnum):
@@ -59,7 +60,7 @@ class Profile(BaseModel):
 
     @property
     def liked_books(self) -> list[Book]:
-        """Read books rated 4 or 5."""
+        """Read books rated 4.0 or higher."""
         return [
             b
             for b in self.read_books
@@ -68,7 +69,7 @@ class Profile(BaseModel):
 
     @property
     def not_so_liked_books(self) -> list[Book]:
-        """Read books rated 1 to 3. Unrated books are neither liked nor not-so-liked."""
+        """Read books rated below 4.0. Unrated books are neither liked nor not-so-liked."""
         return [
             b for b in self.read_books if b.my_rating is not None and b.my_rating < LIKED_MIN_RATING
         ]

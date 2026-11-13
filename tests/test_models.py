@@ -8,7 +8,7 @@ def make_book(
     goodreads_id: str = "1",
     *,
     status: ReadingStatus = ReadingStatus.READ,
-    my_rating: int | None = None,
+    my_rating: float | None = None,
 ) -> Book:
     return Book(
         goodreads_id=goodreads_id,
@@ -82,8 +82,18 @@ def test_empty_profile_returns_empty_lists() -> None:
 # --- Book validation ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("rating", [0, 6, -1])
-def test_rating_outside_1_to_5_is_rejected(rating: int) -> None:
+@pytest.mark.parametrize(
+    ("rating", "liked"),
+    [(5.0, True), (4.5, True), (4.0, True), (3.75, False), (3.5, False), (0.5, False)],
+)
+def test_fractional_ratings_split_at_4(rating: float, liked: bool) -> None:
+    profile = Profile(name="Reader", books=[make_book(my_rating=rating)])
+    assert bool(profile.liked_books) is liked
+    assert bool(profile.not_so_liked_books) is not liked
+
+
+@pytest.mark.parametrize("rating", [0, 0.0, 5.5, 6, -1])
+def test_rating_outside_0_exclusive_to_5_is_rejected(rating: float) -> None:
     with pytest.raises(ValidationError):
         make_book(my_rating=rating)
 
