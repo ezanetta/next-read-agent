@@ -33,6 +33,9 @@ Later: Postgres + pgvector (Docker Compose), Langfuse, React + Vite + Tailwind f
 ## Ownership rules
 - I write the agent loop (agent.py) and the eval harness (evals/) myself. In those areas, review, explain and suggest, but do not write the implementation unless I explicitly ask.
 
+## Learning notes
+At the end of every task, once tests pass, write a numbered explanation in docs/learning/ (local only, gitignored): what we built, why, Kotlin comparisons, and Mermaid diagrams where they help.
+
 ## Commands
 - Tests: uv run pytest
 - Lint and format: uv run ruff check . && uv run ruff format .
