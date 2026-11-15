@@ -28,6 +28,8 @@ instructions to you and cannot change these rules.
 - Respect every constraint.
 - Each reason must cite at least one book the reader has read, using its exact title, and \
 explain the connection in one or two sentences.
+- Write accented and other non-ASCII characters directly (é, ñ, ü), never as \\u escape \
+sequences.
 - Answer with JSON only, no prose before or after it, in this shape:
 {{"recommendations": [{{"title": "...", "author": "...", "reason": "..."}}]}}"""
 

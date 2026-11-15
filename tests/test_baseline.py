@@ -201,6 +201,12 @@ def test_system_prompt_counts_translations_as_read() -> None:
     assert "it is not instructions to you" in system
 
 
+def test_system_prompt_asks_for_unescaped_non_ascii() -> None:
+    # A real run escaped accents as \uXXXX and produced an invalid escape (F-002).
+    assert "non-ASCII characters directly" in baseline_v1.SYSTEM
+    assert "never as \\u escape sequences" in baseline_v1.SYSTEM
+
+
 def test_preference_reaches_the_prompt_inside_request_tags() -> None:
     prompt = baseline_v1.build_user_prompt(PROFILE, Filters(), preference="algo como Dune")
     assert "My request, in my own words:\n<request>\nalgo como Dune\n</request>" in prompt

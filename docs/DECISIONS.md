@@ -64,3 +64,10 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Accept any string; require two-letter codes and normalize catalog codes.
 - **Choice:** `Filters.language` must match `^[a-z]{2}$`. The interpreter's codes are lowercased and reduced to the primary subtag before validation; the validator compares only the catalog code's primary subtag.
 - **Reason:** An invalid code fails loudly instead of becoming a filter that matches nothing, and regional catalog codes still match.
+
+## D-010 · No JSON repair for model replies (2026-11-15)
+
+- **Context:** A baseline reply escaped accented characters as `\uXXXX` and produced an invalid escape, so it failed to parse (F-002).
+- **Options:** Repair the JSON (fix escapes, use a lenient parser); keep strict parsing and ask the prompt to avoid escapes.
+- **Choice:** Strict parsing stays. `baseline_v1` asks for accented and non-ASCII characters to be written directly, never as `\u` escapes.
+- **Reason:** The agent will return recommendations through tool calling, where the provider delivers structured arguments, so repair code would only serve the baseline. Strict parsing keeps malformed replies visible as failures that evals can count.
