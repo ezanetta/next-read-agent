@@ -11,7 +11,11 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - Validator: work-level matching (D-011). For authors already in the library, equal Open Library work keys or the LLM same-work judge (D-012) detect translations and retitled editions.
 - **How it was verified:** Unit tests check the prompt rules. The reproduction test, formerly `xfail(strict=True)`, now passes as `test_translated_title_of_a_read_book_is_already_read`, decided by the judge, with twins decided by work key and end to end through the baseline and CLI. The live test `test_same_work_live.py` measured the judge on 11 labeled real pairs (`gemini-3.5-flash-lite`, `same_work_v1`): 11 of 11 correct, with no same-work pair judged different and no different pair judged same. The set is small and uses well-known books, so evals should keep auditing `LLM_SAME` and `LLM_UNSURE` decisions.
 - **Re-check with real runs (F-002):** the prompt rule alone did not work. *The Metamorphosis* was recommended twice more, once with a reason citing "La metamorfosis by the same author" as if they were different books. This is why the fix lives in the validator.
-- **Status:** fixed in the validator; not yet re-checked with a real run.
+- **Verified with real data (2 baseline runs, Open Library contact set, library resolved with `works`):**
+  - Run 1 (`--max-pages 200 --language en`): all 3 recommendations were already read and all 3 were caught. *The Metamorphosis* was caught by the judge (`LLM_SAME`), the other two by title.
+  - Run 2 ("algo corto y liviano"): *The Metamorphosis and Other Stories*, an anthology containing the story the reader read, was judged UNSURE and counted as already read. A genuinely ambiguous case, handled as designed (D-012).
+  - Both Kafka detections were decided by the judge, not the work key, as F-003 predicted: Google Books ranks a reprint ISBN Open Library doesn't know.
+- **Status:** fixed and verified with real data.
 
 ## F-002 · First baseline runs: prompt-only exclusion is unreliable (2026-11-15)
 
@@ -44,8 +48,15 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 
   - ISBN lookups matched 3 of 4 pairs. The miss is a Spanish edition attached to a separate work: different keys don't prove different works.
   - Title search was right on 2 of 8 sides, only when searching the work's own (original) title. Translated and retitled titles find stray duplicate works. Sorting by edition count fixed none of the misses.
-  - Library coverage: 177 of 226 rows have an ISBN (81 of 115 read, 94 of 109 to-read).
+  - Library coverage: 177 of 226 rows have an ISBN (81 of 115 read, 94 of 109 to-read). The first real `works` run resolved 155 of 177 to a work; 20 are unknown to Open Library and 2 lookups failed and were retried.
   - Recommendation side: Google Books results mostly carry ISBNs (6 of 7 matching editions in 3 searches), but often reprints. Open Library knew 4 of 6: the only Kafka edition with an ISBN was a self-published reprint unknown to it, so in the real F-001 case the work key can't decide and the judge does.
 - **How it was detected:** Manual spike against the live APIs, with a User-Agent naming the app (no contact details yet: that became `OPEN_LIBRARY_CONTACT`).
 - **What it implies:** ISBN lookups only, never title search; a cache so the library is resolved once; and an LLM check for what keys can't decide (D-011, D-013).
 - **How it was verified:** Unit tests use the response shapes seen in the spike; a live test checks that the Spanish and Bantam Kafka editions share `OL498556W`.
+
+## F-004 · A reason that cites the recommended book itself passes `cites_library` (2026-11-15)
+
+- **What happened:** In a real baseline run (F-001, Run 1), the model recommended *The Pearl* with a reason citing *The Pearl* as the book the reader liked. The book was already read and was caught as `ALREADY_READ`, but `cites_library` passed, because the reason does mention a read title.
+- **How it was detected:** Manual review of the CLI output.
+- **Fix:** Not yet. `cites_library` should not count a citation of the recommended work itself (same title variants, or the library book it collides with).
+- **How it was verified:** Not yet.
