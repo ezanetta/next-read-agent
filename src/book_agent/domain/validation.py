@@ -229,7 +229,12 @@ def _language_check(book: CatalogBook, filters: Filters) -> Check:
         return Check.SKIPPED
     if book.language is None:
         return Check.UNKNOWN
-    return Check.PASS if book.language == filters.language else Check.FAIL
+    return Check.PASS if primary_language(book.language) == filters.language else Check.FAIL
+
+
+def primary_language(code: str) -> str:
+    """The primary subtag of a language code: "pt-BR" and "pt_br" -> "pt"."""
+    return code.replace("_", "-").split("-", 1)[0].casefold()
 
 
 def _pages_check(book: CatalogBook, filters: Filters) -> Check:

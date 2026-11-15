@@ -1,16 +1,21 @@
-from book_agent.domain.models import CatalogBook
+import pytest
+
+from book_agent.domain.models import CatalogBook, Profile
 from book_agent.domain.recommendations import Check, Filters, Recommendation, Rule, ValidationResult
-from book_agent.domain.validation import validate_recommendations
+from book_agent.domain.validation import primary_language, validate_recommendations
 from book_agent.ports import BookSearchError
 from tests.fakes import FakeBookSearch
 from tests.library_data import (
+    BLINDNESS_PT_BR,
     CLEAN_THREE,
     FOUNDATION,
     HYPERION_SHORT,
+    METAMORPHOSIS,
     NO_LANGUAGE,
     PEDRO_ES,
     PROFILE,
     WELL_OF_ASCENSION,
+    book,
     catalog,
     rec,
 )
@@ -227,3 +232,43 @@ async def test_every_violation_is_reported_not_just_the_first() -> None:
         (Rule.CITES_LIBRARY, 0),
         (Rule.NOT_FOUND, 1),
     }
+
+
+# --- Regional language codes ----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("code", "primary"),
+    [("pt-BR", "pt"), ("zh-CN", "zh"), ("en", "en"), ("pt_br", "pt"), ("EN-us", "en")],
+)
+def test_primary_language(code: str, primary: str) -> None:
+    assert primary_language(code) == primary
+
+
+async def test_regional_catalog_language_matches_the_primary_subtag() -> None:
+    result = await validate(
+        with_clean(rec("Ensaio sobre a Cegueira", "José Saramago", "Bleak, like Ficciones.")),
+        Filters(language="pt"),
+    )
+    assert result.items[0].match == BLINDNESS_PT_BR  # language "pt-BR" in the catalog
+    assert result.items[0].language is Check.PASS
+
+
+# --- Known failure: translated titles ----------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="needs work-level matching: a translated title of a read book is not detected",
+)
+async def test_known_failure_translated_title_of_a_read_book() -> None:
+    # Found in a real run: "La metamorfosis" read in Spanish, "The Metamorphosis"
+    # recommended in English, and the validator reported PASSED. strict=True turns this
+    # into a failure once it starts passing, so the marker can't be forgotten.
+    profile = Profile(name="Reader", books=[*PROFILE.books, book("La metamorfosis", "Franz Kafka")])
+    recommendation = rec("The Metamorphosis", "Franz Kafka", "A short classic, like Ficciones.")
+    result = await validate_recommendations(
+        with_clean(recommendation), profile, NO_FILTERS, catalog()
+    )
+    assert result.items[0].match == METAMORPHOSIS
+    assert (Rule.ALREADY_READ, 0) in rules(result)

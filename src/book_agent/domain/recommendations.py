@@ -12,7 +12,7 @@ EXPECTED_RECOMMENDATIONS = 3
 class Filters(BaseModel, frozen=True):
     """Hard constraints from the request. None means "no constraint"."""
 
-    language: str | None = None  # ISO 639-1, e.g. "en"
+    language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")  # ISO 639-1, e.g. "en"
     max_pages: int | None = Field(default=None, gt=0)
 
 

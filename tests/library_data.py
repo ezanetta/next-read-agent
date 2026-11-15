@@ -73,6 +73,10 @@ HAIL_MARY = catalog_book("hail-mary", "Project Hail Mary", "Andy Weir", 476)
 PEDRO_ES = catalog_book("pedro-es", "Pedro Páramo", "Juan Rulfo", 128, language="es")
 PEDRO_EN = catalog_book("pedro-en", "Pedro Paramo", "Juan Rulfo", 124, language="en")
 NO_LANGUAGE = catalog_book("no-lang", "The Invisible Cities", "Italo Calvino", 165, language=None)
+BLINDNESS_PT_BR = catalog_book(
+    "blindness-br", "Ensaio sobre a Cegueira", "José Saramago", 310, language="pt-BR"
+)
+METAMORPHOSIS = catalog_book("metamorphosis", "The Metamorphosis", "Franz Kafka", 96)
 
 CATALOG = [
     HYPERION,
@@ -89,6 +93,8 @@ CATALOG = [
     PEDRO_ES,
     PEDRO_EN,
     NO_LANGUAGE,
+    BLINDNESS_PT_BR,
+    METAMORPHOSIS,
 ]
 
 
