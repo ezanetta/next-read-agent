@@ -33,8 +33,8 @@ class Book(BaseModel, frozen=True):
     the reader owns. It can be negative for ancient works (e.g. Plato).
     """
 
-    # None for manually entered books. Matching books across sources is part of
-    # the week-2 work vs edition de-duplication (docs/PLAN.md).
+    # None for manually entered books. Matching books across sources is planned as
+    # part of de-duplicating works vs editions.
     goodreads_id: str | None = None
     title: str = Field(min_length=1)
     author: str

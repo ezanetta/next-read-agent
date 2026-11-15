@@ -1,3 +1,5 @@
 # Evals
 
-Placeholder. The eval harness for the recommendation agent lives here and is written by the project author.
+Evaluation harness for the recommendation agent (planned): hard-rule compliance
+(three books, none already read, filters respected, valid links), recommendation
+quality, and cost and latency per recommendation. Not implemented yet.
