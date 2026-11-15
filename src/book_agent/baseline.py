@@ -1,96 +1,140 @@
-"""The no-tools baseline: one LLM call with the whole profile, then hard-rule validation.
+"""The no-tools baseline: one recommendation call with the whole profile, then validation.
 
-The simplest end-to-end run of the project and the first baseline for evals.
-run_baseline never raises for model or parsing problems: they end up in result.error, so
-an eval run always gets one result per case.
+With a free-text request, a separate short call interprets it first (request_parser), and
+its filters are merged with the explicit ones. The simplest end-to-end run of the project
+and the first baseline for evals. run_baseline never raises for model or parsing problems:
+they end up in result.error, so an eval run always gets one result per case.
 """
 
-import json
-import re
 from time import perf_counter
 from typing import cast
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, RecommendationList, ValidationResult
+from book_agent.domain.requests import ResolvedRequest, merge_filters
 from book_agent.domain.validation import validate_recommendations
+from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message, StopReason, Usage
+from book_agent.llm.calls import LLMCall
 from book_agent.ports import BookSearch
 from book_agent.prompts import baseline_v1
+from book_agent.request_parser import interpret_request
 
+CALL_NAME = "recommend"
 DEFAULT_MAX_TOKENS = 2048
 
-_FENCED = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
-
-class RecommendationParseError(ValueError):
+class RecommendationParseError(ReplyParseError):
     """The model's reply could not be read as a recommendation list."""
 
 
 class BaselineResult(BaseModel, frozen=True):
     prompt_id: str
-    model: str | None = None
-    usage: Usage | None = None
-    llm_latency_s: float
+    request_prompt_id: str | None = None  # set when a request text was interpreted
+    request_text: str | None = None
+    request: ResolvedRequest | None = None  # None when interpretation failed
+    calls: list[LLMCall] = []  # in order: interpret_request (optional), recommend
     validation_latency_s: float | None = None
-    raw_text: str | None = None
+    raw_text: str | None = None  # the reply that failed to parse, or the recommendation reply
     parsed: RecommendationList | None = None
     validation: ValidationResult | None = None
-    error: str | None = None  # LLM failure or unparseable reply
+    error: str | None = None  # interpretation failure, LLM failure or unparseable reply
 
     @property
     def passed(self) -> bool:
         return self.error is None and self.validation is not None and self.validation.passed
 
+    @property
+    def total_usage(self) -> Usage | None:
+        usages = [c.usage for c in self.calls if c.usage is not None]
+        if not usages:
+            return None
+        return Usage(
+            input_tokens=sum(u.input_tokens for u in usages),
+            output_tokens=sum(u.output_tokens for u in usages),
+        )
+
 
 async def run_baseline(
     profile: Profile,
-    filters: Filters,
+    flags: Filters,
     *,
+    request: str | None = None,
     llm: LLMClient,
     books: BookSearch,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float | None = None,
 ) -> BaselineResult:
-    prompt_id = baseline_v1.PROMPT_ID
+    """Interpret the optional request, merge its filters with `flags`, recommend, validate.
+
+    Explicit `flags` override interpreted filters field by field. A failed interpretation
+    stops the run before the recommendation call, so typed constraints are never dropped.
+    """
+    result = BaselineResult(prompt_id=baseline_v1.PROMPT_ID)
+    text = request.strip() if request else None
+
+    if text:
+        interpretation = await interpret_request(text, llm=llm)
+        result = result.model_copy(
+            update={
+                "request_prompt_id": interpretation.prompt_id,
+                "request_text": text,
+                "calls": [interpretation.call] if interpretation.call else [],
+            }
+        )
+        if interpretation.parsed is None:
+            return result.model_copy(
+                update={
+                    "raw_text": interpretation.raw_text,
+                    "error": f"Could not interpret the request: {interpretation.error}",
+                }
+            )
+        filters, sources = merge_filters(interpretation.parsed.filters, flags)
+        preference = interpretation.parsed.preference
+    else:
+        filters, sources = merge_filters(Filters(), flags)
+        preference = None
+
+    resolved = ResolvedRequest(text=text, preference=preference, filters=filters, sources=sources)
+    result = result.model_copy(update={"request": resolved})
+
     started = perf_counter()
     try:
         response = await llm.complete(
             system=baseline_v1.SYSTEM,
-            messages=[Message.user(baseline_v1.build_user_prompt(profile, filters))],
+            messages=[Message.user(baseline_v1.build_user_prompt(profile, filters, preference))],
             max_tokens=max_tokens,
             temperature=temperature,
         )
     except LLMError as e:
-        return BaselineResult(
-            prompt_id=prompt_id,
-            llm_latency_s=perf_counter() - started,
-            error=f"LLM call failed: {e}",
+        failed = LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
+        return result.model_copy(
+            update={"calls": [*result.calls, failed], "error": f"LLM call failed: {e}"}
         )
-    llm_latency = perf_counter() - started
-    text = response.message.text
-    common = {
-        "prompt_id": prompt_id,
-        "model": response.model,
-        "usage": response.usage,
-        "llm_latency_s": llm_latency,
-        "raw_text": text,
-    }
+
+    call = LLMCall(
+        name=CALL_NAME,
+        model=response.model,
+        usage=response.usage,
+        latency_s=perf_counter() - started,
+    )
+    reply = response.message.text
+    result = result.model_copy(update={"calls": [*result.calls, call], "raw_text": reply})
 
     try:
-        parsed = parse_recommendations(text)
+        parsed = parse_recommendations(reply)
     except RecommendationParseError as e:
         reason = str(e)
         if response.stop_reason is StopReason.MAX_TOKENS:
             reason += " (the reply was cut off at max_tokens)"
-        return BaselineResult.model_validate(common | {"error": f"Unparseable reply: {reason}"})
+        return result.model_copy(update={"error": f"Unparseable reply: {reason}"})
 
     started = perf_counter()
     validation = await validate_recommendations(parsed.recommendations, profile, filters, books)
-    return BaselineResult.model_validate(
-        common
-        | {
+    return result.model_copy(
+        update={
             "parsed": parsed,
             "validation": validation,
             "validation_latency_s": perf_counter() - started,
@@ -104,35 +148,10 @@ def parse_recommendations(text: str) -> RecommendationList:
     Accepts {"recommendations": [...]} or a bare [...] list. Raises
     RecommendationParseError with a specific reason instead of crashing.
     """
-    candidates: list[str] = []
-    fenced = _FENCED.search(text)
-    if fenced:
-        candidates.append(fenced.group(1))
-    candidates.append(text.strip())
-    start, end = text.find("{"), text.rfind("}")
-    if 0 <= start < end:
-        candidates.append(text[start : end + 1])
-
-    error = "no JSON found in the reply"
-    for candidate in candidates:
-        if not candidate.startswith(("{", "[")):
-            continue  # prose, not JSON: keep "no JSON found" unless a real candidate fails
-        try:
-            payload = cast(object, json.loads(candidate))
-        except json.JSONDecodeError as e:
-            error = f"invalid JSON ({e.msg} at line {e.lineno}, column {e.colno})"
-            continue
+    try:
+        payload = extract_json(text)
         if isinstance(payload, list):
             payload = {"recommendations": cast(list[object], payload)}
-        try:
-            return RecommendationList.model_validate(payload)
-        except ValidationError as e:
-            raise RecommendationParseError(_describe(e)) from e
-    raise RecommendationParseError(error)
-
-
-def _describe(error: ValidationError) -> str:
-    first = error.errors()[0]
-    location = ".".join(str(part) for part in first["loc"]) or "reply"
-    more = f" (and {error.error_count() - 1} more)" if error.error_count() > 1 else ""
-    return f"unexpected JSON shape at {location}: {first['msg']}{more}"
+        return parse_model(RecommendationList, payload)
+    except ReplyParseError as e:
+        raise RecommendationParseError(str(e)) from e
