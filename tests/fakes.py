@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from book_agent.domain.models import CatalogBook
+from book_agent.domain.works import SameWorkAnswer, SameWorkVerdict, WorkRef
 from book_agent.llm.base import (
     LLMResponse,
     Message,
@@ -14,6 +15,7 @@ from book_agent.llm.base import (
     ToolSpec,
     Usage,
 )
+from book_agent.ports import WorkLookupError
 
 
 def _words(text: str) -> set[str]:
@@ -49,6 +51,42 @@ class FakeBookSearch:
     async def get_details(self, volume_id: str) -> CatalogBook | None:
         self.detail_lookups.append(volume_id)
         return next((b for b in self.books if b.source_id == volume_id), None)
+
+
+class FakeWorkResolver:
+    """WorkResolver backed by an ISBN -> work key table. ISBNs in `failing` raise.
+
+    ISBNs in neither are unknown (None). Records every lookup in order.
+    """
+
+    def __init__(
+        self, works: dict[str, str] | None = None, failing: set[str] | None = None
+    ) -> None:
+        self.works = dict(works or {})
+        self.failing = set(failing or set())
+        self.lookups: list[str] = []
+
+    async def work_for_isbn(self, isbn13: str) -> str | None:
+        self.lookups.append(isbn13)
+        if isbn13 in self.failing:
+            raise WorkLookupError("Open Library returned HTTP 503")
+        return self.works.get(isbn13)
+
+
+class FakeSameWorkJudge:
+    """SameWorkJudge that answers from a table keyed by the book's title.
+
+    Books not in the table are DIFFERENT. Records every call, so tests can assert
+    when the judge was (or was not) consulted and which candidates it saw.
+    """
+
+    def __init__(self, verdicts: dict[str, SameWorkVerdict] | None = None) -> None:
+        self.verdicts = dict(verdicts or {})
+        self.calls: list[tuple[WorkRef, tuple[WorkRef, ...]]] = []
+
+    async def judge(self, book: WorkRef, candidates: Sequence[WorkRef]) -> SameWorkVerdict:
+        self.calls.append((book, tuple(candidates)))
+        return self.verdicts.get(book.title, SameWorkVerdict(answer=SameWorkAnswer.DIFFERENT))
 
 
 # --- LLM ----------------------------------------------------------------------

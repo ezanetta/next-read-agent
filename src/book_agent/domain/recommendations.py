@@ -46,12 +46,30 @@ class Rule(StrEnum):
     LANGUAGE = "language"
     MAX_PAGES = "max_pages"
     CITES_LIBRARY = "cites_library"
+    # Only as an Unknown: the same-work check failed for an author already in the library.
+    # Not a pass: the book may be a translation or retitled edition of one already there.
+    SAME_WORK = "same_work"
+
+
+class MatchEvidence(StrEnum):
+    """What decided that a recommendation is a book already in the library."""
+
+    ISBN = "isbn"
+    TITLE = "title"  # title variants and author surname, as in matching.same_work
+    WORK_KEY = "work_key"  # an edition of the recommendation shares a work key with the book
+    LLM_SAME = "llm_same"  # the LLM same-work judge answered SAME
+    LLM_UNSURE = "llm_unsure"  # the judge was unsure, which counts as same
+
+    @property
+    def by_llm(self) -> bool:
+        return self in (MatchEvidence.LLM_SAME, MatchEvidence.LLM_UNSURE)
 
 
 class Violation(BaseModel, frozen=True):
     rule: Rule
     index: int | None  # position in the recommendation list; None for list-level rules
     message: str
+    evidence: MatchEvidence | None = None  # set on library rules, so evals can audit them
 
 
 class Unknown(BaseModel, frozen=True):
@@ -66,6 +84,7 @@ class CheckedRecommendation(BaseModel, frozen=True):
     recommendation: Recommendation
     match: CatalogBook | None  # the resolved edition: link, pages, language, cover
     library_match: Book | None  # the profile book it collides with, if any
+    library_evidence: MatchEvidence | None = None  # what decided library_match
     cited_titles: list[str]  # profile titles the reason mentions
     exists: Check
     not_in_library: Check
