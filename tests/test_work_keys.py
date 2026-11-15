@@ -151,3 +151,66 @@ def test_format_coverage() -> None:
         "  49 without an ISBN are covered only by the LLM check",
     ]
     assert len(format_coverage(result)) == 3  # no failure line without failures
+
+
+# --- Progress and incremental saves -------------------------------------------------
+
+
+def isbn13(n: int) -> str:
+    """A valid ISBN-13 built from a number, for libraries of any size."""
+    stem = f"978{n:09d}"
+    total = sum(int(c) * (3 if i % 2 else 1) for i, c in enumerate(stem))
+    return stem + str((10 - total % 10) % 10)
+
+
+def library_of(count: int) -> Profile:
+    return Profile(
+        name="Reader", books=[book(f"Book {n}", "Someone", isbn13=isbn13(n)) for n in range(count)]
+    )
+
+
+async def test_progress_reports_every_lookup_cached_ones_included() -> None:
+    calls: list[tuple[int, int]] = []
+    works = resolver(FakeWorkResolver(), cached((isbn13(0), None)))
+    await resolve_library(library_of(3), works, progress=lambda d, t: calls.append((d, t)))
+    assert calls == [(1, 3), (2, 3), (3, 3)]
+
+
+async def test_checkpoints_every_n_lookups_with_the_entries_so_far() -> None:
+    sizes: list[int] = []
+    works = resolver(FakeWorkResolver())
+    await resolve_library(
+        library_of(5),
+        works,
+        checkpoint=lambda c: sizes.append(len(c.entries)),
+        checkpoint_every=2,
+    )
+    assert sizes == [2, 4]  # the 5th entry is left to the caller's final save
+
+
+async def test_no_checkpoint_when_nothing_changed() -> None:
+    saves: list[WorkKeyCache] = []
+    already = cached(*((isbn13(n), None) for n in range(4)))
+    works = resolver(FakeWorkResolver(), already)
+    await resolve_library(library_of(4), works, checkpoint=saves.append, checkpoint_every=2)
+    assert saves == []
+
+
+async def test_an_interrupted_run_keeps_the_saved_lookups(tmp_path: Path) -> None:
+    class Crash(Exception):
+        """Stands in for Ctrl-C or a dropped connection (raising KeyboardInterrupt would
+        stop pytest itself)."""
+
+    class Interrupted(FakeWorkResolver):
+        async def work_for_isbn(self, isbn13: str) -> str | None:
+            if len(self.lookups) == 5:
+                raise Crash  # interrupted after 5 lookups
+            return await super().work_for_isbn(isbn13)
+
+    path = tmp_path / "work_keys.json"
+    works = resolver(Interrupted())
+    with pytest.raises(Crash):
+        await resolve_library(
+            library_of(10), works, checkpoint=lambda c: save_cache(c, path), checkpoint_every=2
+        )
+    assert len(load_cache(path).entries) == 4  # saved at lookups 2 and 4

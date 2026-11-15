@@ -15,6 +15,7 @@ Exit codes: 0 every lookup done, 2 some lookups failed or errors.
 import argparse
 import asyncio
 import re
+import sys
 from collections.abc import Sequence
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -38,6 +39,8 @@ from book_agent.wiring import (
 from book_agent.work_keys import (
     DEFAULT_CACHE_PATH,
     CachedWorkResolver,
+    Checkpoint,
+    Progress,
     WorkKeyCache,
     coverage,
     format_coverage,
@@ -111,19 +114,46 @@ async def _works(
     if open_library is None:
         print(f"error: {NO_CONTACT}; Open Library asks clients for contact details")
         return EXIT_ERROR
-    async with open_library:
-        resolver = CachedWorkResolver(build_work_resolver(open_library), cache, refresh=refresh)
-        output, code = await works_command(profile, resolver)
-    if resolver.changed:
-        save_cache(resolver.cache, cache_path)
+    resolver = CachedWorkResolver(build_work_resolver(open_library), cache, refresh=refresh)
+    try:
+        async with open_library:
+            output, code = await works_command(
+                profile,
+                resolver,
+                progress=_print_progress,
+                checkpoint=lambda c: save_cache(c, cache_path),
+            )
+    finally:  # also on Ctrl-C: keep every lookup made so far
+        if resolver.changed:
+            save_cache(resolver.cache, cache_path)
     print(output)
     return code
 
 
-async def works_command(profile: Profile, resolver: CachedWorkResolver) -> tuple[str, int]:
+async def works_command(
+    profile: Profile,
+    resolver: CachedWorkResolver,
+    *,
+    progress: Progress | None = None,
+    checkpoint: Checkpoint | None = None,
+) -> tuple[str, int]:
     """Resolve the library's ISBNs and return the coverage report and the exit code."""
-    library, failed = await resolve_library(profile, resolver)
+    library, failed = await resolve_library(
+        profile, resolver, progress=progress, checkpoint=checkpoint
+    )
     return "\n".join(format_coverage(library, failed)), EXIT_ERROR if failed else EXIT_OK
+
+
+def format_progress(done: int, total: int) -> str:
+    return f"Resolving work keys: {done} of {total}"
+
+
+def _print_progress(done: int, total: int) -> None:
+    """One updating line on a terminal; every 20 lookups and the last one otherwise."""
+    if sys.stdout.isatty():
+        print(f"\r{format_progress(done, total)}", end="\n" if done == total else "", flush=True)
+    elif done % 20 == 0 or done == total:
+        print(format_progress(done, total), flush=True)
 
 
 async def baseline_command(

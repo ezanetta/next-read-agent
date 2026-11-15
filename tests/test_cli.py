@@ -7,7 +7,9 @@ from book_agent.cli import (
     EXIT_ERROR,
     EXIT_OK,
     EXIT_VIOLATIONS,
+    _print_progress,  # pyright: ignore[reportPrivateUsage]
     baseline_command,
+    format_progress,
     main,
     works_command,
 )
@@ -197,3 +199,31 @@ def test_works_command_fails_cleanly_on_a_missing_csv(
 ) -> None:
     assert main(["works", "--refresh", "--csv", str(tmp_path / "missing.csv")]) == EXIT_ERROR
     assert capsys.readouterr().out.startswith("error: ")
+
+
+async def test_works_command_passes_progress_and_checkpoints_through() -> None:
+    profile = Profile(name="Me", books=[library_book("X", "Y", isbn13=KAFKA_ES)])
+    progress: list[tuple[int, int]] = []
+    saves: list[WorkKeyCache] = []
+    resolver = CachedWorkResolver(FakeWorkResolver({KAFKA_ES: KAFKA_WORK}), WorkKeyCache())
+    await works_command(
+        profile, resolver, progress=lambda d, t: progress.append((d, t)), checkpoint=saves.append
+    )
+    assert progress == [(1, 1)]
+    assert saves == []  # 1 lookup is below the checkpoint interval; the caller saves at the end
+
+
+def test_progress_text() -> None:
+    assert format_progress(45, 177) == "Resolving work keys: 45 of 177"
+
+
+def test_progress_without_a_terminal_prints_every_20_and_the_last(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for done in range(1, 46):
+        _print_progress(done, 45)
+    assert capsys.readouterr().out.splitlines() == [
+        "Resolving work keys: 20 of 45",
+        "Resolving work keys: 40 of 45",
+        "Resolving work keys: 45 of 45",
+    ]

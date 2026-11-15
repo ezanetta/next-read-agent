@@ -20,6 +20,7 @@ from book_agent.domain.models import Profile
 from book_agent.ports import WorkLookupError, WorkResolver
 
 DEFAULT_CACHE_PATH = Path("data/work_keys.json")
+DEFAULT_CHECKPOINT_EVERY = 20  # lookups between cache saves while resolving the library
 
 
 class CacheEntry(BaseModel, frozen=True):
@@ -30,6 +31,13 @@ class CacheEntry(BaseModel, frozen=True):
 class WorkKeyCache(BaseModel):
     version: Literal[1] = 1
     entries: dict[str, CacheEntry] = {}
+
+
+Progress = Callable[[int, int], None]
+"""Called with (done, total) after each library ISBN is looked up."""
+
+Checkpoint = Callable[[WorkKeyCache], None]
+"""Called with the cache every few lookups, to save it so an interrupted run keeps its work."""
 
 
 def load_cache(path: Path) -> WorkKeyCache:
@@ -57,7 +65,8 @@ class CachedWorkResolver:
     """WorkResolver that answers from the cache and asks `inner` only for new ISBNs.
 
     With refresh=True every ISBN is asked again once and the entry overwritten; a failed
-    lookup keeps the old entry. `changed` tells the caller whether to save the cache.
+    lookup keeps the old entry. `writes` counts new or updated entries, and `changed`
+    tells the caller whether to save the cache.
     """
 
     def __init__(
@@ -73,7 +82,7 @@ class CachedWorkResolver:
         self._refresh = refresh
         self._refreshed: set[str] = set()
         self._today = today
-        self.changed = False
+        self.writes = 0
 
     async def work_for_isbn(self, isbn13: str) -> str | None:
         entry = self.cache.entries.get(isbn13)
@@ -82,8 +91,12 @@ class CachedWorkResolver:
         work = await self._inner.work_for_isbn(isbn13)  # WorkLookupError is not cached
         self.cache.entries[isbn13] = CacheEntry(work=work, checked=self._today())
         self._refreshed.add(isbn13)
-        self.changed = True
+        self.writes += 1
         return work
+
+    @property
+    def changed(self) -> bool:
+        return self.writes > 0
 
 
 @dataclass(frozen=True)
@@ -116,21 +129,44 @@ def coverage(profile: Profile, cache: WorkKeyCache) -> Coverage:
     )
 
 
-async def resolve_library(profile: Profile, resolver: CachedWorkResolver) -> tuple[Coverage, int]:
+async def resolve_library(
+    profile: Profile,
+    resolver: CachedWorkResolver,
+    *,
+    progress: Progress | None = None,
+    checkpoint: Checkpoint | None = None,
+    checkpoint_every: int = DEFAULT_CHECKPOINT_EVERY,
+) -> tuple[Coverage, int]:
     """Look up every library ISBN not yet cached (all of them with refresh).
 
     Returns the coverage and the number of failed lookups. Failures are not cached, so
     a rerun retries them; during a refresh a failure keeps the old entry.
+    `progress` hears about every lookup, cached ones included. `checkpoint` is called
+    every `checkpoint_every` lookups when the cache has changed since the last call;
+    saving at the end is left to the caller.
     """
+    isbns = sorted({isbn for b in profile.books if (isbn := preferred_isbn13(b.isbn13, b.isbn))})
+    done = 0
+    saved_writes = resolver.writes
 
     async def failed(isbn: str) -> bool:
+        nonlocal done, saved_writes
         try:
             await resolver.work_for_isbn(isbn)
+            lookup_failed = False
         except WorkLookupError:
-            return True
-        return False
+            lookup_failed = True
+        # Only finished lookups count: a crash or Ctrl-C skips this. Lookups run
+        # concurrently, but this block has no await, so the counters need no lock.
+        done += 1
+        if progress is not None:
+            progress(done, len(isbns))
+        due = done % checkpoint_every == 0
+        if checkpoint is not None and due and resolver.writes > saved_writes:
+            checkpoint(resolver.cache)
+            saved_writes = resolver.writes
+        return lookup_failed
 
-    isbns = sorted({isbn for b in profile.books if (isbn := preferred_isbn13(b.isbn13, b.isbn))})
     failures = await asyncio.gather(*(failed(isbn) for isbn in isbns))
     return coverage(profile, resolver.cache), sum(failures)
 
