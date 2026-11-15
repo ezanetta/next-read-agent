@@ -71,3 +71,28 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Repair the JSON (fix escapes, use a lenient parser); keep strict parsing and ask the prompt to avoid escapes.
 - **Choice:** Strict parsing stays. `baseline_v1` asks for accented and non-ASCII characters to be written directly, never as `\u` escapes.
 - **Reason:** The agent will return recommendations through tool calling, where the provider delivers structured arguments, so repair code would only serve the baseline. Strict parsing keeps malformed replies visible as failures that evals can count.
+
+## D-011 · Hybrid work matching: Open Library work keys, then an LLM same-work check (2026-11-15)
+
+- **Context:** Title matching can't see translations or retitled editions (F-001). Open Library groups editions under works; Google Books has no such concept. The spike (F-003) showed ISBN lookups group translations well but not always, and title search finds stray duplicate works.
+- **Options:**
+  - Open Library title + author search: rejected. Its top hit was right on 2 of 8 sides, and only when searching the work's original title.
+  - Open Library by ISBN alone: rejected. Some works are split (El principito / The Little Prince), Google Books often ranks reprint ISBNs Open Library doesn't know, and 49 of 226 library rows have no ISBN.
+  - LLM check alone: rejected. A non-deterministic, paid call for every author overlap, and harder to explain than an equal key.
+  - Hybrid.
+- **Choice:** For recommendations whose author already appears in the library: equal work keys (any matching edition against the author's library books) are a violation with `WORK_KEY` evidence and skip the LLM; otherwise the same-work judge decides. Recommendations by authors not in the library skip both.
+- **Reason:** Equal keys are strong, cheap and deterministic evidence; different or missing keys prove nothing, and the judge covers those cases. The author gate keeps calls and unknowns rare: a translated duplicate is only a real risk for authors already read. Known gap: author names transliterated differently (Tolstói / Tolstoy) fail the surname gate.
+
+## D-012 · The same-work judge leans towards "same work" (2026-11-15)
+
+- **Context:** The judge can be wrong in two directions at different costs. A false "same" loses one good recommendation, which a retry can replace. A false "different" recommends a book the reader already has, the failure being fixed.
+- **Options:** Trust a yes/no answer; ask for a confidence score; allow an explicit "unsure" and treat it as same.
+- **Choice:** Answers are SAME, UNSURE or DIFFERENT. UNSURE counts as a collision, in code (`SameWorkVerdict.collides`) as well as in the prompt. DIFFERENT is only accepted from a reply that parses cleanly. Violations decided by the LLM carry `LLM_SAME` or `LLM_UNSURE` evidence and say so in the message, so evals can audit them. The judge is measured on a labeled set with an asymmetric assertion: no same-work pair may be judged different.
+- **Judge failure:** an LLM error or unreadable reply is an Unknown under the `SAME_WORK` rule, not a violation and not a pass (D-002). The validator reports honestly; the product policy decides. **The future agent loop must not treat this Unknown as a pass:** the author is already in the library, so the book may be one the reader has read. It should retry the check or replace the book.
+
+## D-013 · Work keys by ISBN only, cached by ISBN-13, with an explicit works command (2026-11-15)
+
+- **Context:** Resolving 177 library ISBNs on every run would repeat about 180 requests to a free, volunteer-run service.
+- **Options:** Resolve on every run; resolve on demand inside runs; resolve once with a command and cache.
+- **Choice:** `works` resolves the library once and caches results in `data/work_keys.json`, keyed by ISBN-13, so the cache serves library books and recommendations and survives a new export. "Unknown to Open Library" is cached; failed lookups are not, so a rerun retries them; `--refresh` looks everything up again. Baseline runs read the cache and only look up new ISBNs. Requests carry a User-Agent with contact details from `OPEN_LIBRARY_CONTACT`, never hardcoded since the repo is public; without it, work-key matching is off and only the judge runs. At most 2 concurrent requests, a 10 s timeout and no retries.
+- **Reason:** Polite usage and fast runs, coverage the reader can see ("160 resolved to a work, 15 unknown"), and contributors can run everything without an Open Library contact.
