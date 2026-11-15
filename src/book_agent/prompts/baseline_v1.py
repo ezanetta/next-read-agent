@@ -1,0 +1,74 @@
+"""baseline_v1: one call, no tools, the reader's whole history in the prompt.
+
+Frozen once used by evals. Both the wording and the formatting of the book lists are part
+of the version: change either one in a new module (baseline_v2).
+"""
+
+from book_agent.domain.models import Book, Profile, ReadingStatus
+from book_agent.domain.recommendations import EXPECTED_RECOMMENDATIONS, Filters
+
+PROMPT_ID = "baseline_v1"
+
+SYSTEM = f"""You are a book recommendation assistant.
+You recommend exactly {EXPECTED_RECOMMENDATIONS} real, published books to a reader, based on \
+the books they have read and how they rated them.
+
+Rules:
+- Recommend exactly {EXPECTED_RECOMMENDATIONS} different books.
+- Never recommend a book that appears anywhere in the reader's lists, in any edition.
+- Respect every constraint the reader states.
+- Each reason must cite at least one book the reader has read, using its exact title, and \
+explain the connection in one or two sentences.
+- Answer with JSON only, no prose before or after it, in this shape:
+{{"recommendations": [{{"title": "...", "author": "...", "reason": "..."}}]}}"""
+
+
+def build_user_prompt(profile: Profile, filters: Filters) -> str:
+    liked = profile.liked_books
+    less_liked = profile.not_so_liked_books
+    rated = {id(b) for b in liked + less_liked}
+    unrated_read = [b for b in profile.read_books if id(b) not in rated]
+    reading = [b for b in profile.books if b.status is ReadingStatus.CURRENTLY_READING]
+
+    sections = [
+        _section("Books I liked (rating out of 5)", liked, with_rating=True),
+        _section(
+            "Books I liked less (avoid recommending similar books)", less_liked, with_rating=True
+        ),
+        _section("Other books I have read (no rating)", unrated_read),
+        _section("Books I am reading now", reading),
+        _section("Books already on my to-read list", profile.to_read_books),
+    ]
+    parts = [s for s in sections if s]
+    parts.append("Do not recommend any book from the lists above.")
+
+    constraints = _constraints(filters)
+    if constraints:
+        parts.append("Constraints:\n" + "\n".join(f"- {c}" for c in constraints))
+
+    parts.append(f"Recommend {EXPECTED_RECOMMENDATIONS} books for me.")
+    return "\n\n".join(parts)
+
+
+def _section(heading: str, books: list[Book], *, with_rating: bool = False) -> str:
+    if not books:
+        return ""
+    lines = [f"{heading}:"]
+    for book in books:
+        line = f"- {book.title} by {book.author}"
+        if with_rating and book.my_rating is not None:
+            line += f" ({book.my_rating:g})"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _constraints(filters: Filters) -> list[str]:
+    constraints: list[str] = []
+    if filters.language:
+        constraints.append(
+            "Every book must be available in the language with ISO 639-1 code "
+            f"{filters.language!r}."
+        )
+    if filters.max_pages:
+        constraints.append(f"Every book must have at most {filters.max_pages} pages.")
+    return constraints
