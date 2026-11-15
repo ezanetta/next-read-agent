@@ -1,0 +1,84 @@
+[
+  {
+    "id": "kafka-translation",
+    "note": "the real case from F-001",
+    "book": {"title": "The Metamorphosis", "author": "Franz Kafka"},
+    "library": [{"title": "La metamorfosis", "author": "Franz Kafka"}],
+    "same_as": 0
+  },
+  {
+    "id": "little-prince-translation",
+    "note": "translated from French on both sides; split across works in Open Library",
+    "book": {"title": "The Little Prince", "author": "Antoine de Saint-Exupéry"},
+    "library": [{"title": "El principito", "author": "Antoine de Saint-Exupéry"}],
+    "same_as": 0
+  },
+  {
+    "id": "garcia-marquez-translation",
+    "book": {"title": "One Hundred Years of Solitude", "author": "Gabriel García Márquez"},
+    "library": [{"title": "Cien años de soledad", "author": "Gabriel García Márquez"}],
+    "same_as": 0
+  },
+  {
+    "id": "harry-potter-retitled",
+    "note": "US and UK titles, same language",
+    "book": {"title": "Harry Potter and the Sorcerer's Stone", "author": "J.K. Rowling"},
+    "library": [{"title": "Harry Potter and the Philosopher's Stone", "author": "J.K. Rowling"}],
+    "same_as": 0
+  },
+  {
+    "id": "dostoevsky-transliterated",
+    "note": "the author's name is spelled differently on each side",
+    "book": {"title": "Crime and Punishment", "author": "Fyodor Dostoevsky"},
+    "library": [{"title": "Crimen y castigo", "author": "Fiódor Dostoievski"}],
+    "same_as": 0
+  },
+  {
+    "id": "kafka-among-several",
+    "note": "the right book is one of several by the author",
+    "book": {"title": "The Metamorphosis", "author": "Franz Kafka"},
+    "library": [
+      {"title": "El proceso", "author": "Franz Kafka"},
+      {"title": "La metamorfosis", "author": "Franz Kafka"},
+      {"title": "El castillo", "author": "Franz Kafka"}
+    ],
+    "same_as": 1
+  },
+  {
+    "id": "steinbeck-different",
+    "book": {"title": "The Pearl", "author": "John Steinbeck"},
+    "library": [{"title": "The Grapes of Wrath", "author": "John Steinbeck"}],
+    "same_as": null
+  },
+  {
+    "id": "borges-different",
+    "note": "two story collections by the same author",
+    "book": {"title": "El Aleph", "author": "Jorge Luis Borges"},
+    "library": [{"title": "Ficciones", "author": "Jorge Luis Borges"}],
+    "same_as": null
+  },
+  {
+    "id": "harry-potter-sequel",
+    "note": "next volume of the same series",
+    "book": {"title": "Harry Potter and the Chamber of Secrets", "author": "J.K. Rowling"},
+    "library": [{"title": "Harry Potter and the Philosopher's Stone", "author": "J.K. Rowling"}],
+    "same_as": null
+  },
+  {
+    "id": "garcia-marquez-cross-language-different",
+    "note": "different language and different book",
+    "book": {"title": "Love in the Time of Cholera", "author": "Gabriel García Márquez"},
+    "library": [{"title": "Cien años de soledad", "author": "Gabriel García Márquez"}],
+    "same_as": null
+  },
+  {
+    "id": "steinbeck-different-among-several",
+    "book": {"title": "The Grapes of Wrath", "author": "John Steinbeck"},
+    "library": [
+      {"title": "The Pearl", "author": "John Steinbeck"},
+      {"title": "Of Mice and Men", "author": "John Steinbeck"},
+      {"title": "East of Eden", "author": "John Steinbeck"}
+    ],
+    "same_as": null
+  }
+]
