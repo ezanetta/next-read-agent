@@ -47,9 +47,19 @@ class LLMRefusalError(LLMError):
 # --- Message parts ----------------------------------------------------------
 
 
+ProviderMetadata = dict[str, str]
+"""Opaque provider data that must travel back with a part, e.g. Gemini thought signatures.
+
+Keys are namespaced by provider ("gemini.thought_signature"); values are strings
+(base64 for binary data) so conversations stay JSON-serializable. Only adapters read
+it; the agent loop keeps it by appending response messages to the history unchanged.
+"""
+
+
 class TextPart(BaseModel, frozen=True):
     type: Literal["text"] = "text"
     text: str
+    metadata: ProviderMetadata | None = None
 
 
 class ToolCallPart(BaseModel, frozen=True):
@@ -59,6 +69,7 @@ class ToolCallPart(BaseModel, frozen=True):
     id: str = Field(min_length=1)
     name: str = Field(min_length=1)
     arguments: JsonObject
+    metadata: ProviderMetadata | None = None
 
 
 class ToolResultPart(BaseModel, frozen=True):
@@ -103,8 +114,11 @@ class Message(BaseModel, frozen=True):
 
     @property
     def text(self) -> str:
-        """All text parts joined with newlines; empty if there are none."""
-        return "\n".join(p.text for p in self.parts if isinstance(p, TextPart))
+        """Non-empty text parts joined with newlines; empty if there are none.
+
+        Empty text parts can exist only to carry provider metadata, so they are skipped.
+        """
+        return "\n".join(p.text for p in self.parts if isinstance(p, TextPart) and p.text)
 
     @property
     def tool_calls(self) -> list[ToolCallPart]:
