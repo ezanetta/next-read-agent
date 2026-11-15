@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 GeminiThinkingLevel = Literal["minimal", "low", "medium", "high"]
@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     gemini_thinking_level: GeminiThinkingLevel | None = None  # None = the model's default
     anthropic_api_key: SecretStr | None = None
     google_books_api_key: SecretStr | None = None
+    # Contact details for Open Library's User-Agent (an email or a project URL). Never
+    # hardcoded: the repo is public. Without it, work-key matching is off.
+    open_library_contact: str | None = None
+
+    @field_validator("open_library_contact")
+    @classmethod
+    def _blank_is_none(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
 
 
 @lru_cache

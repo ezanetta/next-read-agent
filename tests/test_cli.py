@@ -3,11 +3,21 @@ from pathlib import Path
 
 import pytest
 
-from book_agent.cli import EXIT_ERROR, EXIT_OK, EXIT_VIOLATIONS, baseline_command, main
+from book_agent.cli import (
+    EXIT_ERROR,
+    EXIT_OK,
+    EXIT_VIOLATIONS,
+    baseline_command,
+    main,
+    works_command,
+)
+from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, Recommendation
 from book_agent.llm.base import Usage
-from tests.fakes import FakeLLM, text_response
-from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
+from book_agent.work_keys import CachedWorkResolver, WorkKeyCache
+from tests.fakes import FakeBookSearch, FakeLLM, FakeWorkResolver, text_response
+from tests.library_data import CLEAN_THREE, PROFILE, catalog, catalog_book, rec
+from tests.library_data import book as library_book
 
 
 def reply(recommendations: list[Recommendation]) -> str:
@@ -128,3 +138,62 @@ def test_request_text_is_an_optional_positional_argument(tmp_path: Path) -> None
     # Fails on the missing CSV before any network call, after argparse accepted the text.
     code = main(["baseline", "una distopía", "--language", "EN", "--csv", str(tmp_path / "x.csv")])
     assert code == EXIT_ERROR
+
+
+# --- works ------------------------------------------------------------------------------
+
+KAFKA_ES, KAFKA_BANTAM, KAFKA_WORK = "9789871165070", "9780553213690", "/works/OL498556W"
+
+
+async def test_works_command_reports_coverage() -> None:
+    profile = Profile(
+        name="Me",
+        books=[
+            library_book("La metamorfosis", "Franz Kafka", isbn13=KAFKA_ES),
+            library_book("Unknown edition", "Someone", isbn13=KAFKA_BANTAM),
+            library_book("A Kindle book", "Someone"),
+        ],
+    )
+    resolver = CachedWorkResolver(FakeWorkResolver({KAFKA_ES: KAFKA_WORK}), WorkKeyCache())
+    output, code = await works_command(profile, resolver)
+    assert code == EXIT_OK
+    assert output == (
+        "Library: 3 books, 2 with an ISBN\n"
+        "  1 resolved to a work, 1 unknown to Open Library, 0 not checked yet\n"
+        "  1 without an ISBN are covered only by the LLM check"
+    )
+    assert resolver.changed
+
+
+async def test_works_command_with_failures_exits_with_an_error() -> None:
+    profile = Profile(name="Me", books=[library_book("X", "Y", isbn13=KAFKA_ES)])
+    resolver = CachedWorkResolver(FakeWorkResolver(failing={KAFKA_ES}), WorkKeyCache())
+    output, code = await works_command(profile, resolver)
+    assert code == EXIT_ERROR
+    assert "1 lookups failed" in output
+
+
+async def test_baseline_reports_a_work_key_match() -> None:
+    profile = Profile(
+        name="Me",
+        books=[*PROFILE.books, library_book("La metamorfosis", "Franz Kafka", isbn13=KAFKA_ES)],
+    )
+    bantam = catalog_book("bantam", "The Metamorphosis", "Franz Kafka", 201, isbn13=KAFKA_BANTAM)
+    kafka = rec("The Metamorphosis", "Franz Kafka", "A short classic, like Ficciones.")
+    llm = FakeLLM([text_response(reply([kafka, *CLEAN_THREE[1:]]))])  # no judge call scripted
+    output, code = await baseline_command(
+        profile,
+        Filters(),
+        llm=llm,
+        books=FakeBookSearch([bantam, *catalog().books]),
+        works=FakeWorkResolver({KAFKA_ES: KAFKA_WORK, KAFKA_BANTAM: KAFKA_WORK}),
+    )
+    assert code == EXIT_VIOLATIONS
+    assert "(as 'La metamorfosis'; same work key as an edition found)" in output
+
+
+def test_works_command_fails_cleanly_on_a_missing_csv(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    assert main(["works", "--refresh", "--csv", str(tmp_path / "missing.csv")]) == EXIT_ERROR
+    assert capsys.readouterr().out.startswith("error: ")

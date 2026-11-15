@@ -56,6 +56,7 @@ class MatchEvidence(StrEnum):
 
     ISBN = "isbn"
     TITLE = "title"  # title variants and author surname, as in matching.same_work
+    WORK_KEY = "work_key"  # an edition of the recommendation shares a work key with the book
     LLM_SAME = "llm_same"  # the LLM same-work judge answered SAME
     LLM_UNSURE = "llm_unsure"  # the judge was unsure, which counts as same
 

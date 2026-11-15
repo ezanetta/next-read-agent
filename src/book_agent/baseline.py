@@ -19,7 +19,7 @@ from book_agent.domain.validation import WorkMatching, validate_recommendations
 from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message, StopReason, Usage
 from book_agent.llm.calls import LLMCall
-from book_agent.ports import BookSearch
+from book_agent.ports import BookSearch, WorkResolver
 from book_agent.prompts import baseline_v1
 from book_agent.request_parser import interpret_request
 from book_agent.same_work_judge import LLMSameWorkJudge
@@ -68,6 +68,7 @@ async def run_baseline(
     request: str | None = None,
     llm: LLMClient,
     books: BookSearch,
+    works: WorkResolver | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float | None = None,
 ) -> BaselineResult:
@@ -75,6 +76,7 @@ async def run_baseline(
 
     Explicit `flags` override interpreted filters field by field. A failed interpretation
     stops the run before the recommendation call, so typed constraints are never dropped.
+    With `works`, equal work keys settle the same-work question before the LLM judge.
     """
     result = BaselineResult(prompt_id=baseline_v1.PROMPT_ID)
     text = request.strip() if request else None
@@ -138,7 +140,7 @@ async def run_baseline(
     started = perf_counter()
     judge = LLMSameWorkJudge(llm)
     validation = await validate_recommendations(
-        parsed.recommendations, profile, filters, books, WorkMatching(judge=judge)
+        parsed.recommendations, profile, filters, books, WorkMatching(judge=judge, resolver=works)
     )
     return result.model_copy(
         update={

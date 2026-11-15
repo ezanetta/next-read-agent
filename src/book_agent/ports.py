@@ -53,3 +53,23 @@ class SameWorkJudge(Protocol):
         can report it as unknown instead of crashing or passing silently.
         """
         ...
+
+
+class WorkLookupError(Exception):
+    """A work lookup failed (timeout, network error, unexpected HTTP status or body)."""
+
+
+class WorkResolver(Protocol):
+    """Maps an edition's ISBN to the work it belongs to, to group translations and editions.
+
+    Lookups are by ISBN only: title searches find duplicate and stray works (F-003).
+    """
+
+    async def work_for_isbn(self, isbn13: str) -> str | None:
+        """The work key for this ISBN-13 (e.g. "/works/OL498556W"), or None if unknown.
+
+        Equal keys mean the same work. Different keys do not prove different works:
+        catalogs split some works across several keys.
+        Raises WorkLookupError if the lookup fails for any other reason.
+        """
+        ...

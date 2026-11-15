@@ -1,13 +1,14 @@
 """Hard-rule validation of recommendations, shared by the baseline, the agent and the evals.
 
-Imports the BookSearch and SameWorkJudge ports, never an HTTP library or an LLM SDK.
+Imports the BookSearch, WorkResolver and SameWorkJudge ports, never an HTTP library or an
+LLM SDK.
 """
 
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from book_agent.domain.isbn import to_isbn13
+from book_agent.domain.isbn import preferred_isbn13, to_isbn13
 from book_agent.domain.matching import authors_match, mentions_title, same_work
 from book_agent.domain.models import Book, CatalogBook, Profile, ReadingStatus
 from book_agent.domain.recommendations import (
@@ -23,7 +24,13 @@ from book_agent.domain.recommendations import (
     Violation,
 )
 from book_agent.domain.works import SameWorkAnswer, WorkRef
-from book_agent.ports import BookSearch, BookSearchError, SameWorkJudge
+from book_agent.ports import (
+    BookSearch,
+    BookSearchError,
+    SameWorkJudge,
+    WorkLookupError,
+    WorkResolver,
+)
 
 _SEARCH_RESULTS = 5
 
@@ -38,16 +45,19 @@ _LIBRARY_RULES = {
 class WorkMatching:
     """How to detect translations and retitled editions of books in the library.
 
-    The judge runs only for recommendations whose author is already in the library.
+    Both run only for recommendations whose author is already in the library: first the
+    work keys (deterministic, when a resolver is given), then the judge if they don't match.
     """
 
     judge: SameWorkJudge
+    resolver: WorkResolver | None = None
 
 
 @dataclass(frozen=True)
 class _Resolution:
-    match: CatalogBook | None
+    match: CatalogBook | None  # the best edition for the filters
     lookup_error: str | None = None
+    editions: tuple[CatalogBook, ...] = ()  # every edition matching title and author
 
 
 @dataclass(frozen=True)
@@ -126,7 +136,8 @@ async def _resolve(rec: Recommendation, filters: Filters, books: BookSearch) -> 
     if not matches:
         return _Resolution(match=None)
     # Best edition: fewest failed filters, then fewest unknowns; ties keep search order.
-    return _Resolution(match=min(matches, key=lambda c: _filter_score(c, filters)))
+    best = min(matches, key=lambda c: _filter_score(c, filters))
+    return _Resolution(match=best, editions=tuple(matches))
 
 
 def _matching(rec: Recommendation, candidates: list[CatalogBook]) -> list[CatalogBook]:
@@ -261,9 +272,10 @@ async def _check_library(
 ) -> _LibraryCheck:
     """Is this recommendation a book already in the library, and what decided it?
 
-    ISBN and title variants first. Then, only for authors already in the library, the
-    same-work judge, which catches translations and retitled editions. A book that was
-    not found is skipped: it already fails NOT_FOUND, so a judge call would be wasted.
+    ISBN and title variants first. Then, only for authors already in the library, work
+    keys, and the same-work judge when the keys don't match: different keys prove nothing,
+    since catalogs split some works. A book that was not found is skipped: it already fails
+    NOT_FOUND, so a judge call would be wasted.
     """
     deterministic = _library_collision(rec, resolution.match, profile)
     if deterministic.book is not None or work_matching is None:
@@ -274,6 +286,10 @@ async def _check_library(
     candidates = [b for b in profile.books if authors_match([rec.author], [b.author])]
     if not candidates:
         return deterministic
+    if work_matching.resolver is not None:
+        book = await _work_key_collision(resolution.editions, candidates, work_matching.resolver)
+        if book is not None:
+            return _LibraryCheck(book=book, evidence=MatchEvidence.WORK_KEY)
     verdict = await work_matching.judge.judge(
         WorkRef(title=rec.title, author=rec.author),
         [WorkRef(title=b.title, author=b.author) for b in candidates],
@@ -285,6 +301,34 @@ async def _check_library(
     same = verdict.answer is SameWorkAnswer.SAME
     evidence = MatchEvidence.LLM_SAME if same else MatchEvidence.LLM_UNSURE
     return _LibraryCheck(book=candidates[verdict.candidate], evidence=evidence)
+
+
+async def _work_key_collision(
+    editions: Sequence[CatalogBook], candidates: Sequence[Book], resolver: WorkResolver
+) -> Book | None:
+    """The first candidate whose work key equals the work key of any matching edition.
+
+    A failed or unknown lookup gives no key: the judge still decides those.
+    """
+    edition_isbns = {isbn for e in editions for isbn in _isbn13s(e.isbn, e.isbn13)}
+    candidate_isbns = [
+        (b, isbn) for b in candidates if (isbn := preferred_isbn13(b.isbn13, b.isbn))
+    ]
+    if not edition_isbns or not candidate_isbns:
+        return None
+    isbns = sorted(edition_isbns | {isbn for _, isbn in candidate_isbns})
+    keys = dict(
+        zip(isbns, await asyncio.gather(*(_work_key(resolver, i) for i in isbns)), strict=True)
+    )
+    edition_keys = {keys[isbn] for isbn in edition_isbns} - {None}
+    return next((b for b, isbn in candidate_isbns if keys[isbn] in edition_keys), None)
+
+
+async def _work_key(resolver: WorkResolver, isbn13: str) -> str | None:
+    try:
+        return await resolver.work_for_isbn(isbn13)
+    except WorkLookupError:
+        return None
 
 
 def _library_collision(
@@ -313,6 +357,8 @@ def _isbn13s(*values: str | None) -> set[str]:
 
 
 def _decided_by(evidence: MatchEvidence | None) -> str:
+    if evidence is MatchEvidence.WORK_KEY:
+        return "; same work key as an edition found"
     if evidence is MatchEvidence.LLM_SAME:
         return "; decided by the LLM same-work check"
     if evidence is MatchEvidence.LLM_UNSURE:

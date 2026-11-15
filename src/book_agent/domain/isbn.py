@@ -24,6 +24,11 @@ def to_isbn13(value: str | None) -> str | None:
     return None
 
 
+def preferred_isbn13(isbn13: str | None, isbn10: str | None) -> str | None:
+    """One ISBN-13 for a record with both columns, preferring the ISBN-13 column."""
+    return to_isbn13(isbn13) or to_isbn13(isbn10)
+
+
 def _isbn10_is_valid(isbn: str) -> bool:
     """Weights 10 down to 1; "X" is worth 10; the sum must be divisible by 11."""
     if "X" in isbn[:9]:

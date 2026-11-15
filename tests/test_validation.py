@@ -12,9 +12,10 @@ from book_agent.domain.recommendations import (
 from book_agent.domain.validation import WorkMatching, primary_language, validate_recommendations
 from book_agent.domain.works import SameWorkAnswer, SameWorkVerdict, WorkRef
 from book_agent.ports import BookSearchError
-from tests.fakes import FakeBookSearch, FakeSameWorkJudge
+from tests.fakes import FakeBookSearch, FakeSameWorkJudge, FakeWorkResolver
 from tests.library_data import (
     BLINDNESS_PT_BR,
+    CATALOG,
     CLEAN_THREE,
     FOUNDATION,
     HYPERION_SHORT,
@@ -26,6 +27,7 @@ from tests.library_data import (
     WELL_OF_ASCENSION,
     book,
     catalog,
+    catalog_book,
     rec,
 )
 
@@ -283,9 +285,14 @@ async def validate_with_judge(
     judge: FakeSameWorkJudge,
     profile: Profile = KAFKA_READER,
     books: FakeBookSearch | None = None,
+    resolver: FakeWorkResolver | None = None,
 ) -> ValidationResult:
     return await validate_recommendations(
-        recommendations, profile, NO_FILTERS, books or catalog(), WorkMatching(judge=judge)
+        recommendations,
+        profile,
+        NO_FILTERS,
+        books or catalog(),
+        WorkMatching(judge=judge, resolver=resolver),
     )
 
 
@@ -402,6 +409,96 @@ async def test_without_work_matching_translations_are_missed() -> None:
         with_clean(METAMORPHOSIS_REC), KAFKA_READER, NO_FILTERS, catalog()
     )
     assert result.violations == []
+
+
+# --- Work keys, before the judge -------------------------------------------------------
+# Real ISBNs from the F-003 spike: the Spanish edition in the export, a Bantam English
+# edition, and a self-published reprint Open Library doesn't know.
+
+KAFKA_ES, KAFKA_BANTAM, KAFKA_REPRINT = "9789871165070", "9780553213690", "9798569694662"
+KAFKA_WORK = "/works/OL498556W"
+KAFKA_READER_WITH_ISBN = Profile(
+    name="Reader",
+    books=[*PROFILE.books, book("La metamorfosis", "Franz Kafka", isbn13=KAFKA_ES)],
+)
+BANTAM = catalog_book("bantam", "The Metamorphosis", "Franz Kafka", 201, isbn13=KAFKA_BANTAM)
+REPRINT = catalog_book("reprint", "The Metamorphosis", "Franz Kafka", 80, isbn13=KAFKA_REPRINT)
+
+
+async def test_equal_work_keys_decide_without_the_judge() -> None:
+    judge = FakeSameWorkJudge()
+    resolver = FakeWorkResolver({KAFKA_ES: KAFKA_WORK, KAFKA_BANTAM: KAFKA_WORK})
+    result = await validate_with_judge(
+        with_clean(METAMORPHOSIS_REC),
+        judge,
+        profile=KAFKA_READER_WITH_ISBN,
+        books=FakeBookSearch([*CATALOG, BANTAM]),
+        resolver=resolver,
+    )
+    assert rules(result) == [(Rule.ALREADY_READ, 0)]
+    assert result.violations[0].evidence is MatchEvidence.WORK_KEY
+    assert result.violations[0].message.endswith(
+        "(as 'La metamorfosis'; same work key as an edition found)"
+    )
+    assert judge.calls == []
+
+
+async def test_any_matching_edition_can_carry_the_work_key() -> None:
+    # The reprint ranks first and is unknown; the Bantam edition still decides.
+    resolver = FakeWorkResolver({KAFKA_ES: KAFKA_WORK, KAFKA_BANTAM: KAFKA_WORK})
+    result = await validate_with_judge(
+        [METAMORPHOSIS_REC],
+        FakeSameWorkJudge(),
+        profile=KAFKA_READER_WITH_ISBN,
+        books=FakeBookSearch([REPRINT, BANTAM]),
+        resolver=resolver,
+    )
+    assert result.items[0].library_evidence is MatchEvidence.WORK_KEY
+    assert sorted(resolver.lookups) == sorted([KAFKA_ES, KAFKA_BANTAM, KAFKA_REPRINT])
+
+
+async def test_different_work_keys_still_go_to_the_judge() -> None:
+    # Open Library splits some works (El principito / The Little Prince): different keys
+    # prove nothing, so the judge decides.
+    judge = FakeSameWorkJudge({"The Metamorphosis": SameWorkVerdict(answer=SAME, candidate=0)})
+    resolver = FakeWorkResolver({KAFKA_ES: "/works/OL1W", KAFKA_BANTAM: "/works/OL2W"})
+    result = await validate_with_judge(
+        [METAMORPHOSIS_REC],
+        judge,
+        profile=KAFKA_READER_WITH_ISBN,
+        books=FakeBookSearch([BANTAM]),
+        resolver=resolver,
+    )
+    assert result.items[0].library_evidence is MatchEvidence.LLM_SAME
+    assert len(judge.calls) == 1
+
+
+async def test_failed_work_lookups_fall_back_to_the_judge() -> None:
+    judge = FakeSameWorkJudge({"The Metamorphosis": SameWorkVerdict(answer=SAME, candidate=0)})
+    resolver = FakeWorkResolver({KAFKA_ES: KAFKA_WORK}, failing={KAFKA_BANTAM})
+    result = await validate_with_judge(
+        [METAMORPHOSIS_REC],
+        judge,
+        profile=KAFKA_READER_WITH_ISBN,
+        books=FakeBookSearch([BANTAM]),
+        resolver=resolver,
+    )
+    assert result.items[0].library_evidence is MatchEvidence.LLM_SAME
+    assert result.unknowns == []  # the judge answered, so nothing is left undecided
+
+
+async def test_no_isbns_means_no_lookups() -> None:
+    judge = FakeSameWorkJudge()
+    resolver = FakeWorkResolver()
+    await validate_with_judge(with_clean(METAMORPHOSIS_REC), judge, resolver=resolver)
+    assert resolver.lookups == []  # neither the catalog edition nor the library has an ISBN
+    assert len(judge.calls) == 1
+
+
+async def test_authors_not_in_the_library_cause_no_lookups() -> None:
+    resolver = FakeWorkResolver()
+    await validate_with_judge(CLEAN_THREE, FakeSameWorkJudge(), resolver=resolver)
+    assert resolver.lookups == []
 
 
 # --- Evidence for deterministic matches ---------------------------------------------

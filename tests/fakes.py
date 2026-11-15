@@ -15,6 +15,7 @@ from book_agent.llm.base import (
     ToolSpec,
     Usage,
 )
+from book_agent.ports import WorkLookupError
 
 
 def _words(text: str) -> set[str]:
@@ -50,6 +51,26 @@ class FakeBookSearch:
     async def get_details(self, volume_id: str) -> CatalogBook | None:
         self.detail_lookups.append(volume_id)
         return next((b for b in self.books if b.source_id == volume_id), None)
+
+
+class FakeWorkResolver:
+    """WorkResolver backed by an ISBN -> work key table. ISBNs in `failing` raise.
+
+    ISBNs in neither are unknown (None). Records every lookup in order.
+    """
+
+    def __init__(
+        self, works: dict[str, str] | None = None, failing: set[str] | None = None
+    ) -> None:
+        self.works = dict(works or {})
+        self.failing = set(failing or set())
+        self.lookups: list[str] = []
+
+    async def work_for_isbn(self, isbn13: str) -> str | None:
+        self.lookups.append(isbn13)
+        if isbn13 in self.failing:
+            raise WorkLookupError("Open Library returned HTTP 503")
+        return self.works.get(isbn13)
 
 
 class FakeSameWorkJudge:
