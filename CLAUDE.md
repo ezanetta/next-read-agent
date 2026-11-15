@@ -19,6 +19,7 @@ Later: Postgres + pgvector (Docker Compose), Langfuse, React + Vite + Tailwind f
 ## Architecture rules
 - domain/ holds models and pure business rules. It never imports FastAPI, httpx or any LLM SDK.
 - External services sit behind Protocols in ports.py. Adapters implement them in adapters/.
+- Exception: the LLM contract (LLMClient Protocol, message/tool types, LLM errors) lives in llm/base.py, and provider adapters live next to it (llm/gemini.py, llm/claude.py). base.py never imports a provider SDK.
 - Dependencies are passed through constructors and wired in one place (FastAPI Depends). No DI framework.
 - Prefer fakes that implement the Protocols over unittest.mock.
 - No mapper layers between identical models. Prefer functions over classes when there is no state.
