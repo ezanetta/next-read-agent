@@ -1,4 +1,6 @@
-"""The agent loop: retrieve candidates, let the LLM rerank and call tools, validate hard rules.
+"""The agent loop.
 
-Owned by the project author. Implementation intentionally left out.
+Retrieves candidates, lets the LLM rerank them and call tools, and validates the hard
+rules (three books, none already read, filters respected, valid links) before accepting
+a recommendation. Not implemented yet.
 """

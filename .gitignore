@@ -24,9 +24,6 @@ htmlcov/
 data/*
 !data/.gitkeep
 
-# Personal learning notes (local only)
-docs/learning/
-
 # macOS
 .DS_Store
 .AppleDouble
