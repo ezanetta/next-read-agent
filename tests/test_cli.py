@@ -1,0 +1,130 @@
+import json
+from pathlib import Path
+
+import pytest
+
+from book_agent.cli import EXIT_ERROR, EXIT_OK, EXIT_VIOLATIONS, baseline_command, main
+from book_agent.domain.recommendations import Filters, Recommendation
+from book_agent.llm.base import Usage
+from tests.fakes import FakeLLM, text_response
+from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
+
+
+def reply(recommendations: list[Recommendation]) -> str:
+    return json.dumps({"recommendations": [r.model_dump() for r in recommendations]})
+
+
+async def command(
+    text: str, flags: Filters | None = None, request: str | None = None, *before: str
+) -> tuple[str, int]:
+    script = [text_response(r, usage=Usage(input_tokens=200, output_tokens=30)) for r in before]
+    script.append(text_response(text, usage=Usage(input_tokens=1500, output_tokens=120)))
+    return await baseline_command(
+        PROFILE, flags or Filters(), request, llm=FakeLLM(script), books=catalog()
+    )
+
+
+async def test_report_for_a_clean_run() -> None:
+    output, code = await command(reply(CLEAN_THREE), Filters(max_pages=600))
+    assert code == EXIT_OK
+    assert output.startswith("Prompt baseline_v1\n")
+    assert "Filters: max_pages=600 (from flag)" in output
+    assert "Request:" not in output
+    assert "1. Hyperion by Dan Simmons" in output
+    assert "   Reason: Layered world-building like Dune." in output
+    assert "https://books.google.com/books?id=hyperion" in output
+    assert "Checks: exists=pass, not in library=pass, max pages=pass, cites history=pass" in output
+    assert "Result: PASSED" in output
+    assert "LLM calls:\n- recommend: fake-model | 1500 in, 120 out | " in output
+    assert "\nValidation: " in output
+
+
+async def test_report_lists_violations_and_unknowns() -> None:
+    books = [
+        rec("Dune", "Frank Herbert", "A classic."),
+        rec("Solaris", "Stanislaw Lem", "Like Dune."),
+    ]
+    output, code = await command(reply([*books, CLEAN_THREE[2]]), Filters(max_pages=400))
+    assert code == EXIT_VIOLATIONS
+    assert "Violations:" in output
+    assert "- [already_read] 'Dune' by Frank Herbert: already read" in output
+    assert "- [cites_library]" in output
+    assert "Unknowns:\n- [max_pages] 'Solaris' by Stanislaw Lem: page count unknown" in output
+    assert "Result: FAILED" in output
+
+
+async def test_passed_with_unknowns_exits_ok() -> None:
+    solaris = rec("Solaris", "Stanislaw Lem", "Strange, like Dune.")
+    output, code = await command(reply([solaris, *CLEAN_THREE[1:]]), Filters(max_pages=400))
+    assert code == EXIT_OK
+    assert "Result: PASSED WITH UNKNOWNS" in output
+
+
+async def test_unparseable_reply_shows_the_raw_text() -> None:
+    output, code = await command("Sorry, I can't help with that.")
+    assert code == EXIT_ERROR
+    assert "ERROR: Unparseable reply: no JSON found" in output
+    assert "Raw reply:\nSorry, I can't help with that." in output
+
+
+def test_missing_csv_is_a_clean_error(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    code = main(["baseline", "--csv", str(tmp_path / "missing.csv")])
+    assert code == EXIT_ERROR
+    assert capsys.readouterr().out.startswith("error:")
+
+
+def test_invalid_max_pages_is_rejected_by_argparse() -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["baseline", "--max-pages", "many"])
+    assert exit_info.value.code == 2
+
+
+async def test_report_shows_what_was_understood_and_each_call() -> None:
+    understood = json.dumps({"preference": "una distopía", "language": "en", "max_pages": 600})
+    output, code = await command(
+        reply(CLEAN_THREE),
+        Filters(max_pages=500),
+        "una distopía de menos de 600 páginas en inglés",
+        understood,
+    )
+    assert code == EXIT_OK
+    assert output.startswith("Prompt baseline_v1 | request parser request_parser_v1\n")
+    assert 'Request: "una distopía de menos de 600 páginas en inglés"' in output
+    assert "Preference: una distopía" in output
+    assert "Filters: language=en (from text), max_pages=500 (from flag)" in output
+    assert "- interpret_request: fake-model | 200 in, 30 out | " in output
+    assert "- recommend: fake-model | 1500 in, 120 out | " in output
+    assert output.index("Preference:") < output.index("1. Hyperion")
+
+
+async def test_request_without_filters_says_so() -> None:
+    understood = json.dumps({"preference": "something funny"})
+    output, _ = await command(reply(CLEAN_THREE), None, "something funny", understood)
+    assert "Preference: something funny\nFilters: none" in output
+
+
+async def test_failed_interpretation_exits_with_an_error() -> None:
+    llm = FakeLLM([text_response("I am not sure what you mean.")])
+    output, code = await baseline_command(
+        PROFILE, Filters(), "under 400 pages", llm=llm, books=catalog()
+    )
+    assert code == EXIT_ERROR
+    assert "ERROR: Could not interpret the request: no JSON found in the reply" in output
+    assert "Raw reply:\nI am not sure what you mean." in output
+    assert "1. " not in output  # no recommendations
+
+
+@pytest.mark.parametrize("language", ["English", "eng", "e1"])
+def test_invalid_language_flag_is_rejected_by_argparse(
+    language: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(["baseline", "--language", language])
+    assert exit_info.value.code == 2
+    assert "use a two-letter ISO 639-1 code" in capsys.readouterr().err
+
+
+def test_request_text_is_an_optional_positional_argument(tmp_path: Path) -> None:
+    # Fails on the missing CSV before any network call, after argparse accepted the text.
+    code = main(["baseline", "una distopía", "--language", "EN", "--csv", str(tmp_path / "x.csv")])
+    assert code == EXIT_ERROR

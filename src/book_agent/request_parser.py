@@ -1,0 +1,87 @@
+"""Interpreting a reader's free-text request with a short, separate LLM call.
+
+Kept apart from recommending on purpose: if one reply both interpreted and recommended,
+a misread filter would pass validation unnoticed. Shared by the baseline and the agent.
+interpret_request never raises: problems end up in Interpretation.error.
+"""
+
+from time import perf_counter
+
+from pydantic import BaseModel
+
+from book_agent.domain.recommendations import Filters
+from book_agent.domain.requests import MAX_REQUEST_CHARS, ParsedRequest
+from book_agent.domain.validation import primary_language
+from book_agent.json_reply import ReplyParseError, extract_json, parse_model
+from book_agent.llm.base import LLMClient, LLMError, Message
+from book_agent.llm.calls import LLMCall
+from book_agent.prompts import request_parser_v1
+
+CALL_NAME = "interpret_request"
+DEFAULT_MAX_TOKENS = 512  # room for a little thinking on top of a tiny JSON answer
+
+
+class Interpretation(BaseModel, frozen=True):
+    prompt_id: str
+    parsed: ParsedRequest | None = None
+    error: str | None = None
+    call: LLMCall | None = None  # None when the request was rejected before calling
+    raw_text: str | None = None
+
+
+class _Reply(BaseModel):
+    preference: str | None = None
+    language: str | None = None
+    max_pages: int | None = None
+
+
+async def interpret_request(
+    text: str, *, llm: LLMClient, max_tokens: int = DEFAULT_MAX_TOKENS
+) -> Interpretation:
+    prompt_id = request_parser_v1.PROMPT_ID
+    request = text.strip()
+    if not request:
+        return Interpretation(prompt_id=prompt_id, error="the request is empty")
+    if len(request) > MAX_REQUEST_CHARS:
+        return Interpretation(
+            prompt_id=prompt_id,
+            error=f"the request is {len(request)} characters; the limit is {MAX_REQUEST_CHARS}",
+        )
+
+    started = perf_counter()
+    try:
+        response = await llm.complete(
+            system=request_parser_v1.SYSTEM,
+            messages=[Message.user(request_parser_v1.build_user_prompt(request))],
+            max_tokens=max_tokens,
+            temperature=0.0,  # extraction should give the same answer every time
+        )
+    except LLMError as e:
+        failed = LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
+        return Interpretation(prompt_id=prompt_id, error=f"LLM call failed: {e}", call=failed)
+
+    call = LLMCall(
+        name=CALL_NAME,
+        model=response.model,
+        usage=response.usage,
+        latency_s=perf_counter() - started,
+    )
+    reply = response.message.text
+    try:
+        parsed = parse_interpretation(reply)
+    except ReplyParseError as e:
+        return Interpretation(prompt_id=prompt_id, error=str(e), call=call, raw_text=reply)
+    return Interpretation(prompt_id=prompt_id, parsed=parsed, call=call, raw_text=reply)
+
+
+def parse_interpretation(text: str) -> ParsedRequest:
+    """Read the interpreter's JSON reply. Raises ReplyParseError with a specific reason.
+
+    Tolerates code fences, an upper-case or regional language code ("EN", "en-US"), and
+    a blank preference; rejects anything that isn't an ISO 639-1 code ("english").
+    """
+    reply = parse_model(_Reply, extract_json(text))
+    language = primary_language(reply.language) if reply.language else None
+    filters = parse_model(Filters, {"language": language, "max_pages": reply.max_pages})
+    preference = reply.preference.strip() if reply.preference else None
+    return ParsedRequest(preference=preference or None, filters=filters)

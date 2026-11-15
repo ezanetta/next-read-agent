@@ -1,5 +1,6 @@
 """In-memory fakes that implement the ports, for tests that should not touch the network."""
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -15,11 +16,16 @@ from book_agent.llm.base import (
 )
 
 
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"\w+", text.casefold()))
+
+
 class FakeBookSearch:
     """BookSearch backed by a fixed list of books.
 
-    Matches a query case-insensitively against title and authors, and records every
-    call so tests can assert on what was asked.
+    A book matches when every word of the query appears in its title or authors (case
+    and punctuation ignored), like a search engine. Records every call so tests can
+    assert on what was asked.
     """
 
     def __init__(self, books: list[CatalogBook] | None = None) -> None:
@@ -31,11 +37,11 @@ class FakeBookSearch:
         self, query: str, *, language: str | None = None, max_results: int = 10
     ) -> list[CatalogBook]:
         self.searches.append((query, language, max_results))
-        needle = query.casefold()
+        words = _words(query)
         matches = [
             b
             for b in self.books
-            if (needle in b.title.casefold() or any(needle in a.casefold() for a in b.authors))
+            if words <= _words(" ".join([b.title, *b.authors]))
             and (language is None or b.language in (None, language))
         ]
         return matches[:max_results]
