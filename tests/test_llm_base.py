@@ -247,3 +247,31 @@ def test_tool_names_by_call_id_rejects_a_result_before_its_call() -> None:
     history = [Message.tool_results(result("a")), assistant(call("a"))]
     with pytest.raises(LLMError, match="'a' has no matching"):
         tool_names_by_call_id(history)
+
+
+# --- Provider metadata ---------------------------------------------------------
+
+
+def test_metadata_defaults_to_none() -> None:
+    assert TextPart(text="hi").metadata is None
+    assert call().metadata is None
+
+
+def test_metadata_round_trips_through_json() -> None:
+    message = assistant(
+        TextPart(text="", metadata={"gemini.thought_signature": "c2lnLWE="}),
+        ToolCallPart(
+            id="c1",
+            name="search_books",
+            arguments={},
+            metadata={"gemini.thought_signature": "c2lnLWI=", "gemini.generated_id": "1"},
+        ),
+    )
+    assert Message.model_validate_json(message.model_dump_json()) == message
+
+
+def test_text_skips_empty_parts_that_only_carry_metadata() -> None:
+    message = assistant(
+        TextPart(text="Answer."), TextPart(text="", metadata={"gemini.thought_signature": "x"})
+    )
+    assert message.text == "Answer."
