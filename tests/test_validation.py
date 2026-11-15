@@ -1,10 +1,18 @@
 import pytest
 
 from book_agent.domain.models import CatalogBook, Profile
-from book_agent.domain.recommendations import Check, Filters, Recommendation, Rule, ValidationResult
-from book_agent.domain.validation import primary_language, validate_recommendations
+from book_agent.domain.recommendations import (
+    Check,
+    Filters,
+    MatchEvidence,
+    Recommendation,
+    Rule,
+    ValidationResult,
+)
+from book_agent.domain.validation import WorkMatching, primary_language, validate_recommendations
+from book_agent.domain.works import SameWorkAnswer, SameWorkVerdict, WorkRef
 from book_agent.ports import BookSearchError
-from tests.fakes import FakeBookSearch
+from tests.fakes import FakeBookSearch, FakeSameWorkJudge
 from tests.library_data import (
     BLINDNESS_PT_BR,
     CLEAN_THREE,
@@ -14,6 +22,7 @@ from tests.library_data import (
     NO_LANGUAGE,
     PEDRO_ES,
     PROFILE,
+    TO_READ,
     WELL_OF_ASCENSION,
     book,
     catalog,
@@ -21,6 +30,7 @@ from tests.library_data import (
 )
 
 NO_FILTERS = Filters()
+SAME, UNSURE = SameWorkAnswer.SAME, SameWorkAnswer.UNSURE
 
 
 async def validate(
@@ -254,21 +264,168 @@ async def test_regional_catalog_language_matches_the_primary_subtag() -> None:
     assert result.items[0].language is Check.PASS
 
 
-# --- Known failure: translated titles ----------------------------------------------
+# --- Work-level matching: translations and retitled editions ------------------------
 
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="needs work-level matching: a translated title of a read book is not detected",
+LA_METAMORFOSIS = book("La metamorfosis", "Franz Kafka")
+KAFKA_READER = Profile(
+    name="Reader",
+    books=[
+        *PROFILE.books,
+        book("El proceso", "Franz Kafka", TO_READ),
+        LA_METAMORFOSIS,
+    ],
 )
-async def test_known_failure_translated_title_of_a_read_book() -> None:
-    # Found in a real run: "La metamorfosis" read in Spanish, "The Metamorphosis"
-    # recommended in English, and the validator reported PASSED. strict=True turns this
-    # into a failure once it starts passing, so the marker can't be forgotten.
-    profile = Profile(name="Reader", books=[*PROFILE.books, book("La metamorfosis", "Franz Kafka")])
-    recommendation = rec("The Metamorphosis", "Franz Kafka", "A short classic, like Ficciones.")
-    result = await validate_recommendations(
-        with_clean(recommendation), profile, NO_FILTERS, catalog()
+METAMORPHOSIS_REC = rec("The Metamorphosis", "Franz Kafka", "A short classic, like Ficciones.")
+
+
+async def validate_with_judge(
+    recommendations: list[Recommendation],
+    judge: FakeSameWorkJudge,
+    profile: Profile = KAFKA_READER,
+    books: FakeBookSearch | None = None,
+) -> ValidationResult:
+    return await validate_recommendations(
+        recommendations, profile, NO_FILTERS, books or catalog(), WorkMatching(judge=judge)
     )
+
+
+async def test_translated_title_of_a_read_book_is_already_read() -> None:
+    # F-001, found in a real run: "La metamorfosis" read in Spanish, "The Metamorphosis"
+    # recommended in English, and the validator reported PASSED. Title matching can't see
+    # it; the same-work judge decides, and the violation says so.
+    judge = FakeSameWorkJudge({"The Metamorphosis": SameWorkVerdict(answer=SAME, candidate=1)})
+    result = await validate_with_judge(with_clean(METAMORPHOSIS_REC), judge)
+
     assert result.items[0].match == METAMORPHOSIS
+    assert rules(result) == [(Rule.ALREADY_READ, 0)]
+    violation = result.violations[0]
+    assert violation.evidence is MatchEvidence.LLM_SAME and violation.evidence.by_llm
+    assert violation.message == (
+        "'The Metamorphosis' by Franz Kafka: already read "
+        "(as 'La metamorfosis'; decided by the LLM same-work check)"
+    )
+    assert result.items[0].library_match == LA_METAMORFOSIS
+    assert result.items[0].library_evidence is MatchEvidence.LLM_SAME
+
+
+async def test_judge_sees_only_the_authors_books_in_library_order() -> None:
+    judge = FakeSameWorkJudge()
+    await validate_with_judge(with_clean(METAMORPHOSIS_REC), judge)
+
+    assert len(judge.calls) == 1  # Simmons, Le Guin and Asimov are not in the library
+    book_ref, candidates = judge.calls[0]
+    assert book_ref == WorkRef(title="The Metamorphosis", author="Franz Kafka")
+    assert candidates == (
+        WorkRef(title="El proceso", author="Franz Kafka"),
+        WorkRef(title="La metamorfosis", author="Franz Kafka"),
+    )
+
+
+async def test_unsure_counts_as_same_and_says_so() -> None:
+    judge = FakeSameWorkJudge({"The Metamorphosis": SameWorkVerdict(answer=UNSURE, candidate=1)})
+    result = await validate_with_judge(with_clean(METAMORPHOSIS_REC), judge)
+
+    assert rules(result) == [(Rule.ALREADY_READ, 0)]
+    assert result.violations[0].evidence is MatchEvidence.LLM_UNSURE
+    assert result.violations[0].message.endswith(
+        "decided by the LLM same-work check, unsure counted as same)"
+    )
+
+
+async def test_collision_with_a_to_read_book_uses_its_rule() -> None:
+    judge = FakeSameWorkJudge({"The Metamorphosis": SameWorkVerdict(answer=SAME, candidate=0)})
+    result = await validate_with_judge(with_clean(METAMORPHOSIS_REC), judge)
+    assert rules(result) == [(Rule.ON_TO_READ, 0)]
+    assert "(as 'El proceso';" in result.violations[0].message
+
+
+async def test_different_work_by_a_library_author_passes() -> None:
+    result = await validate_with_judge(with_clean(METAMORPHOSIS_REC), FakeSameWorkJudge())
+    assert result.violations == [] and result.unknowns == []
+    assert result.items[0].not_in_library is Check.PASS
+    assert result.items[0].library_evidence is None
+
+
+async def test_judge_failure_is_a_same_work_unknown_not_a_pass() -> None:
+    judge = FakeSameWorkJudge({"The Metamorphosis": SameWorkVerdict(error="LLM call failed: 429")})
+    result = await validate_with_judge(with_clean(METAMORPHOSIS_REC), judge)
+
+    assert result.violations == []
+    assert [(u.rule, u.index) for u in result.unknowns] == [(Rule.SAME_WORK, 0)]
+    assert result.unknowns[0].message == (
+        "'The Metamorphosis' by Franz Kafka: the author is in the library, "
+        "but the same-work check failed (LLM call failed: 429)"
+    )
+    assert result.items[0].not_in_library is Check.UNKNOWN
+    assert result.passed and not result.fully_verified
+
+
+async def test_authors_not_in_the_library_never_reach_the_judge() -> None:
+    judge = FakeSameWorkJudge()
+    result = await validate_with_judge(CLEAN_THREE, judge)
+    assert result.fully_verified
+    assert judge.calls == []
+
+
+async def test_deterministic_matches_never_reach_the_judge() -> None:
+    judge = FakeSameWorkJudge()
+    dune = rec("Dune", "Frank Herbert", "Like Ficciones.")
+    result = await validate_with_judge(with_clean(dune), judge)
+    assert rules(result) == [(Rule.ALREADY_READ, 0)]
+    assert result.violations[0].evidence is MatchEvidence.TITLE
+    assert judge.calls == []
+
+
+async def test_books_not_found_never_reach_the_judge() -> None:
+    judge = FakeSameWorkJudge()
+    result = await validate_with_judge(with_clean(rec("Amerika Lost", "Franz Kafka")), judge)
+    assert rules(result) == [(Rule.NOT_FOUND, 0)]
+    assert judge.calls == []
+
+
+async def test_a_lookup_failure_still_reaches_the_judge() -> None:
+    # The book may exist: a failed search is no reason to skip the library check.
+    class BrokenSearch(FakeBookSearch):
+        async def search(
+            self, query: str, *, language: str | None = None, max_results: int = 10
+        ) -> list[CatalogBook]:
+            raise BookSearchError("Google Books request timed out")
+
+    judge = FakeSameWorkJudge({"The Metamorphosis": SameWorkVerdict(answer=SAME, candidate=1)})
+    result = await validate_with_judge([METAMORPHOSIS_REC], judge, books=BrokenSearch())
     assert (Rule.ALREADY_READ, 0) in rules(result)
+
+
+async def test_without_work_matching_translations_are_missed() -> None:
+    # The validator without a judge keeps its old behaviour: ISBN and titles only.
+    result = await validate_recommendations(
+        with_clean(METAMORPHOSIS_REC), KAFKA_READER, NO_FILTERS, catalog()
+    )
+    assert result.violations == []
+
+
+# --- Evidence for deterministic matches ---------------------------------------------
+
+
+async def test_isbn_match_has_isbn_evidence() -> None:
+    result = await validate(with_clean(rec("The Desert Planet Saga", "Frank Herbert")))
+    assert result.violations[0].evidence is MatchEvidence.ISBN
+
+
+async def test_isbn10_in_the_library_matches_isbn13_in_the_catalog() -> None:
+    # Same Dune edition: ISBN-10 0441013597 is ISBN-13 9780441013593.
+    profile = Profile(
+        name="Reader",
+        books=[
+            PROFILE.books[0].model_copy(update={"isbn": "0441013597", "isbn13": None}),
+            *PROFILE.books[1:],
+        ],
+    )
+    result = await validate_recommendations(
+        with_clean(rec("The Desert Planet Saga", "Frank Herbert", "Like Ficciones.")),
+        profile,
+        NO_FILTERS,
+        catalog(),
+    )
+    assert rules(result) == [(Rule.ALREADY_READ, 0)]
+    assert result.violations[0].evidence is MatchEvidence.ISBN

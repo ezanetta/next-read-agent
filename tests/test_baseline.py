@@ -1,4 +1,5 @@
 import json
+from collections.abc import Sequence
 
 import pytest
 
@@ -8,12 +9,16 @@ from book_agent.baseline import (
     parse_recommendations,
     run_baseline,
 )
-from book_agent.domain.recommendations import Filters, Recommendation, Rule
+from book_agent.domain.models import Profile
+from book_agent.domain.recommendations import Filters, MatchEvidence, Recommendation, Rule
 from book_agent.domain.requests import FilterSource
 from book_agent.llm.base import LLMError, StopReason, Usage
-from book_agent.prompts import baseline_v1, request_parser_v1
+from book_agent.prompts import baseline_v1, request_parser_v1, same_work_v1
 from tests.fakes import FakeLLM, text_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
+from tests.library_data import book as library_book
+
+DIFFERENT = '{"verdict": "different", "candidate": null}'
 
 
 def reply(recommendations: list[Recommendation]) -> str:
@@ -24,10 +29,18 @@ async def run(
     text: str,
     filters: Filters | None = None,
     stop_reason: StopReason = StopReason.END_TURN,
+    judge_replies: Sequence[str] = (),
+    profile: Profile = PROFILE,
 ) -> tuple[BaselineResult, FakeLLM]:
+    """One recommendation reply, then `judge_replies` for any same-work checks."""
     usage = Usage(input_tokens=1500, output_tokens=120)
-    llm = FakeLLM([text_response(text, stop_reason=stop_reason, usage=usage)])
-    result = await run_baseline(PROFILE, filters or Filters(), llm=llm, books=catalog())
+    llm = FakeLLM(
+        [
+            text_response(text, stop_reason=stop_reason, usage=usage),
+            *(text_response(r) for r in judge_replies),
+        ]
+    )
+    result = await run_baseline(profile, filters or Filters(), llm=llm, books=catalog())
     return result, llm
 
 
@@ -144,8 +157,31 @@ async def test_book_not_found() -> None:
 
 async def test_page_filter_violation() -> None:
     long_book = rec("Mistborn: The Well of Ascension", "Brandon Sanderson", "After Dune.")
-    result, _ = await run(reply([long_book, *CLEAN_THREE[1:]]), Filters(max_pages=400))
+    result, _ = await run(
+        reply([long_book, *CLEAN_THREE[1:]]),
+        Filters(max_pages=400),
+        judge_replies=[DIFFERENT],  # Sanderson is in the library: the judge is asked
+    )
     assert rules(result) == [(Rule.MAX_PAGES, 0)]  # 590 pages in the catalog
+    assert [c.name for c in result.calls] == ["recommend", "judge_same_work"]
+
+
+async def test_translated_title_of_a_read_book_is_caught_by_the_judge() -> None:
+    kafka_book = library_book("La metamorfosis", "Franz Kafka")
+    profile = Profile(name="Reader", books=[*PROFILE.books, kafka_book])
+    kafka = rec("The Metamorphosis", "Franz Kafka", "A short classic, like Ficciones.")
+    result, llm = await run(
+        reply([kafka, *CLEAN_THREE[1:]]),
+        judge_replies=['{"verdict": "same", "candidate": 1}'],
+        profile=profile,
+    )
+    assert not result.passed
+    assert rules(result) == [(Rule.ALREADY_READ, 0)]
+    assert result.validation is not None
+    assert result.validation.violations[0].evidence is MatchEvidence.LLM_SAME
+    assert [c.name for c in result.calls] == ["recommend", "judge_same_work"]
+    assert llm.requests[1].system == same_work_v1.SYSTEM
+    assert result.total_usage == Usage(input_tokens=1510, output_tokens=125)
 
 
 async def test_unknown_page_count() -> None:

@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from book_agent.domain.models import CatalogBook
+from book_agent.domain.works import SameWorkAnswer, SameWorkVerdict, WorkRef
 from book_agent.llm.base import (
     LLMResponse,
     Message,
@@ -49,6 +50,22 @@ class FakeBookSearch:
     async def get_details(self, volume_id: str) -> CatalogBook | None:
         self.detail_lookups.append(volume_id)
         return next((b for b in self.books if b.source_id == volume_id), None)
+
+
+class FakeSameWorkJudge:
+    """SameWorkJudge that answers from a table keyed by the book's title.
+
+    Books not in the table are DIFFERENT. Records every call, so tests can assert
+    when the judge was (or was not) consulted and which candidates it saw.
+    """
+
+    def __init__(self, verdicts: dict[str, SameWorkVerdict] | None = None) -> None:
+        self.verdicts = dict(verdicts or {})
+        self.calls: list[tuple[WorkRef, tuple[WorkRef, ...]]] = []
+
+    async def judge(self, book: WorkRef, candidates: Sequence[WorkRef]) -> SameWorkVerdict:
+        self.calls.append((book, tuple(candidates)))
+        return self.verdicts.get(book.title, SameWorkVerdict(answer=SameWorkAnswer.DIFFERENT))
 
 
 # --- LLM ----------------------------------------------------------------------

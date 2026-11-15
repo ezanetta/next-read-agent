@@ -1,9 +1,10 @@
 """The no-tools baseline: one recommendation call with the whole profile, then validation.
 
 With a free-text request, a separate short call interprets it first (request_parser), and
-its filters are merged with the explicit ones. The simplest end-to-end run of the project
-and the first baseline for evals. run_baseline never raises for model or parsing problems:
-they end up in result.error, so an eval run always gets one result per case.
+its filters are merged with the explicit ones. Validation includes the LLM same-work
+check for recommendations by authors already in the library. The simplest end-to-end run
+of the project and the first baseline for evals. run_baseline never raises for model or
+parsing problems: they end up in result.error, so an eval run always gets one result per case.
 """
 
 from time import perf_counter
@@ -14,13 +15,14 @@ from pydantic import BaseModel
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, RecommendationList, ValidationResult
 from book_agent.domain.requests import ResolvedRequest, merge_filters
-from book_agent.domain.validation import validate_recommendations
+from book_agent.domain.validation import WorkMatching, validate_recommendations
 from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message, StopReason, Usage
 from book_agent.llm.calls import LLMCall
 from book_agent.ports import BookSearch
 from book_agent.prompts import baseline_v1
 from book_agent.request_parser import interpret_request
+from book_agent.same_work_judge import LLMSameWorkJudge
 
 CALL_NAME = "recommend"
 DEFAULT_MAX_TOKENS = 2048
@@ -35,7 +37,9 @@ class BaselineResult(BaseModel, frozen=True):
     request_prompt_id: str | None = None  # set when a request text was interpreted
     request_text: str | None = None
     request: ResolvedRequest | None = None  # None when interpretation failed
-    calls: list[LLMCall] = []  # in order: interpret_request (optional), recommend
+    # In order: interpret_request (optional), recommend, then one judge_same_work per
+    # recommendation that needed the same-work check.
+    calls: list[LLMCall] = []
     validation_latency_s: float | None = None
     raw_text: str | None = None  # the reply that failed to parse, or the recommendation reply
     parsed: RecommendationList | None = None
@@ -132,9 +136,13 @@ async def run_baseline(
         return result.model_copy(update={"error": f"Unparseable reply: {reason}"})
 
     started = perf_counter()
-    validation = await validate_recommendations(parsed.recommendations, profile, filters, books)
+    judge = LLMSameWorkJudge(llm)
+    validation = await validate_recommendations(
+        parsed.recommendations, profile, filters, books, WorkMatching(judge=judge)
+    )
     return result.model_copy(
         update={
+            "calls": [*result.calls, *judge.calls],
             "parsed": parsed,
             "validation": validation,
             "validation_latency_s": perf_counter() - started,
