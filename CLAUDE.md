@@ -30,6 +30,9 @@ Planned: Postgres + pgvector (Docker Compose), Langfuse, React + Vite + Tailwind
 ## Secrets
 - Never commit secrets. API keys live only in .env (gitignored); .env.example documents every setting with placeholders.
 
+## Decision and findings logs
+Record every significant design decision in docs/DECISIONS.md (context, options considered, choice, reason) and every real-world failure in docs/FINDINGS.md (what happened, how it was detected, the fix, how it was verified). Keep entries short.
+
 ## Commands
 - Tests: uv run pytest
 - Live tests (use real API quota): uv run pytest -m live
