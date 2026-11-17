@@ -18,7 +18,7 @@ from book_agent.domain.requests import ResolvedRequest, merge_filters
 from book_agent.domain.validation import WorkMatching, validate_recommendations
 from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message, StopReason, Usage
-from book_agent.llm.calls import LLMCall
+from book_agent.llm.calls import LLMCall, total_usage
 from book_agent.ports import BookSearch, WorkResolver
 from book_agent.prompts import baseline_v1
 from book_agent.request_parser import interpret_request
@@ -52,13 +52,7 @@ class BaselineResult(BaseModel, frozen=True):
 
     @property
     def total_usage(self) -> Usage | None:
-        usages = [c.usage for c in self.calls if c.usage is not None]
-        if not usages:
-            return None
-        return Usage(
-            input_tokens=sum(u.input_tokens for u in usages),
-            output_tokens=sum(u.output_tokens for u in usages),
-        )
+        return total_usage(self.calls)
 
 
 async def run_baseline(
