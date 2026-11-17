@@ -121,14 +121,17 @@ async def test_volume_with_almost_no_data(
     assert minimal.cover_url is None
 
 
-async def test_unusable_volume_is_skipped_with_a_warning(
+async def test_unusable_volume_is_skipped_with_a_compact_debug_line(
     books: GoogleBooksSearch, search_route: respx.Route, caplog: pytest.LogCaptureFixture
 ) -> None:
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.DEBUG, logger="book_agent.adapters.google_books"):
         results = await books.search("dune")
     assert [b.source_id for b in results] == ["B1hSG45JCX4C", "esDuneSpanish", "minimalVol01"]
-    assert len(caplog.records) == 1
-    assert "noTitleVol01" in caplog.records[0].getMessage()
+    [record] = caplog.records
+    assert record.levelno == logging.DEBUG
+    message = record.getMessage()
+    assert message.startswith("Skipping Google Books volume 'noTitleVol01': title:")
+    assert "\n" not in message and "errors.pydantic.dev" not in message
 
 
 async def test_no_matches_returns_empty_list(

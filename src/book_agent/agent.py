@@ -12,16 +12,23 @@ run_agent returns an AgentResult or raises AgentError, which carries what evals 
 to explain a failure (the last validation result, the calls, the iterations).
 """
 
+from dataclasses import dataclass, field
 from enum import StrEnum
 from time import perf_counter
 
 from pydantic import BaseModel, ValidationError
 
-from book_agent.domain.acceptance import infrastructure_failures, is_acceptable
-from book_agent.domain.models import Profile
+from book_agent.domain.acceptance import (
+    blocking_problems,
+    infrastructure_failures,
+    is_acceptable,
+    rejected_indexes,
+)
+from book_agent.domain.models import CatalogBook, Profile
 from book_agent.domain.recommendations import Filters, RecommendationList, ValidationResult
 from book_agent.domain.validation import WorkMatching, validate_recommendations
 from book_agent.llm.base import (
+    JsonObject,
     LLMClient,
     LLMError,
     LLMResponse,
@@ -34,12 +41,14 @@ from book_agent.llm.base import (
 from book_agent.llm.calls import LLMCall, total_usage
 from book_agent.ports import BookSearch, BookSearchError
 from book_agent.prompts import submission_feedback_v1
+from book_agent.pydantic_errors import describe
 from book_agent.same_work_judge import LLMSameWorkJudge
 from book_agent.tools import (
     SEARCH_BOOKS,
     SUBMIT_RECOMMENDATIONS,
     SearchBooksArgs,
-    run_search_books,
+    find_books,
+    format_search_results,
 )
 
 MAX_ITERATIONS = 6
@@ -47,6 +56,26 @@ MAX_TOKENS_PER_TURN = 2048
 CALL_NAME = "agent"
 TOOLS = [SEARCH_BOOKS, SUBMIT_RECOMMENDATIONS]
 REMINDER = "Submit your answer by calling the submit_recommendations tool."
+
+
+class ToolTrace(BaseModel, frozen=True):
+    """One tool call in a turn and a one-line summary of what came of it."""
+
+    name: str
+    arguments: JsonObject
+    outcome: str  # e.g. "5 books: Dune; Hyperion", "no results", "rejected: book 1 (...)"
+    is_error: bool = False
+
+
+class TurnTrace(BaseModel, frozen=True):
+    """What happened in one turn, for --verbose and for evals."""
+
+    iteration: int
+    stop_reason: StopReason
+    output_tokens: int
+    text: str  # what the model wrote besides tool calls; often empty
+    tools: list[ToolTrace] = []
+    note: str | None = None  # for turns without tool calls
 
 
 class AgentResult(BaseModel, frozen=True):
@@ -57,6 +86,7 @@ class AgentResult(BaseModel, frozen=True):
     rejections: list[ValidationResult] = []  # each rejected submission's validation, in order
     calls: list[LLMCall]  # agent turns ("agent") and same-work judge calls, in order
     iterations: int  # LLM requests made by the loop
+    turns: list[TurnTrace] = []  # one per completed LLM request, in order
     feedback_prompt_id: str = submission_feedback_v1.PROMPT_ID
 
     @property
@@ -95,6 +125,7 @@ class AgentError(Exception):
         last_validation: ValidationResult | None = None,
         calls: list[LLMCall] | None = None,
         iterations: int = 0,
+        turns: list[TurnTrace] | None = None,
     ) -> None:
         super().__init__(message)
         self.failure = failure
@@ -102,6 +133,51 @@ class AgentError(Exception):
         self.last_validation = last_validation
         self.calls = list(calls or [])
         self.iterations = iterations
+        self.turns = list(turns or [])
+
+
+@dataclass
+class _RunState:
+    """What a run accumulates; builds the AgentError that carries it."""
+
+    calls: list[LLMCall] = field(default_factory=list[LLMCall])
+    rejections: list[ValidationResult] = field(default_factory=list[ValidationResult])
+    turns: list[TurnTrace] = field(default_factory=list[TurnTrace])
+
+    def error(
+        self,
+        message: str,
+        failure: AgentFailure,
+        iterations: int,
+        last_validation: ValidationResult | None = None,
+    ) -> AgentError:
+        return AgentError(
+            message,
+            failure=failure,
+            rejections=self.rejections,
+            last_validation=last_validation or (self.rejections[-1] if self.rejections else None),
+            calls=self.calls,
+            iterations=iterations,
+            turns=self.turns,
+        )
+
+    def record_turn(
+        self,
+        iteration: int,
+        response: LLMResponse,
+        tools: list[ToolTrace],
+        note: str | None = None,
+    ) -> None:
+        self.turns.append(
+            TurnTrace(
+                iteration=iteration,
+                stop_reason=response.stop_reason,
+                output_tokens=response.usage.output_tokens,
+                text=response.message.text,
+                tools=list(tools),
+                note=note,
+            )
+        )
 
 
 async def run_agent(
@@ -115,91 +191,91 @@ async def run_agent(
     work_matching: WorkMatching | None = None,
 ) -> AgentResult:
     messages: list[Message] = [Message.user(user_prompt)]
-    calls: list[LLMCall] = []
-    rejections: list[ValidationResult] = []
+    state = _RunState()
 
     for iteration in range(1, MAX_ITERATIONS + 1):
         try:
-            response = await _complete(llm, system, messages, calls)
+            response = await _complete(llm, system, messages, state.calls)
         except LLMError as e:
-            raise AgentError(
-                f"LLM call failed: {e}",
-                failure=AgentFailure.LLM_ERROR,
-                rejections=rejections,
-                last_validation=rejections[-1] if rejections else None,
-                calls=calls,
-                iterations=iteration,
-            ) from e
+            raise state.error(f"LLM call failed: {e}", AgentFailure.LLM_ERROR, iteration) from e
         messages.append(response.message)  # unchanged: thought signatures live here
 
         if not response.message.tool_calls:
             if response.stop_reason == StopReason.MAX_TOKENS:
-                raise AgentError(
+                state.record_turn(iteration, response, [], note="no tool call: token limit")
+                raise state.error(
                     "the model hit the token limit without calling a tool",
-                    failure=AgentFailure.TOKEN_LIMIT,
-                    rejections=rejections,
-                    last_validation=rejections[-1] if rejections else None,
-                    calls=calls,
-                    iterations=iteration,
+                    AgentFailure.TOKEN_LIMIT,
+                    iteration,
                 )
+            state.record_turn(iteration, response, [], note="no tool call: reminder sent")
             messages.append(Message.user(REMINDER))
             continue
 
         # A call cut off at MAX_TOKENS still runs: malformed arguments go back as an
         # error like any other invalid arguments (D-015).
         results: list[ToolResultPart] = []
+        traces: list[ToolTrace] = []
         for call in response.message.tool_calls:
             if call.name == SEARCH_BOOKS.name:
-                results.append(await _search(call, books))
-            elif call.name == SUBMIT_RECOMMENDATIONS.name:
-                try:
-                    submitted = RecommendationList.model_validate(call.arguments)
-                except ValidationError as e:
-                    content = f"Invalid arguments for submit_recommendations: {describe(e)}"
-                    results.append(error_result(call, content))
-                    continue
-                validation = await _validate(
-                    submitted, profile, filters, books, work_matching, calls
-                )
-                outage = infrastructure_failures(validation)
-                if outage:  # the model can't fix an outage: stop instead of asking it to
-                    raise AgentError(
-                        f"the book catalog could not be reached ({len(outage)} lookups "
-                        f"failed, first: {outage[0].message})",
-                        failure=AgentFailure.CATALOG_UNAVAILABLE,
-                        rejections=rejections,
-                        last_validation=validation,
-                        calls=calls,
-                        iterations=iteration,
-                    )
-                if is_acceptable(validation):
-                    return AgentResult(
-                        recommendations=submitted,
-                        validation=validation,
-                        rejections=rejections,
-                        calls=calls,
-                        iterations=iteration,
-                    )
-                rejections.append(validation)
-                feedback = submission_feedback_v1.build_feedback(
-                    submitted.recommendations, validation
-                )
-                results.append(error_result(call, feedback))
-            else:
+                result, outcome = await _search(call, books)
+                results.append(result)
+                traces.append(_trace(call, outcome, result.is_error))
+                continue
+            if call.name != SUBMIT_RECOMMENDATIONS.name:
                 available = ", ".join(tool.name for tool in TOOLS)
                 content = f"Unknown tool '{call.name}'. Available tools: {available}."
                 results.append(error_result(call, content))
+                traces.append(_trace(call, "unknown tool", is_error=True))
+                continue
+            try:
+                submitted = RecommendationList.model_validate(call.arguments)
+            except ValidationError as e:
+                problems = describe(e)
+                content = f"Invalid arguments for submit_recommendations: {problems}"
+                results.append(error_result(call, content))
+                traces.append(_trace(call, f"invalid arguments: {problems}", is_error=True))
+                continue
 
+            validation = await _validate(
+                submitted, profile, filters, books, work_matching, state.calls
+            )
+            outage = infrastructure_failures(validation)
+            if outage:  # the model can't fix an outage: stop instead of asking it to
+                outcome = f"catalog unavailable: {len(outage)} lookups failed"
+                traces.append(_trace(call, outcome, is_error=True))
+                state.record_turn(iteration, response, traces)
+                raise state.error(
+                    f"the book catalog could not be reached ({len(outage)} lookups "
+                    f"failed, first: {outage[0].message})",
+                    AgentFailure.CATALOG_UNAVAILABLE,
+                    iteration,
+                    last_validation=validation,
+                )
+            if is_acceptable(validation):
+                traces.append(_trace(call, "accepted"))
+                state.record_turn(iteration, response, traces)
+                return AgentResult(
+                    recommendations=submitted,
+                    validation=validation,
+                    rejections=state.rejections,
+                    calls=state.calls,
+                    iterations=iteration,
+                    turns=state.turns,
+                )
+            state.rejections.append(validation)
+            feedback = submission_feedback_v1.build_feedback(submitted.recommendations, validation)
+            results.append(error_result(call, feedback))
+            traces.append(_trace(call, _rejection_outcome(validation), is_error=True))
+
+        state.record_turn(iteration, response, traces)
         messages.append(Message.tool_results(*results))
 
-    rejected = f" ({len(rejections)} submissions rejected)" if rejections else ""
-    raise AgentError(
+    rejected = f" ({len(state.rejections)} submissions rejected)" if state.rejections else ""
+    raise state.error(
         f"no accepted recommendations after {MAX_ITERATIONS} iterations{rejected}",
-        failure=AgentFailure.ITERATIONS_EXHAUSTED,
-        rejections=rejections,
-        last_validation=rejections[-1] if rejections else None,
-        calls=calls,
-        iterations=MAX_ITERATIONS,
+        AgentFailure.ITERATIONS_EXHAUSTED,
+        MAX_ITERATIONS,
     )
 
 
@@ -227,15 +303,42 @@ async def _complete(
     return response
 
 
-async def _search(call: ToolCallPart, books: BookSearch) -> ToolResultPart:
+async def _search(call: ToolCallPart, books: BookSearch) -> tuple[ToolResultPart, str]:
+    """The tool result for a search_books call and a one-line outcome for the trace."""
     try:
         args = SearchBooksArgs.model_validate(call.arguments)
-        content = await run_search_books(args, books)
+        found = await find_books(args, books)
     except ValidationError as e:
-        return error_result(call, f"Invalid arguments for search_books: {describe(e)}")
+        message = f"Invalid arguments for search_books: {describe(e)}"
+        return error_result(call, message), f"invalid arguments: {describe(e)}"
     except BookSearchError as e:
-        return error_result(call, f"Book search failed: {e}")
-    return ToolResultPart(tool_call_id=call.id, content=content)
+        return error_result(call, f"Book search failed: {e}"), f"search failed: {e}"
+    result = ToolResultPart(tool_call_id=call.id, content=format_search_results(args, found))
+    return result, _search_outcome(found)
+
+
+def _search_outcome(found: list[CatalogBook]) -> str:
+    if not found:
+        return "no results"
+    titles = "; ".join(_shorten(b.title) for b in found)
+    return f"{len(found)} book{'s' if len(found) > 1 else ''}: {titles}"
+
+
+def _rejection_outcome(validation: ValidationResult) -> str:
+    rules = ", ".join(sorted({p.rule.value for p in blocking_problems(validation)}))
+    rejected = rejected_indexes(validation)
+    if not rejected:
+        return f"rejected: the list ({rules})"
+    books = ", ".join(str(i + 1) for i in rejected)
+    return f"rejected: book{'s' if len(rejected) > 1 else ''} {books} ({rules})"
+
+
+def _trace(call: ToolCallPart, outcome: str, is_error: bool = False) -> ToolTrace:
+    return ToolTrace(name=call.name, arguments=call.arguments, outcome=outcome, is_error=is_error)
+
+
+def _shorten(text: str, limit: int = 40) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 async def _validate(
@@ -259,12 +362,3 @@ async def _validate(
 
 def error_result(call: ToolCallPart, message: str) -> ToolResultPart:
     return ToolResultPart(tool_call_id=call.id, content=message, is_error=True)
-
-
-def describe(error: ValidationError) -> str:
-    """One compact line per invalid field, without pydantic's documentation links."""
-    problems = (
-        f"{'.'.join(str(part) for part in issue['loc'])}: {issue['msg']}"
-        for issue in error.errors(include_url=False)
-    )
-    return "; ".join(problems)

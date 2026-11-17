@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from pathlib import Path
 
@@ -317,3 +318,51 @@ def test_agent_command_accepts_the_baseline_arguments(tmp_path: Path) -> None:
     # Fails on the missing CSV before any network call, after argparse accepted everything.
     argv = ["agent", "una distopía", "--language", "EN", "--max-pages", "300"]
     assert main([*argv, "--csv", str(tmp_path / "x.csv")]) == EXIT_ERROR
+
+
+async def test_agent_verbose_report_shows_the_trace() -> None:
+    search = ToolCallPart(id="s-1", name="search_books", arguments={"query": "foundation"})
+    llm = FakeLLM(
+        [
+            tool_call_response(search, usage=Usage(input_tokens=900, output_tokens=20)),
+            submission([DUNE_AGAIN, *CLEAN_THREE[1:]]),
+            submission(CLEAN_THREE, "s-2"),
+        ]
+    )
+    output, _ = await agent_command(PROFILE, Filters(), llm=llm, books=catalog(), verbose=True)
+
+    lines = output.splitlines()
+    start = lines.index("Trace:")
+    assert lines[start + 1 : start + 7] == [
+        "Turn 1 (tool_use, 20 out)",
+        '  search_books {"query": "foundation"} -> 1 book: Foundation',
+        "Turn 2 (tool_use, 100 out)",
+        "  submit_recommendations [Dune; The Left Hand of Darkness; Foundation] "
+        "-> [error] rejected: book 1 (already_read)",
+        "Turn 3 (tool_use, 100 out)",
+        "  submit_recommendations [Hyperion; The Left Hand of Darkness; Foundation] -> accepted",
+    ]
+
+
+async def test_agent_report_without_verbose_has_no_trace() -> None:
+    output, _ = await agent_command(
+        PROFILE, Filters(), llm=FakeLLM([submission(CLEAN_THREE)]), books=catalog()
+    )
+    assert "Trace:" not in output
+
+
+def test_verbose_turns_on_debug_logs_for_the_app_only(tmp_path: Path) -> None:
+    app = logging.getLogger("book_agent")
+    before = app.level
+    try:
+        main(["agent", "-v", "--csv", str(tmp_path / "x.csv")])
+        assert app.level == logging.DEBUG
+        main(["agent", "--csv", str(tmp_path / "x.csv")])
+        assert app.level == logging.WARNING
+    finally:
+        app.setLevel(before)
+
+
+def test_verbose_is_an_agent_option_only() -> None:
+    with pytest.raises(SystemExit):
+        main(["baseline", "--verbose"])

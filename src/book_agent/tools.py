@@ -2,6 +2,7 @@ import json
 
 from pydantic import BaseModel, Field
 
+from book_agent.domain.models import CatalogBook
 from book_agent.domain.recommendations import RecommendationList
 from book_agent.llm.base import ToolSpec
 from book_agent.ports import BookSearch
@@ -38,8 +39,16 @@ SUBMIT_RECOMMENDATIONS = ToolSpec.from_model(
 )
 
 
-async def run_search_books(args: SearchBooksArgs, books: BookSearch) -> str:
-    results = await books.search(args.query, language=args.language, max_results=5)
+SEARCH_RESULTS = 5
+
+
+async def find_books(args: SearchBooksArgs, books: BookSearch) -> list[CatalogBook]:
+    """The search_books tool's lookup. Raises BookSearchError if the search fails."""
+    return await books.search(args.query, language=args.language, max_results=SEARCH_RESULTS)
+
+
+def format_search_results(args: SearchBooksArgs, results: list[CatalogBook]) -> str:
+    """What the model reads: compact JSON, or a hint to broaden the query."""
     if not results:
         return f'No books found for "{args.query}". Try a different or broader query.'
     items = [
@@ -52,3 +61,7 @@ async def run_search_books(args: SearchBooksArgs, books: BookSearch) -> str:
         for book in results
     ]
     return json.dumps(items, ensure_ascii=False)
+
+
+async def run_search_books(args: SearchBooksArgs, books: BookSearch) -> str:
+    return format_search_results(args, await find_books(args, books))

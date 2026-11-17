@@ -8,7 +8,7 @@ up in AgentRun.error, so an eval run always gets one result per case.
 
 from pydantic import BaseModel
 
-from book_agent.agent import AgentError, AgentFailure, run_agent
+from book_agent.agent import AgentError, AgentFailure, TurnTrace, run_agent
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, RecommendationList, ValidationResult
 from book_agent.domain.requests import ResolvedRequest
@@ -30,6 +30,7 @@ class AgentRun(BaseModel, frozen=True):
     # In order: interpret_request (optional), then agent turns and judge calls.
     calls: list[LLMCall] = []
     iterations: int = 0
+    turns: list[TurnTrace] = []  # what each agent turn did: tool calls and outcomes
     rejections: list[ValidationResult] = []  # each rejected submission, in order
     recommendations: RecommendationList | None = None  # the accepted submission
     validation: ValidationResult | None = None  # of the accepted submission
@@ -103,6 +104,7 @@ async def run_agent_pipeline(
             update={
                 "calls": [*run.calls, *e.calls],
                 "iterations": e.iterations,
+                "turns": e.turns,
                 "rejections": e.rejections,
                 "last_validation": e.last_validation,
                 "failure": e.failure,
@@ -113,6 +115,7 @@ async def run_agent_pipeline(
         update={
             "calls": [*run.calls, *result.calls],
             "iterations": result.iterations,
+            "turns": result.turns,
             "rejections": result.rejections,
             "recommendations": result.recommendations,
             "validation": result.validation,

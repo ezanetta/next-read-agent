@@ -9,7 +9,8 @@ baseline: flags override filters interpreted from the request text, field by fie
 Exit codes: 0 all hard rules passed (unknowns allowed), 1 rule violations, 2 errors.
 
 agent: same request handling and filters as baseline; reports iterations, submissions,
-each rejection with its reasons and every LLM call.
+each rejection with its reasons and every LLM call. --verbose adds a trace of each turn
+(tool calls with their arguments and a one-line outcome) and debug logs.
 Exit codes: 0 accepted, 1 only rejected submissions until the iterations ran out, 2 errors
 (failed interpretation, LLM error, catalog unreachable, token limit).
 
@@ -20,6 +21,8 @@ Exit codes: 0 every lookup done, 2 some lookups failed or errors.
 
 import argparse
 import asyncio
+import json
+import logging
 import re
 import sys
 from collections.abc import Sequence
@@ -29,7 +32,7 @@ from pathlib import Path
 import httpx
 
 from book_agent.adapters.goodreads import load_goodreads_export
-from book_agent.agent import MAX_ITERATIONS, AgentFailure
+from book_agent.agent import MAX_ITERATIONS, AgentFailure, ToolTrace, TurnTrace
 from book_agent.agent_run import AgentRun, run_agent_pipeline
 from book_agent.baseline import BaselineResult, run_baseline
 from book_agent.config import Settings, get_settings
@@ -40,6 +43,7 @@ from book_agent.domain.requests import FilterName, ResolvedRequest
 from book_agent.llm.base import LLMClient
 from book_agent.llm.calls import LLMCall
 from book_agent.ports import BookSearch, WorkResolver
+from book_agent.prompts.user_content import one_line
 from book_agent.wiring import (
     build_book_search,
     build_llm,
@@ -68,6 +72,8 @@ _ISO_639_1 = re.compile(r"^[a-z]{2}$")
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    verbose: bool = getattr(args, "verbose", False)
+    _configure_logging(verbose)
     try:
         profile = load_goodreads_export(args.csv, profile_name="Me")
         settings = get_settings()
@@ -77,7 +83,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         flags = Filters(language=args.language, max_pages=args.max_pages)
         llm = build_llm(settings)
         return asyncio.run(
-            _run(args.command, profile, flags, args.request, settings, llm, cache, args.cache)
+            _run(
+                args.command,
+                profile,
+                flags,
+                args.request,
+                settings,
+                llm,
+                cache,
+                args.cache,
+                verbose=verbose,
+            )
         )
     except (OSError, ValueError) as e:  # missing file, bad CSV or cache, invalid settings
         print(f"error: {e}")
@@ -93,6 +109,8 @@ async def _run(
     llm: LLMClient,
     cache: WorkKeyCache,
     cache_path: Path,
+    *,
+    verbose: bool = False,
 ) -> int:
     notes: list[str] = []
     async with AsyncExitStack() as stack:
@@ -111,8 +129,14 @@ async def _run(
                     f"Work keys: {library.unchecked} library ISBNs not resolved yet; "
                     "run the works command first."
                 )
-        run_command = agent_command if command == "agent" else baseline_command
-        output, code = await run_command(profile, flags, request, llm=llm, books=books, works=works)
+        if command == "agent":
+            output, code = await agent_command(
+                profile, flags, request, llm=llm, books=books, works=works, verbose=verbose
+            )
+        else:
+            output, code = await baseline_command(
+                profile, flags, request, llm=llm, books=books, works=works
+            )
         if works is not None and works.changed:
             save_cache(works.cache, cache_path)
     print("\n".join([*notes, output]))
@@ -190,12 +214,13 @@ async def agent_command(
     llm: LLMClient,
     books: BookSearch,
     works: WorkResolver | None = None,
+    verbose: bool = False,
 ) -> tuple[str, int]:
     """Run the agent and return the printable report and the exit code."""
     run = await run_agent_pipeline(
         profile, flags, request=request, llm=llm, books=books, works=works
     )
-    return format_agent_run(run), agent_exit_code(run)
+    return format_agent_run(run, verbose=verbose), agent_exit_code(run)
 
 
 def exit_code(result: BaselineResult) -> int:
@@ -233,7 +258,7 @@ def agent_exit_code(run: AgentRun) -> int:
     return EXIT_ERROR
 
 
-def format_agent_run(run: AgentRun) -> str:
+def format_agent_run(run: AgentRun, *, verbose: bool = False) -> str:
     prompts = f"Prompt {run.prompt_id} | feedback {run.feedback_prompt_id}"
     if run.request_prompt_id:
         prompts += f" | request parser {run.request_prompt_id}"
@@ -246,6 +271,8 @@ def format_agent_run(run: AgentRun) -> str:
             f"Submissions: {run.submissions}{rejected}"
         )
         lines.append("")
+    if verbose and run.turns:
+        lines += [*format_trace(run.turns), ""]
     for number, rejection in enumerate(run.rejections, start=1):
         lines.append(f"Rejection {number}:")
         lines += [f"- {_problem(p)}" for p in blocking_problems(rejection)]
@@ -267,6 +294,42 @@ def format_agent_run(run: AgentRun) -> str:
     if (usage := run.total_usage) is not None:
         lines.append(f"Total: {usage.input_tokens} in, {usage.output_tokens} out")
     return "\n".join(lines)
+
+
+def format_trace(turns: list[TurnTrace]) -> list[str]:
+    """One heading line per turn, then one line per tool call: arguments -> outcome."""
+    lines = ["Trace:"]
+    for turn in turns:
+        heading = f"Turn {turn.iteration} ({turn.stop_reason.value}, {turn.output_tokens} out)"
+        lines.append(f"{heading}: {turn.note}" if turn.note else heading)
+        if turn.text.strip():
+            lines.append(f'  text: "{_shorten(one_line(turn.text), 120)}"')
+        for tool in turn.tools:
+            error = "[error] " if tool.is_error else ""
+            lines.append(f"  {tool.name} {_arguments(tool)} -> {error}{tool.outcome}")
+    return lines
+
+
+def _arguments(tool: ToolTrace) -> str:
+    """Search arguments as compact JSON; a submission as its titles, not three reasons."""
+    recommendations = tool.arguments.get("recommendations")
+    if tool.name == "submit_recommendations" and isinstance(recommendations, list):
+        titles = [
+            str(item.get("title", "?")) if isinstance(item, dict) else "?"
+            for item in recommendations
+        ]
+        return "[" + "; ".join(titles) + "]"
+    return _shorten(json.dumps(tool.arguments, ensure_ascii=False), 120)
+
+
+def _shorten(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _configure_logging(verbose: bool) -> None:
+    """Warnings always; with --verbose, also this app's debug lines (e.g. skipped volumes)."""
+    logging.basicConfig(format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("book_agent").setLevel(logging.DEBUG if verbose else logging.WARNING)
 
 
 def _header(prompts: str, request_text: str | None, request: ResolvedRequest | None) -> list[str]:
@@ -391,6 +454,13 @@ def _parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--language", type=_language_code, help="ISO 639-1 code, e.g. en")
         command.add_argument("--max-pages", type=int, help="maximum page count")
+        if name == "agent":
+            command.add_argument(
+                "-v",
+                "--verbose",
+                action="store_true",
+                help="print each turn's tool calls and outcomes, and debug logs",
+            )
 
     works = commands.add_parser(
         "works", parents=[shared], help="resolve the library to work keys and cache them"

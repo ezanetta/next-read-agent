@@ -375,3 +375,64 @@ async def test_llm_failure_raises_with_the_failed_call_recorded() -> None:
     assert str(error) == "LLM call failed: Gemini API error 503 UNAVAILABLE"
     assert [(c.name, c.model, c.usage) for c in error.calls] == [(CALL_NAME, None, None)]
     assert error.iterations == 1 and len(llm.requests) == 1
+
+
+# --- Trace -----------------------------------------------------------------------------
+
+
+async def test_trace_records_each_turn_with_tool_outcomes() -> None:
+    first = tool_call_response(
+        search("s-1"), ToolCallPart(id="s-2", name="search_books", arguments={})
+    )
+    rejected = submit([DUNE_AGAIN, *CLEAN_THREE[1:]], call_id="submit-1")
+    result, _ = await run(
+        [text_response("Let me think."), first, rejected, submit(call_id="submit-2")]
+    )
+
+    turns = result.turns
+    assert [t.iteration for t in turns] == [1, 2, 3, 4]
+    assert (turns[0].note, turns[0].text, turns[0].tools) == (
+        "no tool call: reminder sent",
+        "Let me think.",
+        [],
+    )
+    assert [(t.name, t.arguments, t.outcome, t.is_error) for t in turns[1].tools] == [
+        ("search_books", {"query": "foundation"}, "1 book: Foundation", False),
+        ("search_books", {}, "invalid arguments: query: Field required", True),
+    ]
+    assert turns[2].tools[0].outcome == "rejected: book 1 (already_read)"
+    assert turns[3].tools[0].outcome == "accepted"
+    assert turns[1].output_tokens == 5 and turns[1].stop_reason is StopReason.TOOL_USE
+
+
+async def test_search_outcome_lists_titles_or_says_no_results() -> None:
+    result, _ = await run(
+        [tool_call_response(search("s-1", "hyperion"), search("s-2", "zzz")), submit()]
+    )
+    assert [t.outcome for t in result.turns[0].tools] == [
+        "2 books: Hyperion; Hyperion",
+        "no results",
+    ]
+
+
+async def test_failed_runs_carry_their_trace() -> None:
+    script = [tool_call_response(search(f"search-{i}")) for i in range(MAX_ITERATIONS)]
+    error, _ = await run_expecting_error(script)
+    assert len(error.turns) == MAX_ITERATIONS
+    assert all(t.tools[0].name == "search_books" for t in error.turns)
+
+
+async def test_outage_turn_is_traced_before_stopping() -> None:
+    llm = FakeLLM([submit()])
+    with pytest.raises(AgentError) as info:
+        await run_agent(
+            system=SYSTEM,
+            user_prompt=USER_PROMPT,
+            llm=llm,
+            books=FailingBookSearch(),
+            profile=PROFILE,
+            filters=NO_FILTERS,
+        )
+    [turn] = info.value.turns
+    assert turn.tools[0].outcome == "catalog unavailable: 3 lookups failed"
+    assert turn.tools[0].is_error
