@@ -12,6 +12,7 @@ run_agent returns an AgentResult or raises AgentError, which carries what evals 
 to explain a failure (the last validation result, the calls, the iterations).
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from time import perf_counter
@@ -25,7 +26,12 @@ from book_agent.domain.acceptance import (
     rejected_indexes,
 )
 from book_agent.domain.models import CatalogBook, Profile
-from book_agent.domain.recommendations import Filters, RecommendationList, ValidationResult
+from book_agent.domain.recommendations import (
+    EXPECTED_RECOMMENDATIONS,
+    Filters,
+    RecommendationList,
+    ValidationResult,
+)
 from book_agent.domain.validation import WorkMatching, validate_recommendations
 from book_agent.llm.base import (
     JsonObject,
@@ -34,8 +40,10 @@ from book_agent.llm.base import (
     LLMResponse,
     Message,
     StopReason,
+    TextPart,
     ToolCallPart,
     ToolResultPart,
+    ToolSpec,
     Usage,
 )
 from book_agent.llm.calls import LLMCall, total_usage
@@ -54,8 +62,13 @@ from book_agent.tools import (
 MAX_ITERATIONS = 6
 MAX_TOKENS_PER_TURN = 2048
 CALL_NAME = "agent"
-TOOLS = [SEARCH_BOOKS, SUBMIT_RECOMMENDATIONS]
 REMINDER = "Submit your answer by calling the submit_recommendations tool."
+LAST_TURN_NOTICE = (
+    "This is your last turn. Call submit_recommendations now with your "
+    f"{EXPECTED_RECOMMENDATIONS} best books: there are no turns left for searching."
+)
+"""Sent with the message that closes the next-to-last turn, for every prompt version
+(D-018). Without it, a model searching one book per turn ran out of turns (F-005)."""
 
 
 class ToolTrace(BaseModel, frozen=True):
@@ -76,6 +89,7 @@ class TurnTrace(BaseModel, frozen=True):
     text: str  # what the model wrote besides tool calls; often empty
     tools: list[ToolTrace] = []
     note: str | None = None  # for turns without tool calls
+    last_turn_notice: bool = False  # the message closing this turn carried LAST_TURN_NOTICE
 
 
 class AgentResult(BaseModel, frozen=True):
@@ -167,6 +181,7 @@ class _RunState:
         response: LLMResponse,
         tools: list[ToolTrace],
         note: str | None = None,
+        last_turn_notice: bool = False,
     ) -> None:
         self.turns.append(
             TurnTrace(
@@ -176,6 +191,7 @@ class _RunState:
                 text=response.message.text,
                 tools=list(tools),
                 note=note,
+                last_turn_notice=last_turn_notice,
             )
         )
 
@@ -184,6 +200,7 @@ async def run_agent(
     *,
     system: str,
     user_prompt: str,
+    tools: Sequence[ToolSpec],
     llm: LLMClient,
     books: BookSearch,
     profile: Profile,
@@ -195,7 +212,7 @@ async def run_agent(
 
     for iteration in range(1, MAX_ITERATIONS + 1):
         try:
-            response = await _complete(llm, system, messages, state.calls)
+            response = await _complete(llm, system, tools, messages, state.calls)
         except LLMError as e:
             raise state.error(f"LLM call failed: {e}", AgentFailure.LLM_ERROR, iteration) from e
         messages.append(response.message)  # unchanged: thought signatures live here
@@ -208,8 +225,11 @@ async def run_agent(
                     AgentFailure.TOKEN_LIMIT,
                     iteration,
                 )
-            state.record_turn(iteration, response, [], note="no tool call: reminder sent")
-            messages.append(Message.user(REMINDER))
+            notice = iteration == MAX_ITERATIONS - 1
+            state.record_turn(
+                iteration, response, [], note="no tool call: reminder sent", last_turn_notice=notice
+            )
+            messages.append(_closing_message([TextPart(text=REMINDER)], notice))
             continue
 
         # A call cut off at MAX_TOKENS still runs: malformed arguments go back as an
@@ -217,13 +237,13 @@ async def run_agent(
         results: list[ToolResultPart] = []
         traces: list[ToolTrace] = []
         for call in response.message.tool_calls:
-            if call.name == SEARCH_BOOKS.name:
+            if call.name == SEARCH_BOOKS:
                 result, outcome = await _search(call, books)
                 results.append(result)
                 traces.append(_trace(call, outcome, result.is_error))
                 continue
-            if call.name != SUBMIT_RECOMMENDATIONS.name:
-                available = ", ".join(tool.name for tool in TOOLS)
+            if call.name != SUBMIT_RECOMMENDATIONS:
+                available = ", ".join(tool.name for tool in tools)
                 content = f"Unknown tool '{call.name}'. Available tools: {available}."
                 results.append(error_result(call, content))
                 traces.append(_trace(call, "unknown tool", is_error=True))
@@ -268,8 +288,9 @@ async def run_agent(
             results.append(error_result(call, feedback))
             traces.append(_trace(call, _rejection_outcome(validation), is_error=True))
 
-        state.record_turn(iteration, response, traces)
-        messages.append(Message.tool_results(*results))
+        notice = iteration == MAX_ITERATIONS - 1
+        state.record_turn(iteration, response, traces, last_turn_notice=notice)
+        messages.append(_closing_message(results, notice))
 
     rejected = f" ({len(state.rejections)} submissions rejected)" if state.rejections else ""
     raise state.error(
@@ -279,13 +300,27 @@ async def run_agent(
     )
 
 
+def _closing_message(parts: Sequence[ToolResultPart | TextPart], last_turn: bool) -> Message:
+    """The user message that ends a turn, with the last-turn notice appended when due.
+
+    The notice goes last, after any tool results, in the same message: two user messages
+    in a row are avoided, and Claude requires tool results before text (D-018).
+    """
+    notice = (TextPart(text=LAST_TURN_NOTICE),) if last_turn else ()
+    return Message(role="user", parts=(*parts, *notice))
+
+
 async def _complete(
-    llm: LLMClient, system: str, messages: list[Message], calls: list[LLMCall]
+    llm: LLMClient,
+    system: str,
+    tools: Sequence[ToolSpec],
+    messages: list[Message],
+    calls: list[LLMCall],
 ) -> LLMResponse:
     started = perf_counter()
     try:
         response = await llm.complete(
-            system=system, messages=messages, tools=TOOLS, max_tokens=MAX_TOKENS_PER_TURN
+            system=system, messages=messages, tools=tools, max_tokens=MAX_TOKENS_PER_TURN
         )
     except LLMError:
         calls.append(

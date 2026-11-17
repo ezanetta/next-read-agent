@@ -263,7 +263,7 @@ async def test_agent_report_for_an_accepted_run_after_a_rejection() -> None:
 
     assert code == EXIT_OK
     lines = output.splitlines()
-    assert lines[0] == "Prompt agent_v1 | feedback submission_feedback_v1"
+    assert lines[0] == "Prompt agent_v2 | feedback submission_feedback_v1"
     assert "Iterations: 2 of 6 | Submissions: 2 (1 rejected)" in lines
     rejection = lines.index("Rejection 1:")
     assert lines[rejection + 1] == (
@@ -366,3 +366,23 @@ def test_verbose_turns_on_debug_logs_for_the_app_only(tmp_path: Path) -> None:
 def test_verbose_is_an_agent_option_only() -> None:
     with pytest.raises(SystemExit):
         main(["baseline", "--verbose"])
+
+
+async def test_agent_verbose_trace_marks_the_last_turn_notice() -> None:
+    search = ToolCallPart(id="s", name="search_books", arguments={"query": "foundation"})
+    script = [tool_call_response(search) for _ in range(MAX_ITERATIONS - 1)]
+    output, _ = await agent_command(
+        PROFILE,
+        Filters(),
+        llm=FakeLLM([*script, submission(CLEAN_THREE)]),
+        books=catalog(),
+        verbose=True,
+    )
+    assert output.count("  (last-turn notice sent)") == 1
+
+
+def test_agent_prompt_option_accepts_the_registered_versions(tmp_path: Path) -> None:
+    csv = str(tmp_path / "x.csv")  # fails on the missing CSV, after argparse
+    assert main(["agent", "--prompt", "agent_v1", "--csv", csv]) == EXIT_ERROR
+    with pytest.raises(SystemExit):
+        main(["agent", "--prompt", "agent_v9", "--csv", csv])

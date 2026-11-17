@@ -3,6 +3,7 @@
     uv run python -m book_agent.cli baseline ["free-text request"] [--language en]
         [--max-pages 400] [--csv PATH] [--cache PATH]
     uv run python -m book_agent.cli agent ["free-text request"] [same options as baseline]
+        [--prompt agent_v1|agent_v2] [--verbose]
     uv run python -m book_agent.cli works [--refresh] [--csv PATH] [--cache PATH]
 
 baseline: flags override filters interpreted from the request text, field by field.
@@ -33,7 +34,12 @@ import httpx
 
 from book_agent.adapters.goodreads import load_goodreads_export
 from book_agent.agent import MAX_ITERATIONS, AgentFailure, ToolTrace, TurnTrace
-from book_agent.agent_run import AgentRun, run_agent_pipeline
+from book_agent.agent_run import (
+    AGENT_PROMPTS,
+    DEFAULT_AGENT_PROMPT,
+    AgentRun,
+    run_agent_pipeline,
+)
 from book_agent.baseline import BaselineResult, run_baseline
 from book_agent.config import Settings, get_settings
 from book_agent.domain.acceptance import Problem, blocking_problems
@@ -43,6 +49,7 @@ from book_agent.domain.requests import FilterName, ResolvedRequest
 from book_agent.llm.base import LLMClient
 from book_agent.llm.calls import LLMCall
 from book_agent.ports import BookSearch, WorkResolver
+from book_agent.prompts.agent_prompt import AgentPrompt
 from book_agent.prompts.user_content import one_line
 from book_agent.wiring import (
     build_book_search,
@@ -93,6 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cache,
                 args.cache,
                 verbose=verbose,
+                prompt=AGENT_PROMPTS[getattr(args, "prompt", DEFAULT_AGENT_PROMPT.prompt_id)],
             )
         )
     except (OSError, ValueError) as e:  # missing file, bad CSV or cache, invalid settings
@@ -111,6 +119,7 @@ async def _run(
     cache_path: Path,
     *,
     verbose: bool = False,
+    prompt: AgentPrompt = DEFAULT_AGENT_PROMPT,
 ) -> int:
     notes: list[str] = []
     async with AsyncExitStack() as stack:
@@ -131,7 +140,14 @@ async def _run(
                 )
         if command == "agent":
             output, code = await agent_command(
-                profile, flags, request, llm=llm, books=books, works=works, verbose=verbose
+                profile,
+                flags,
+                request,
+                llm=llm,
+                books=books,
+                works=works,
+                verbose=verbose,
+                prompt=prompt,
             )
         else:
             output, code = await baseline_command(
@@ -215,10 +231,11 @@ async def agent_command(
     books: BookSearch,
     works: WorkResolver | None = None,
     verbose: bool = False,
+    prompt: AgentPrompt = DEFAULT_AGENT_PROMPT,
 ) -> tuple[str, int]:
     """Run the agent and return the printable report and the exit code."""
     run = await run_agent_pipeline(
-        profile, flags, request=request, llm=llm, books=books, works=works
+        profile, flags, request=request, llm=llm, books=books, works=works, prompt=prompt
     )
     return format_agent_run(run, verbose=verbose), agent_exit_code(run)
 
@@ -307,6 +324,8 @@ def format_trace(turns: list[TurnTrace]) -> list[str]:
         for tool in turn.tools:
             error = "[error] " if tool.is_error else ""
             lines.append(f"  {tool.name} {_arguments(tool)} -> {error}{tool.outcome}")
+        if turn.last_turn_notice:
+            lines.append("  (last-turn notice sent)")
     return lines
 
 
@@ -455,6 +474,12 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--language", type=_language_code, help="ISO 639-1 code, e.g. en")
         command.add_argument("--max-pages", type=int, help="maximum page count")
         if name == "agent":
+            command.add_argument(
+                "--prompt",
+                choices=sorted(AGENT_PROMPTS),
+                default=DEFAULT_AGENT_PROMPT.prompt_id,
+                help=f"agent prompt version (default {DEFAULT_AGENT_PROMPT.prompt_id})",
+            )
             command.add_argument(
                 "-v",
                 "--verbose",

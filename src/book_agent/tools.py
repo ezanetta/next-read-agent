@@ -1,3 +1,8 @@
+"""The agent's tools: names, argument models and how each one runs.
+
+Tool descriptions are not here: they are part of each agent prompt version.
+"""
+
 import json
 
 from pydantic import BaseModel, Field
@@ -13,30 +18,24 @@ class SearchBooksArgs(BaseModel):
     language: str | None = Field(default=None, description="ISO 639-1 code, for example 'en'")
 
 
-SEARCH_BOOKS = ToolSpec.from_model(
-    name="search_books",
-    description="Search Google Books by title, author, genre or theme. Returns up to 5 matching "
-    "books with title, author, page count and language. Use it to find candidates "
-    "and to confirm a book exists before recommending it. Results are not filtered: "
-    "they may include books the reader has already read or that break the requested "
-    "constraints, so check them yourself.",
-    args=SearchBooksArgs,
-)
+SEARCH_BOOKS = "search_books"
+SUBMIT_RECOMMENDATIONS = "submit_recommendations"
 
-SUBMIT_RECOMMENDATIONS = ToolSpec.from_model(
-    name="submit_recommendations",
-    description=(
-        "Submit your final answer: exactly 3 book recommendations for the reader. "
-        "Call it only when you have chosen all 3 books. Each book must be new to the "
-        "reader: not read, not on their to-read list and not currently being read, in "
-        "any language or edition. Each book must respect the requested constraints, "
-        "such as language and page count. Each reason must explain the choice and cite "
-        "at least one book the reader has read, by title. Your submission will be "
-        "validated. If it is rejected, you will receive the problems found: fix only "
-        "the rejected books and submit again."
-    ),
-    args=RecommendationList,
-)
+
+def search_books_tool(description: str) -> ToolSpec:
+    """The search_books tool with a prompt version's description.
+
+    Descriptions live in the prompt modules (agent_v1, agent_v2...): what the model reads
+    about a tool is part of the prompt version. Name and arguments are fixed here.
+    """
+    return ToolSpec.from_model(name=SEARCH_BOOKS, description=description, args=SearchBooksArgs)
+
+
+def submit_recommendations_tool(description: str) -> ToolSpec:
+    """The submit_recommendations tool with a prompt version's description."""
+    return ToolSpec.from_model(
+        name=SUBMIT_RECOMMENDATIONS, description=description, args=RecommendationList
+    )
 
 
 SEARCH_RESULTS = 5

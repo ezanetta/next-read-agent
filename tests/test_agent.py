@@ -11,8 +11,9 @@ import pytest
 
 from book_agent.agent import (
     CALL_NAME,
+    LAST_TURN_NOTICE,
     MAX_ITERATIONS,
-    TOOLS,
+    REMINDER,
     AgentError,
     AgentFailure,
     AgentResult,
@@ -27,16 +28,19 @@ from book_agent.llm.base import (
     LLMResponse,
     Message,
     StopReason,
+    TextPart,
     ToolCallPart,
     ToolResultPart,
     Usage,
 )
 from book_agent.ports import BookSearch, BookSearchError
+from book_agent.prompts import agent_v2
 from book_agent.same_work_judge import LLMSameWorkJudge
 from tests.fakes import FakeLLM, FakeSameWorkJudge, text_response, tool_call_response
 from tests.library_data import CLEAN_THREE, PROFILE, book, catalog, rec
 
 SYSTEM = "You recommend books."
+TOOLS = agent_v2.TOOLS
 USER_PROMPT = "Recommend 3 books for me."
 NO_FILTERS = Filters()
 FOUNDATION_RESULT = {
@@ -89,6 +93,7 @@ async def run(
     result = await run_agent(
         system=SYSTEM,
         user_prompt=USER_PROMPT,
+        tools=TOOLS,
         llm=llm,
         books=books or catalog(),
         profile=profile,
@@ -106,6 +111,7 @@ async def run_expecting_error(
         await run_agent(
             system=SYSTEM,
             user_prompt=USER_PROMPT,
+            tools=TOOLS,
             llm=llm,
             books=catalog(),
             profile=kwargs.get("profile", PROFILE),
@@ -311,6 +317,7 @@ async def test_failed_catalog_lookups_stop_the_run_without_feedback() -> None:
         await run_agent(
             system=SYSTEM,
             user_prompt=USER_PROMPT,
+            tools=TOOLS,
             llm=llm,
             books=FailingBookSearch(),
             profile=PROFILE,
@@ -428,6 +435,7 @@ async def test_outage_turn_is_traced_before_stopping() -> None:
         await run_agent(
             system=SYSTEM,
             user_prompt=USER_PROMPT,
+            tools=TOOLS,
             llm=llm,
             books=FailingBookSearch(),
             profile=PROFILE,
@@ -436,3 +444,48 @@ async def test_outage_turn_is_traced_before_stopping() -> None:
     [turn] = info.value.turns
     assert turn.tools[0].outcome == "catalog unavailable: 3 lookups failed"
     assert turn.tools[0].is_error
+
+
+# --- Last-turn notice ------------------------------------------------------------------
+
+
+def text_parts(message: Message) -> list[str]:
+    return [p.text for p in message.parts if isinstance(p, TextPart)]
+
+
+async def test_last_turn_notice_follows_the_tool_results_of_the_next_to_last_turn() -> None:
+    script = [tool_call_response(search(f"search-{i}")) for i in range(MAX_ITERATIONS - 1)]
+    result, llm = await run([*script, submit()])
+
+    assert result.iterations == MAX_ITERATIONS  # the model submitted on its last turn
+    last_request = llm.requests[MAX_ITERATIONS - 1].messages
+    closing = last_request[-1]
+    assert closing.role == "user"
+    assert isinstance(closing.parts[0], ToolResultPart)  # results first, notice last
+    assert text_parts(closing) == [LAST_TURN_NOTICE]
+    assert "submit_recommendations now" in LAST_TURN_NOTICE
+    # No earlier turn got the notice.
+    for request in llm.requests[: MAX_ITERATIONS - 1]:
+        assert all(LAST_TURN_NOTICE not in text_parts(m) for m in request.messages)
+
+
+async def test_last_turn_notice_joins_the_reminder_after_a_text_reply() -> None:
+    script = [tool_call_response(search(f"search-{i}")) for i in range(MAX_ITERATIONS - 2)]
+    _, llm = await run([*script, text_response("Thinking..."), submit()])
+
+    closing = llm.requests[MAX_ITERATIONS - 1].messages[-1]
+    assert closing.role == "user"
+    assert text_parts(closing) == [REMINDER, LAST_TURN_NOTICE]  # one user message, not two
+
+
+async def test_notice_is_traced_on_the_next_to_last_turn_only() -> None:
+    script = [tool_call_response(search(f"search-{i}")) for i in range(MAX_ITERATIONS - 1)]
+    result, _ = await run([*script, submit()])
+    flags = [t.last_turn_notice for t in result.turns]
+    assert flags == [False] * (MAX_ITERATIONS - 2) + [True, False]
+
+
+async def test_runs_that_finish_early_never_get_the_notice() -> None:
+    result, llm = await run([tool_call_response(search()), submit()])
+    assert result.iterations == 2
+    assert all(LAST_TURN_NOTICE not in text_parts(m) for r in llm.requests for m in r.messages)

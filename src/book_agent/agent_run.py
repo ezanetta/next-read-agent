@@ -16,13 +16,19 @@ from book_agent.domain.validation import WorkMatching
 from book_agent.llm.base import LLMClient, Usage
 from book_agent.llm.calls import LLMCall, total_usage
 from book_agent.ports import BookSearch, WorkResolver
-from book_agent.prompts import agent_v1, submission_feedback_v1
+from book_agent.prompts import agent_v1, agent_v2, submission_feedback_v1
+from book_agent.prompts.agent_prompt import AgentPrompt
 from book_agent.request_parser import resolve_request
 from book_agent.same_work_judge import LLMSameWorkJudge
 
+AGENT_PROMPTS: dict[str, AgentPrompt] = {
+    prompt.prompt_id: prompt for prompt in (agent_v1.PROMPT, agent_v2.PROMPT)
+}
+DEFAULT_AGENT_PROMPT = agent_v2.PROMPT
+
 
 class AgentRun(BaseModel, frozen=True):
-    prompt_id: str = agent_v1.PROMPT_ID
+    prompt_id: str
     feedback_prompt_id: str = submission_feedback_v1.PROMPT_ID
     request_prompt_id: str | None = None  # set when a request text was interpreted
     request_text: str | None = None
@@ -61,13 +67,15 @@ async def run_agent_pipeline(
     llm: LLMClient,
     books: BookSearch,
     works: WorkResolver | None = None,
+    prompt: AgentPrompt = DEFAULT_AGENT_PROMPT,
 ) -> AgentRun:
     """Interpret the optional request, merge its filters with `flags`, run the agent.
 
     A failed interpretation stops the run before the agent starts (D-007). Same-work
-    checks use the same LLM; with `works`, equal work keys settle them first.
+    checks use the same LLM; with `works`, equal work keys settle them first. `prompt` picks
+    the agent prompt version (system prompt and tool descriptions), agent_v2 by default.
     """
-    run = AgentRun()
+    run = AgentRun(prompt_id=prompt.prompt_id)
     resolution = await resolve_request(request, flags, llm=llm)
     interpretation = resolution.interpretation
     if interpretation is not None:
@@ -91,8 +99,9 @@ async def run_agent_pipeline(
 
     try:
         result = await run_agent(
-            system=agent_v1.SYSTEM,
-            user_prompt=agent_v1.build_user_prompt(profile, resolved.filters, resolved.preference),
+            system=prompt.system,
+            user_prompt=prompt.build_user_prompt(profile, resolved.filters, resolved.preference),
+            tools=prompt.tools,
             llm=llm,
             books=books,
             profile=profile,
