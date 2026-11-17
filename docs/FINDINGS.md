@@ -70,4 +70,21 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - Parallel versus sequential decided the outcome. The fast run made 3 searches in one turn (2 iterations, about 10,000 tokens). The slow run made one search per turn and only submitted on the last turn (6 iterations, about 30,000 tokens). Same behavior otherwise.
   - Search did help once: the model searched "Las malas" with the wrong author, got junk, and retried with the right one.
 - **Fix:** `agent_v2` (D-017): search is described as a tool for discovering candidates or resolving doubts about a title or author, existence is said to be checked on submission, and several searches go in the same turn. A last-turn notice (D-018) tells the model to submit now when one turn is left, for every prompt version. `agent_v1` stays unchanged for comparison.
-- **How it was verified:** Unit tests for the new descriptions, the prompt choice and the notice. Not yet re-checked with real runs.
+- **How it was verified:** Unit tests for the new descriptions, the prompt choice and the notice. Re-checked with real runs in F-006: 5 of 5 passed on the first submission.
+- **Revised by F-006:** confirmation searches are not pure waste. They also filter hallucinations before submitting, and done in parallel they cost less than a rejection round. The problem was searching sequentially, not searching.
+
+## F-006 · agent_v2 passes all 5 requests; hard rules can't see quality (2026-11-17)
+
+- **What happened:** `agent_v2` ran on the same 5 requests as F-005 (`gemini-3.5-flash-lite`).
+  - **5 of 5 passed on the first submission**, in 2 to 4 iterations and 10,000 to 19,000 tokens. The last-turn notice (D-018) was never needed.
+  - The model still searches "title author" to confirm books it already has in mind, but mostly in parallel now. One run still searched sequentially (4 turns).
+  - Confirmation searches also filter hallucinations: the model searched "The empress and the salt maker", found nothing matching, and dropped it before submitting. A parallel search before submitting is cheaper than a rejection round.
+  - Hard rules can't see quality. "algo liviano" (something light) got dark, disturbing books; some reasons are weak; *La metamorfosis* was cited in 4 of 5 runs. Every one of these passed validation.
+  - No rejection happened in 10 agent runs (F-005 and F-006), so the feedback path (`submission_feedback_v1`) is still untested with real data.
+- **How it was detected:** The agent command's summaries (iterations, submissions, tokens) and `--verbose` traces, and manual review of the recommendations and reasons.
+- **What it implies:**
+  - The F-005 fix worked; the remaining cost is sequential searching in some runs.
+  - Mood fit, reason quality and citation variety need an LLM judge alongside the hard rules.
+  - The feedback path needs a test with real data, for example a request or profile that makes violations likely, before relying on it.
+- **Fix:** None needed for the agent loop. Quality judging is future work.
+- **How it was verified:** 5 real runs with `agent_v2`.
