@@ -96,3 +96,18 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Resolve on every run; resolve on demand inside runs; resolve once with a command and cache.
 - **Choice:** `works` resolves the library once and caches results in `data/work_keys.json`, keyed by ISBN-13, so the cache serves library books and recommendations and survives a new export. "Unknown to Open Library" is cached; failed lookups are not, so a rerun retries them; `--refresh` looks everything up again. Baseline runs read the cache and only look up new ISBNs. Requests carry a User-Agent with contact details from `OPEN_LIBRARY_CONTACT`, never hardcoded since the repo is public; without it, work-key matching is off and only the judge runs. At most 2 concurrent requests, a 10 s timeout and no retries.
 - **Reason:** Polite usage and fast runs, coverage the reader can see ("160 resolved to a work, 15 unknown"), and contributors can run everything without an Open Library contact.
+
+## D-014 · Agent acceptance policy: reject violations and SAME_WORK unknowns (2026-11-17)
+
+- **Context:** The validator reports violations and unknowns honestly (D-002); the agent needs a rule for which results it may return to the reader.
+- **Options:** Accept only fully verified results; accept anything without violations; reject violations plus the unknowns that hide a likely violation.
+- **Choice:** A pure function (`domain/acceptance.py`): reject any violation and any `SAME_WORK` unknown; accept other unknowns (missing page count or language, a failed catalog lookup). Rejections go back to the model as an `is_error` tool result (`submission_feedback_v1`) that lists each problem by book number, names the accepted books to keep, and asks for replacements of the rejected ones only.
+- **Reason:** A `SAME_WORK` unknown means the judge failed for an author already in the library, so the book may be one the reader has read: the failure this project exists to prevent (D-012). Missing catalog data is common and is not evidence of a broken rule; requiring full verification would reject many good books. Naming the books to keep stops the model from replacing books that passed.
+- **Open:** A `NOT_FOUND` unknown (the catalog lookup failed) is accepted under this rule, so a book whose existence couldn't be checked can reach the reader. Revisit with eval data.
+
+## D-015 · A tool call cut off at MAX_TOKENS still runs (2026-11-17)
+
+- **Context:** A reply can hit the token limit after starting a tool call. The loop only treats MAX_TOKENS specially when there are no tool calls.
+- **Options:** Discard tool calls from a truncated reply; run them like any other call.
+- **Choice:** Run them.
+- **Reason:** Truncated arguments almost always fail argument validation and go back to the model as an error result, the same path as any malformed call, so the model can retry. Complete arguments are valid and validated like any other submission. A special case would add code without adding safety.
