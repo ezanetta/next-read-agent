@@ -9,9 +9,7 @@ from book_agent.ports import BookSearch
 
 class SearchBooksArgs(BaseModel):
     query: str = Field(description="Title, author, genre or theme to search for")
-    language: str | None = Field(
-        default=None, description="ISO 639-1 code, for example 'en'"
-    )
+    language: str | None = Field(default=None, description="ISO 639-1 code, for example 'en'")
 
 
 SEARCH_BOOKS = ToolSpec.from_model(
@@ -38,6 +36,7 @@ SUBMIT_RECOMMENDATIONS = ToolSpec.from_model(
     ),
     args=RecommendationList,
 )
+
 
 async def run_search_books(args: SearchBooksArgs, books: BookSearch) -> str:
     results = await books.search(args.query, language=args.language, max_results=5)

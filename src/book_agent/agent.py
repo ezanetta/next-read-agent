@@ -4,6 +4,7 @@ Retrieves candidates, lets the LLM rerank them and call tools, and validates the
 rules (three books, none already read, filters respected, valid links) before accepting
 a recommendation. Not implemented yet.
 """
+
 from pydantic import ValidationError
 
 from book_agent.domain.recommendations import RecommendationList
@@ -11,7 +12,8 @@ from book_agent.llm.base import (
     LLMClient,
     Message,
     StopReason,
-    ToolResultPart, ToolCallPart,
+    ToolCallPart,
+    ToolResultPart,
 )
 from book_agent.ports import BookSearch, BookSearchError
 from book_agent.tools import (
@@ -56,15 +58,11 @@ async def run_agent(
                     content = await run_search_books(args, books)
                 except ValidationError as e:
                     content = f"Invalid arguments for search_books: {describe(e)}"
-                    results.append(
-                        error_result(call, content)
-                    )
+                    results.append(error_result(call, content))
                     continue
                 except BookSearchError as e:
                     content = f"Book search failed: {e}"
-                    results.append(
-                        error_result(call, content)
-                    )
+                    results.append(error_result(call, content))
                     continue
                 results.append(ToolResultPart(tool_call_id=call.id, content=content))
             elif call.name == SUBMIT_RECOMMENDATIONS.name:
@@ -72,22 +70,20 @@ async def run_agent(
                     return RecommendationList.model_validate(call.arguments)
                 except ValidationError as e:
                     content = f"Invalid arguments for submit_recommendations: {describe(e)}"
-                    results.append(
-                        error_result(call, content)
-                    )
+                    results.append(error_result(call, content))
             else:
                 available = ", ".join(tool.name for tool in TOOLS)
                 content = f"Unknown tool '{call.name}'. Available tools: {available}."
-                results.append(
-                    error_result(call, content)
-                )
+                results.append(error_result(call, content))
 
         messages.append(Message.tool_results(*results))
 
     raise AgentError(f"no recommendations after {MAX_ITERATIONS} iterations")
 
+
 def error_result(call: ToolCallPart, message: str) -> ToolResultPart:
     return ToolResultPart(tool_call_id=call.id, content=message, is_error=True)
+
 
 def describe(error: ValidationError) -> str:
     """One compact line per invalid field, without pydantic's documentation links."""
