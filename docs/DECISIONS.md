@@ -97,13 +97,20 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Choice:** `works` resolves the library once and caches results in `data/work_keys.json`, keyed by ISBN-13, so the cache serves library books and recommendations and survives a new export. "Unknown to Open Library" is cached; failed lookups are not, so a rerun retries them; `--refresh` looks everything up again. Baseline runs read the cache and only look up new ISBNs. Requests carry a User-Agent with contact details from `OPEN_LIBRARY_CONTACT`, never hardcoded since the repo is public; without it, work-key matching is off and only the judge runs. At most 2 concurrent requests, a 10 s timeout and no retries.
 - **Reason:** Polite usage and fast runs, coverage the reader can see ("160 resolved to a work, 15 unknown"), and contributors can run everything without an Open Library contact.
 
-## D-014 · Agent acceptance policy: reject violations and SAME_WORK unknowns (2026-11-17)
+## D-014 · Agent acceptance policy: reject violations and unverified books (2026-11-17)
 
-- **Context:** The validator reports violations and unknowns honestly (D-002); the agent needs a rule for which results it may return to the reader.
+- **Context:** The validator reports violations and unknowns honestly (D-002); the agent needs a rule for which results it may return to the reader, and for what to do with the rest.
 - **Options:** Accept only fully verified results; accept anything without violations; reject violations plus the unknowns that hide a likely violation.
-- **Choice:** A pure function (`domain/acceptance.py`): reject any violation and any `SAME_WORK` unknown; accept other unknowns (missing page count or language, a failed catalog lookup). Rejections go back to the model as an `is_error` tool result (`submission_feedback_v1`) that lists each problem by book number, names the accepted books to keep, and asks for replacements of the rejected ones only.
-- **Reason:** A `SAME_WORK` unknown means the judge failed for an author already in the library, so the book may be one the reader has read: the failure this project exists to prevent (D-012). Missing catalog data is common and is not evidence of a broken rule; requiring full verification would reject many good books. Naming the books to keep stops the model from replacing books that passed.
-- **Open:** A `NOT_FOUND` unknown (the catalog lookup failed) is accepted under this rule, so a book whose existence couldn't be checked can reach the reader. Revisit with eval data.
+- **Choice:** A pure function (`domain/acceptance.py`):
+  - Reject any violation, any `SAME_WORK` unknown and any `NOT_FOUND` unknown. Accept other unknowns (missing page count or language).
+  - Rejections the model can fix go back as an `is_error` tool result (`submission_feedback_v1`) that lists each problem by book number, names the accepted books to keep, and asks for replacements of the rejected ones only. A book that is really missing from the catalog (a `NOT_FOUND` violation, likely a hallucination) is one of these.
+  - A `NOT_FOUND` unknown means the catalog lookup failed, an outage the model can't fix: the run stops with `AgentError` (`CATALOG_UNAVAILABLE`) saying the catalog couldn't be reached, carrying the validation.
+- **Reason:**
+  - `SAME_WORK`: the judge failed for an author already in the library, so the book may be one the reader has read, the failure this project exists to prevent (D-012).
+  - `NOT_FOUND`: verifying that books exist is a core promise; showing a possibly hallucinated book is worse than an honest error. Feeding an outage back would spend iterations on something the model can't fix.
+  - Missing page counts and languages are common and are not evidence of a broken rule; requiring full verification would reject many good books.
+  - Naming the books to keep stops the model from replacing books that passed.
+- **Revised (2026-11-17):** the first version accepted `NOT_FOUND` unknowns; changed after review.
 
 ## D-015 · A tool call cut off at MAX_TOKENS still runs (2026-11-17)
 
@@ -111,3 +118,10 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Discard tool calls from a truncated reply; run them like any other call.
 - **Choice:** Run them.
 - **Reason:** Truncated arguments almost always fail argument validation and go back to the model as an error result, the same path as any malformed call, so the model can retry. Complete arguments are valid and validated like any other submission. A special case would add code without adding safety.
+
+## D-016 · Known debt: agent.py depends on the concrete LLMSameWorkJudge (2026-11-17)
+
+- **Context:** `AgentResult.calls` should include the same-work judge's LLM calls, but the judge reaches the agent as a `SameWorkJudge` port inside `WorkMatching`, and the port says nothing about calls.
+- **Options:** A "records calls" Protocol checked at runtime (rejected: a structural check would also match `FakeSameWorkJudge`, whose `calls` holds something else); an `isinstance(judge, LLMSameWorkJudge)` check; the judge returning its call record with each verdict.
+- **Choice for now:** the `isinstance` check in `agent._validate`, copying the calls the judge made during that validation.
+- **Debt:** the agent depends on a concrete adapter class, and calls from any other judge implementation are silently missing. The cleaner fix is for `SameWorkVerdict` to carry the call that produced it (an optional `LLMCall`), so the validator can return the calls with its result and the agent needs no knowledge of the judge.

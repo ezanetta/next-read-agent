@@ -2,7 +2,12 @@ from collections.abc import Sequence
 
 import pytest
 
-from book_agent.domain.acceptance import blocking_problems, is_acceptable, rejected_indexes
+from book_agent.domain.acceptance import (
+    blocking_problems,
+    infrastructure_failures,
+    is_acceptable,
+    rejected_indexes,
+)
 from book_agent.domain.recommendations import Rule, Unknown, ValidationResult, Violation
 
 
@@ -25,7 +30,7 @@ def unknown(rule: Rule, index: int) -> Unknown:
     [
         (result(), True),
         (result(unknowns=[unknown(Rule.MAX_PAGES, 0), unknown(Rule.LANGUAGE, 1)]), True),
-        (result(unknowns=[unknown(Rule.NOT_FOUND, 2)]), True),  # lookup failed: data missing
+        (result(unknowns=[unknown(Rule.NOT_FOUND, 2)]), False),  # existence unverified
         (result(unknowns=[unknown(Rule.SAME_WORK, 0)]), False),  # D-012
         (result(violations=[violation(Rule.MAX_PAGES, 1)]), False),
         (result(violations=[violation(Rule.WRONG_COUNT, None)]), False),
@@ -52,3 +57,12 @@ def test_rejected_indexes_are_sorted_unique_and_skip_list_level_problems() -> No
         unknowns=[unknown(Rule.SAME_WORK, 0), unknown(Rule.MAX_PAGES, 1)],
     )
     assert rejected_indexes(validation) == [0, 2]
+
+
+def test_infrastructure_failures_are_only_failed_lookups() -> None:
+    lookup = unknown(Rule.NOT_FOUND, 1)
+    validation = result(
+        violations=[violation(Rule.NOT_FOUND, 0)],  # a book that is really missing
+        unknowns=[unknown(Rule.SAME_WORK, 2), lookup, unknown(Rule.MAX_PAGES, 0)],
+    )
+    assert infrastructure_failures(validation) == [lookup]

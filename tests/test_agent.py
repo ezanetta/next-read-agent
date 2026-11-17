@@ -9,7 +9,15 @@ from collections.abc import Sequence
 
 import pytest
 
-from book_agent.agent import CALL_NAME, MAX_ITERATIONS, TOOLS, AgentError, AgentResult, run_agent
+from book_agent.agent import (
+    CALL_NAME,
+    MAX_ITERATIONS,
+    TOOLS,
+    AgentError,
+    AgentFailure,
+    AgentResult,
+    run_agent,
+)
 from book_agent.domain.models import CatalogBook, Profile
 from book_agent.domain.recommendations import Filters, Recommendation, Rule
 from book_agent.domain.validation import WorkMatching
@@ -106,15 +114,26 @@ async def run_expecting_error(
 
 
 class FailingBookSearch:
-    """BookSearch whose every call fails, as on a timeout or a quota error."""
+    """BookSearch whose first `failures` calls fail, as on a timeout or a quota error.
+
+    By default every call fails; the rest go to the shared test catalog.
+    """
+
+    def __init__(self, failures: int | None = None) -> None:
+        self.failures = failures
+        self.calls = 0
+        self.catalog = catalog()
 
     async def search(
         self, query: str, *, language: str | None = None, max_results: int = 10
     ) -> list[CatalogBook]:
-        raise BookSearchError("Google Books request timed out")
+        self.calls += 1
+        if self.failures is None or self.calls <= self.failures:
+            raise BookSearchError("Google Books request timed out")
+        return await self.catalog.search(query, language=language, max_results=max_results)
 
     async def get_details(self, volume_id: str) -> CatalogBook | None:
-        raise BookSearchError("Google Books request timed out")
+        return await self.catalog.get_details(volume_id)
 
 
 # --- Happy paths ---------------------------------------------------------------------
@@ -155,6 +174,7 @@ async def test_max_tokens_without_tool_calls_raises_and_stops() -> None:
         [text_response("I think you would enjoy", stop_reason=StopReason.MAX_TOKENS)]
     )
     assert "token limit" in str(error)
+    assert error.failure is AgentFailure.TOKEN_LIMIT
     assert error.last_validation is None and error.iterations == 1
     assert len(llm.requests) == 1
 
@@ -198,14 +218,13 @@ async def test_unknown_tool_lists_the_available_tools() -> None:
 
 
 async def test_book_search_failure_goes_back_as_an_error() -> None:
-    result, llm = await run([tool_call_response(search()), submit()], FailingBookSearch())
+    # Only the search tool's call fails; validation's lookups work.
+    result, llm = await run([tool_call_response(search()), submit()], FailingBookSearch(1))
 
+    assert result.validation.fully_verified
     [error] = tool_results(llm.requests[1].messages[-1])
     assert error.tool_call_id == "search-1" and error.is_error
     assert error.content == "Book search failed: Google Books request timed out"
-    # Validation could not look the books up either: NOT_FOUND unknowns, which the
-    # acceptance policy accepts (only SAME_WORK unknowns block, D-014).
-    assert [u.rule for u in result.validation.unknowns] == [Rule.NOT_FOUND] * 3
 
 
 async def test_parallel_calls_each_get_a_result_in_order() -> None:
@@ -271,6 +290,40 @@ async def test_unknown_page_count_is_accepted() -> None:
     assert [(u.rule, u.index) for u in result.validation.unknowns] == [(Rule.MAX_PAGES, 0)]
 
 
+async def test_book_not_in_the_catalog_goes_back_to_the_model() -> None:
+    # A book that doesn't exist (a likely hallucination) is a violation the model can fix.
+    invented = rec("The Silent Library", "Nobody Real", "Quiet, like Dune.")
+    result, llm = await run([submit([invented, *CLEAN_THREE[1:]]), submit(call_id="submit-2")])
+
+    [feedback] = tool_results(llm.requests[1].messages[-1])
+    assert feedback.is_error
+    assert "- Book 1: 'The Silent Library' by Nobody Real: not found in the catalog\n" in (
+        feedback.content
+    )
+    assert result.submissions == 2
+
+
+async def test_failed_catalog_lookups_stop_the_run_without_feedback() -> None:
+    # An outage, not a bad book: the model can't fix it, so no feedback round is spent.
+    llm = FakeLLM([submit()])
+    with pytest.raises(AgentError) as info:
+        await run_agent(
+            system=SYSTEM,
+            user_prompt=USER_PROMPT,
+            llm=llm,
+            books=FailingBookSearch(),
+            profile=PROFILE,
+            filters=NO_FILTERS,
+        )
+    error = info.value
+    assert error.failure is AgentFailure.CATALOG_UNAVAILABLE
+    assert str(error).startswith("the book catalog could not be reached (3 lookups failed")
+    assert error.last_validation is not None
+    assert [u.rule for u in error.last_validation.unknowns] == [Rule.NOT_FOUND] * 3
+    assert error.rejections == []
+    assert len(llm.requests) == 1
+
+
 async def test_judge_calls_are_recorded_with_the_agent_calls() -> None:
     judge = LLMSameWorkJudge(
         FakeLLM([text_response('{"verdict": "different", "candidate": null}')])
@@ -292,7 +345,8 @@ async def test_max_iterations_raises_after_exactly_that_many_requests() -> None:
     error, llm = await run_expecting_error(script)
 
     assert str(error) == f"no accepted recommendations after {MAX_ITERATIONS} iterations"
-    assert error.last_validation is None
+    assert error.failure is AgentFailure.ITERATIONS_EXHAUSTED
+    assert error.last_validation is None and error.rejections == []
     assert len(llm.requests) == MAX_ITERATIONS == error.iterations == len(error.calls)
 
 
@@ -305,6 +359,9 @@ async def test_iterations_exhausted_after_repeated_rejections() -> None:
         f"no accepted recommendations after {MAX_ITERATIONS} iterations "
         f"({MAX_ITERATIONS} submissions rejected)"
     )
+    assert error.failure is AgentFailure.ITERATIONS_EXHAUSTED
+    assert len(error.rejections) == MAX_ITERATIONS
+    assert error.last_validation is error.rejections[-1]
     assert error.last_validation is not None
     assert [(v.rule, v.index) for v in error.last_validation.violations] == [(Rule.ALREADY_READ, 0)]
     assert len(llm.requests) == MAX_ITERATIONS

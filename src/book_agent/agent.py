@@ -4,18 +4,20 @@ Each turn, the model may call search_books (Google Books) or submit_recommendati
 A submission is checked with validate_recommendations (count, existence, library,
 filters, citations) and judged by the acceptance policy (domain/acceptance.py). A
 rejected submission goes back to the model as an error result listing each problem, so
-it can replace only the rejected books and submit again. Invalid arguments, unknown
+it can replace only the rejected books and submit again. A failed catalog lookup during
+validation stops the run instead: the model can't fix an outage. Invalid arguments, unknown
 tools and search failures also go back as error results, never as exceptions.
 
 run_agent returns an AgentResult or raises AgentError, which carries what evals need
 to explain a failure (the last validation result, the calls, the iterations).
 """
 
+from enum import StrEnum
 from time import perf_counter
 
 from pydantic import BaseModel, ValidationError
 
-from book_agent.domain.acceptance import is_acceptable
+from book_agent.domain.acceptance import infrastructure_failures, is_acceptable
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, RecommendationList, ValidationResult
 from book_agent.domain.validation import WorkMatching, validate_recommendations
@@ -66,22 +68,35 @@ class AgentResult(BaseModel, frozen=True):
         return total_usage(self.calls)
 
 
+class AgentFailure(StrEnum):
+    """Why a run produced no recommendations, so the CLI and evals can tell them apart."""
+
+    ITERATIONS_EXHAUSTED = "iterations_exhausted"  # no accepted submission in time
+    TOKEN_LIMIT = "token_limit"  # a reply was cut off without calling a tool
+    CATALOG_UNAVAILABLE = "catalog_unavailable"  # validation couldn't look books up
+
+
 class AgentError(Exception):
     """The agent could not produce acceptable recommendations.
 
-    `last_validation` is the last rejected submission's validation, if there was one, so
-    the CLI and evals can show what went wrong.
+    Carries the evidence the CLI and evals need: why it failed, every rejected
+    submission's validation, the last validated submission (rejected, or the one whose
+    lookups failed), the calls and the iterations.
     """
 
     def __init__(
         self,
         message: str,
         *,
+        failure: AgentFailure,
+        rejections: list[ValidationResult] | None = None,
         last_validation: ValidationResult | None = None,
         calls: list[LLMCall] | None = None,
         iterations: int = 0,
     ) -> None:
         super().__init__(message)
+        self.failure = failure
+        self.rejections = list(rejections or [])
         self.last_validation = last_validation
         self.calls = list(calls or [])
         self.iterations = iterations
@@ -109,6 +124,8 @@ async def run_agent(
             if response.stop_reason == StopReason.MAX_TOKENS:
                 raise AgentError(
                     "the model hit the token limit without calling a tool",
+                    failure=AgentFailure.TOKEN_LIMIT,
+                    rejections=rejections,
                     last_validation=rejections[-1] if rejections else None,
                     calls=calls,
                     iterations=iteration,
@@ -132,6 +149,17 @@ async def run_agent(
                 validation = await _validate(
                     submitted, profile, filters, books, work_matching, calls
                 )
+                outage = infrastructure_failures(validation)
+                if outage:  # the model can't fix an outage: stop instead of asking it to
+                    raise AgentError(
+                        f"the book catalog could not be reached ({len(outage)} lookups "
+                        f"failed, first: {outage[0].message})",
+                        failure=AgentFailure.CATALOG_UNAVAILABLE,
+                        rejections=rejections,
+                        last_validation=validation,
+                        calls=calls,
+                        iterations=iteration,
+                    )
                 if is_acceptable(validation):
                     return AgentResult(
                         recommendations=submitted,
@@ -155,6 +183,8 @@ async def run_agent(
     rejected = f" ({len(rejections)} submissions rejected)" if rejections else ""
     raise AgentError(
         f"no accepted recommendations after {MAX_ITERATIONS} iterations{rejected}",
+        failure=AgentFailure.ITERATIONS_EXHAUSTED,
+        rejections=rejections,
         last_validation=rejections[-1] if rejections else None,
         calls=calls,
         iterations=MAX_ITERATIONS,
