@@ -60,3 +60,14 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **How it was detected:** Manual review of the CLI output.
 - **Fix:** Not yet. `cites_library` should not count a citation of the recommended work itself (same title variants, or the library book it collides with).
 - **How it was verified:** Not yet.
+
+## F-005 · The agent searched to confirm books it already had in mind, and ran out of turns (2026-11-17)
+
+- **What happened:** The agent (`agent_v1`, `gemini-3.5-flash-lite`) ran on the 5 baseline requests. 3 passed on the first submission. 2 failed with `iterations_exhausted` and 0 submissions, after about 30,000 tokens with nothing to show.
+- **How it was detected:** The run summaries (iterations, submissions, about 20 output tokens per turn), then the `--verbose` turn traces of the two failing requests.
+- **What the traces showed:**
+  - The model never used search to discover books. It picked books from memory and searched each "title author" to confirm it existed, as the `search_books` description told it to ("confirm a book exists before recommending it"). The validator already checks existence on submission, so these searches were redundant.
+  - Parallel versus sequential decided the outcome. The fast run made 3 searches in one turn (2 iterations, about 10,000 tokens). The slow run made one search per turn and only submitted on the last turn (6 iterations, about 30,000 tokens). Same behavior otherwise.
+  - Search did help once: the model searched "Las malas" with the wrong author, got junk, and retried with the right one.
+- **Fix:** `agent_v2` (D-017): search is described as a tool for discovering candidates or resolving doubts about a title or author, existence is said to be checked on submission, and several searches go in the same turn. A last-turn notice (D-018) tells the model to submit now when one turn is left, for every prompt version. `agent_v1` stays unchanged for comparison.
+- **How it was verified:** Unit tests for the new descriptions, the prompt choice and the notice. Not yet re-checked with real runs.
