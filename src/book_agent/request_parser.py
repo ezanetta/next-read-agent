@@ -10,7 +10,12 @@ from time import perf_counter
 from pydantic import BaseModel
 
 from book_agent.domain.recommendations import Filters
-from book_agent.domain.requests import MAX_REQUEST_CHARS, ParsedRequest
+from book_agent.domain.requests import (
+    MAX_REQUEST_CHARS,
+    ParsedRequest,
+    ResolvedRequest,
+    merge_filters,
+)
 from book_agent.domain.validation import primary_language
 from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message
@@ -85,3 +90,35 @@ def parse_interpretation(text: str) -> ParsedRequest:
     filters = parse_model(Filters, {"language": language, "max_pages": reply.max_pages})
     preference = reply.preference.strip() if reply.preference else None
     return ParsedRequest(preference=preference or None, filters=filters)
+
+
+class RequestResolution(BaseModel, frozen=True):
+    """The request to act on, and the interpretation behind it (if there was text)."""
+
+    request: ResolvedRequest | None  # None when interpretation failed: stop the run (D-007)
+    interpretation: Interpretation | None  # None when there was no request text
+
+
+async def resolve_request(text: str | None, flags: Filters, *, llm: LLMClient) -> RequestResolution:
+    """Interpret the optional request text and merge its filters with `flags`.
+
+    Explicit flags override interpreted filters field by field (D-008). Blank text counts
+    as no request: no LLM call. Shared by the baseline and the agent.
+    """
+    request = text.strip() if text else None
+    if not request:
+        filters, sources = merge_filters(Filters(), flags)
+        resolved = ResolvedRequest(text=None, preference=None, filters=filters, sources=sources)
+        return RequestResolution(request=resolved, interpretation=None)
+
+    interpretation = await interpret_request(request, llm=llm)
+    if interpretation.parsed is None:
+        return RequestResolution(request=None, interpretation=interpretation)
+    filters, sources = merge_filters(interpretation.parsed.filters, flags)
+    resolved = ResolvedRequest(
+        text=request,
+        preference=interpretation.parsed.preference,
+        filters=filters,
+        sources=sources,
+    )
+    return RequestResolution(request=resolved, interpretation=interpretation)

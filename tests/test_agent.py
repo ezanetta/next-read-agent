@@ -23,6 +23,7 @@ from book_agent.domain.recommendations import Filters, Recommendation, Rule
 from book_agent.domain.validation import WorkMatching
 from book_agent.domain.works import SameWorkVerdict
 from book_agent.llm.base import (
+    LLMError,
     LLMResponse,
     Message,
     StopReason,
@@ -365,3 +366,12 @@ async def test_iterations_exhausted_after_repeated_rejections() -> None:
     assert error.last_validation is not None
     assert [(v.rule, v.index) for v in error.last_validation.violations] == [(Rule.ALREADY_READ, 0)]
     assert len(llm.requests) == MAX_ITERATIONS
+
+
+async def test_llm_failure_raises_with_the_failed_call_recorded() -> None:
+    error, llm = await run_expecting_error([LLMError("Gemini API error 503 UNAVAILABLE")])
+
+    assert error.failure is AgentFailure.LLM_ERROR
+    assert str(error) == "LLM call failed: Gemini API error 503 UNAVAILABLE"
+    assert [(c.name, c.model, c.usage) for c in error.calls] == [(CALL_NAME, None, None)]
+    assert error.iterations == 1 and len(llm.requests) == 1

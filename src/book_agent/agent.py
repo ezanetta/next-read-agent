@@ -23,6 +23,7 @@ from book_agent.domain.recommendations import Filters, RecommendationList, Valid
 from book_agent.domain.validation import WorkMatching, validate_recommendations
 from book_agent.llm.base import (
     LLMClient,
+    LLMError,
     LLMResponse,
     Message,
     StopReason,
@@ -74,6 +75,7 @@ class AgentFailure(StrEnum):
     ITERATIONS_EXHAUSTED = "iterations_exhausted"  # no accepted submission in time
     TOKEN_LIMIT = "token_limit"  # a reply was cut off without calling a tool
     CATALOG_UNAVAILABLE = "catalog_unavailable"  # validation couldn't look books up
+    LLM_ERROR = "llm_error"  # a request to the model failed (rate limit, refusal, outage)
 
 
 class AgentError(Exception):
@@ -117,7 +119,17 @@ async def run_agent(
     rejections: list[ValidationResult] = []
 
     for iteration in range(1, MAX_ITERATIONS + 1):
-        response = await _complete(llm, system, messages, calls)
+        try:
+            response = await _complete(llm, system, messages, calls)
+        except LLMError as e:
+            raise AgentError(
+                f"LLM call failed: {e}",
+                failure=AgentFailure.LLM_ERROR,
+                rejections=rejections,
+                last_validation=rejections[-1] if rejections else None,
+                calls=calls,
+                iterations=iteration,
+            ) from e
         messages.append(response.message)  # unchanged: thought signatures live here
 
         if not response.message.tool_calls:
@@ -195,9 +207,15 @@ async def _complete(
     llm: LLMClient, system: str, messages: list[Message], calls: list[LLMCall]
 ) -> LLMResponse:
     started = perf_counter()
-    response = await llm.complete(
-        system=system, messages=messages, tools=TOOLS, max_tokens=MAX_TOKENS_PER_TURN
-    )
+    try:
+        response = await llm.complete(
+            system=system, messages=messages, tools=TOOLS, max_tokens=MAX_TOKENS_PER_TURN
+        )
+    except LLMError:
+        calls.append(
+            LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
+        )
+        raise
     calls.append(
         LLMCall(
             name=CALL_NAME,

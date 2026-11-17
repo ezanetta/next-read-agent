@@ -3,12 +3,17 @@ import json
 import pytest
 
 from book_agent.domain.recommendations import Filters
-from book_agent.domain.requests import MAX_REQUEST_CHARS, ParsedRequest
+from book_agent.domain.requests import (
+    MAX_REQUEST_CHARS,
+    FilterSource,
+    ParsedRequest,
+    ResolvedRequest,
+)
 from book_agent.json_reply import ReplyParseError
 from book_agent.llm.base import LLMError
 from book_agent.prompts import request_parser_v1
 from book_agent.prompts.user_content import request_block
-from book_agent.request_parser import interpret_request, parse_interpretation
+from book_agent.request_parser import interpret_request, parse_interpretation, resolve_request
 from tests.fakes import FakeLLM, text_response
 
 
@@ -151,3 +156,38 @@ def test_parser_prompt_states_the_extraction_rules() -> None:
     assert "The language the request is written in is NOT a filter" in system
     assert '"under 400"' in system and "all give 400" in system
     assert "minimums" in system
+
+
+# --- resolve_request -------------------------------------------------------------------
+
+
+async def test_resolve_without_text_uses_the_flags_and_makes_no_call() -> None:
+    llm = FakeLLM([])
+    resolution = await resolve_request("  ", Filters(language="es"), llm=llm)
+    assert resolution.interpretation is None
+    assert resolution.request == ResolvedRequest(
+        text=None,
+        preference=None,
+        filters=Filters(language="es"),
+        sources={"language": FilterSource.FLAG},
+    )
+
+
+async def test_resolve_merges_interpreted_filters_with_flags() -> None:
+    llm = FakeLLM([text_response(interpreter_reply("a dystopia", "en", 400))])
+    resolution = await resolve_request(" a dystopia ", Filters(max_pages=250), llm=llm)
+    assert resolution.request is not None
+    assert resolution.request.text == "a dystopia"
+    assert resolution.request.filters == Filters(language="en", max_pages=250)
+    assert resolution.request.sources == {
+        "language": FilterSource.TEXT,
+        "max_pages": FilterSource.FLAG,
+    }
+
+
+async def test_resolve_reports_a_failed_interpretation_without_a_request() -> None:
+    llm = FakeLLM([text_response("Sure!")])
+    resolution = await resolve_request("a dystopia", Filters(), llm=llm)
+    assert resolution.request is None
+    assert resolution.interpretation is not None
+    assert resolution.interpretation.error == "no JSON found in the reply"

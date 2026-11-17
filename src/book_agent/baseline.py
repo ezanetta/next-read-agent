@@ -14,14 +14,14 @@ from pydantic import BaseModel
 
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, RecommendationList, ValidationResult
-from book_agent.domain.requests import ResolvedRequest, merge_filters
+from book_agent.domain.requests import ResolvedRequest
 from book_agent.domain.validation import WorkMatching, validate_recommendations
 from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message, StopReason, Usage
 from book_agent.llm.calls import LLMCall, total_usage
 from book_agent.ports import BookSearch, WorkResolver
 from book_agent.prompts import baseline_v1
-from book_agent.request_parser import interpret_request
+from book_agent.request_parser import resolve_request
 from book_agent.same_work_judge import LLMSameWorkJudge
 
 CALL_NAME = "recommend"
@@ -73,31 +73,26 @@ async def run_baseline(
     With `works`, equal work keys settle the same-work question before the LLM judge.
     """
     result = BaselineResult(prompt_id=baseline_v1.PROMPT_ID)
-    text = request.strip() if request else None
-
-    if text:
-        interpretation = await interpret_request(text, llm=llm)
+    resolution = await resolve_request(request, flags, llm=llm)
+    interpretation = resolution.interpretation
+    if interpretation is not None:
         result = result.model_copy(
             update={
                 "request_prompt_id": interpretation.prompt_id,
-                "request_text": text,
+                "request_text": request.strip() if request else None,
                 "calls": [interpretation.call] if interpretation.call else [],
             }
         )
-        if interpretation.parsed is None:
-            return result.model_copy(
-                update={
-                    "raw_text": interpretation.raw_text,
-                    "error": f"Could not interpret the request: {interpretation.error}",
-                }
-            )
-        filters, sources = merge_filters(interpretation.parsed.filters, flags)
-        preference = interpretation.parsed.preference
-    else:
-        filters, sources = merge_filters(Filters(), flags)
-        preference = None
-
-    resolved = ResolvedRequest(text=text, preference=preference, filters=filters, sources=sources)
+    if resolution.request is None:
+        assert interpretation is not None  # only a failed interpretation gives no request
+        return result.model_copy(
+            update={
+                "raw_text": interpretation.raw_text,
+                "error": f"Could not interpret the request: {interpretation.error}",
+            }
+        )
+    resolved = resolution.request
+    filters, preference = resolved.filters, resolved.preference
     result = result.model_copy(update={"request": resolved})
 
     started = perf_counter()
