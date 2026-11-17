@@ -18,6 +18,7 @@ from pydantic.alias_generators import to_camel
 
 from book_agent.domain.models import CatalogBook
 from book_agent.ports import BookSearchError
+from book_agent.pydantic_errors import describe
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,7 @@ def _parse[M: BaseModel](model: type[M], response: httpx.Response) -> M:
 
 
 def _to_catalog_book(volume: _Volume) -> CatalogBook | None:
-    """Map an API volume to a CatalogBook, or None (with a warning) if it is unusable."""
+    """Map an API volume to a CatalogBook, or None (logged at debug level) if unusable."""
     info = volume.volume_info
     isbns = {i.type: i.identifier for i in info.industry_identifiers}
     thumbnail = info.image_links.thumbnail if info.image_links else None
@@ -171,7 +172,8 @@ def _to_catalog_book(volume: _Volume) -> CatalogBook | None:
             }
         )
     except ValidationError as e:
-        logger.warning("Skipping Google Books volume %r: %s", volume.id, e)
+        # Debug level: common and harmless; shown by the CLI with --verbose.
+        logger.debug("Skipping Google Books volume %r: %s", volume.id, describe(e))
         return None
 
 
