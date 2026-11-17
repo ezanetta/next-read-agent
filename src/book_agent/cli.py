@@ -2,10 +2,16 @@
 
     uv run python -m book_agent.cli baseline ["free-text request"] [--language en]
         [--max-pages 400] [--csv PATH] [--cache PATH]
+    uv run python -m book_agent.cli agent ["free-text request"] [same options as baseline]
     uv run python -m book_agent.cli works [--refresh] [--csv PATH] [--cache PATH]
 
 baseline: flags override filters interpreted from the request text, field by field.
 Exit codes: 0 all hard rules passed (unknowns allowed), 1 rule violations, 2 errors.
+
+agent: same request handling and filters as baseline; reports iterations, submissions,
+each rejection with its reasons and every LLM call.
+Exit codes: 0 accepted, 1 only rejected submissions until the iterations ran out, 2 errors
+(failed interpretation, LLM error, catalog unreachable, token limit).
 
 works: resolves the library's ISBNs to Open Library work keys once and caches them, so
 baseline runs don't repeat the requests. --refresh looks every ISBN up again.
@@ -23,12 +29,16 @@ from pathlib import Path
 import httpx
 
 from book_agent.adapters.goodreads import load_goodreads_export
+from book_agent.agent import MAX_ITERATIONS, AgentFailure
+from book_agent.agent_run import AgentRun, run_agent_pipeline
 from book_agent.baseline import BaselineResult, run_baseline
 from book_agent.config import Settings, get_settings
+from book_agent.domain.acceptance import Problem, blocking_problems
 from book_agent.domain.models import Profile
-from book_agent.domain.recommendations import Check, Filters
+from book_agent.domain.recommendations import Check, Filters, Unknown, ValidationResult
 from book_agent.domain.requests import FilterName, ResolvedRequest
 from book_agent.llm.base import LLMClient
+from book_agent.llm.calls import LLMCall
 from book_agent.ports import BookSearch, WorkResolver
 from book_agent.wiring import (
     build_book_search,
@@ -66,13 +76,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(_works(profile, settings, cache, args.cache, refresh=args.refresh))
         flags = Filters(language=args.language, max_pages=args.max_pages)
         llm = build_llm(settings)
-        return asyncio.run(_run(profile, flags, args.request, settings, llm, cache, args.cache))
+        return asyncio.run(
+            _run(args.command, profile, flags, args.request, settings, llm, cache, args.cache)
+        )
     except (OSError, ValueError) as e:  # missing file, bad CSV or cache, invalid settings
         print(f"error: {e}")
         return EXIT_ERROR
 
 
 async def _run(
+    command: str,
     profile: Profile,
     flags: Filters,
     request: str | None,
@@ -98,9 +111,8 @@ async def _run(
                     f"Work keys: {library.unchecked} library ISBNs not resolved yet; "
                     "run the works command first."
                 )
-        output, code = await baseline_command(
-            profile, flags, request, llm=llm, books=books, works=works
-        )
+        run_command = agent_command if command == "agent" else baseline_command
+        output, code = await run_command(profile, flags, request, llm=llm, books=books, works=works)
         if works is not None and works.changed:
             save_cache(works.cache, cache_path)
     print("\n".join([*notes, output]))
@@ -170,6 +182,22 @@ async def baseline_command(
     return format_result(result), exit_code(result)
 
 
+async def agent_command(
+    profile: Profile,
+    flags: Filters,
+    request: str | None = None,
+    *,
+    llm: LLMClient,
+    books: BookSearch,
+    works: WorkResolver | None = None,
+) -> tuple[str, int]:
+    """Run the agent and return the printable report and the exit code."""
+    run = await run_agent_pipeline(
+        profile, flags, request=request, llm=llm, books=books, works=works
+    )
+    return format_agent_run(run), agent_exit_code(run)
+
+
 def exit_code(result: BaselineResult) -> int:
     if result.error is not None or result.validation is None:
         return EXIT_ERROR
@@ -180,34 +208,95 @@ def format_result(result: BaselineResult) -> str:
     prompts = f"Prompt {result.prompt_id}"
     if result.request_prompt_id:
         prompts += f" | request parser {result.request_prompt_id}"
-    lines = [prompts]
-    if result.request_text:
-        lines.append(f'Request: "{result.request_text}"')
-    if result.request is not None:
-        lines += _understood(result.request)
-    lines.append("")
+    lines = _header(prompts, result.request_text, result.request)
 
     if result.error is not None:
         lines.append(f"ERROR: {result.error}")
         if result.raw_text:
             lines += ["", "Raw reply:", result.raw_text]
     elif result.validation is not None:
-        lines += _recommendations(result)
+        lines += _recommendations(result.validation)
 
     lines.append("")
-    if result.calls:
-        lines.append("LLM calls:")
-        for call in result.calls:
-            tokens = (
-                f"{call.usage.input_tokens} in, {call.usage.output_tokens} out"
-                if call.usage
-                else "no usage"
-            )
-            model = call.model or "failed"
-            lines.append(f"- {call.name}: {model} | {tokens} | {call.latency_s:.2f}s")
+    lines += _calls(result.calls)
     if result.validation_latency_s is not None:
         lines.append(f"Validation: {result.validation_latency_s:.2f}s")
     return "\n".join(lines)
+
+
+def agent_exit_code(run: AgentRun) -> int:
+    """0 accepted; 1 only rejected submissions until the iterations ran out; 2 errors."""
+    if run.passed:
+        return EXIT_OK
+    if run.failure is AgentFailure.ITERATIONS_EXHAUSTED and run.rejections:
+        return EXIT_VIOLATIONS
+    return EXIT_ERROR
+
+
+def format_agent_run(run: AgentRun) -> str:
+    prompts = f"Prompt {run.prompt_id} | feedback {run.feedback_prompt_id}"
+    if run.request_prompt_id:
+        prompts += f" | request parser {run.request_prompt_id}"
+    lines = _header(prompts, run.request_text, run.request)
+
+    if run.request is not None:
+        rejected = f" ({len(run.rejections)} rejected)" if run.rejections else ""
+        lines.append(
+            f"Iterations: {run.iterations} of {MAX_ITERATIONS} | "
+            f"Submissions: {run.submissions}{rejected}"
+        )
+        lines.append("")
+    for number, rejection in enumerate(run.rejections, start=1):
+        lines.append(f"Rejection {number}:")
+        lines += [f"- {_problem(p)}" for p in blocking_problems(rejection)]
+        lines.append("")
+
+    if run.error is not None:
+        kind = f" ({run.failure.value})" if run.failure else ""
+        lines.append(f"ERROR{kind}: {run.error}")
+        if run.raw_text:
+            lines += ["", "Raw reply:", run.raw_text]
+        if run.last_validation is not None and run.last_validation not in run.rejections:
+            lines += ["", "Last submission:"]
+            lines += _problems(run.last_validation)
+    elif run.validation is not None:
+        lines += _recommendations(run.validation)
+
+    lines.append("")
+    lines += _calls(run.calls)
+    if (usage := run.total_usage) is not None:
+        lines.append(f"Total: {usage.input_tokens} in, {usage.output_tokens} out")
+    return "\n".join(lines)
+
+
+def _header(prompts: str, request_text: str | None, request: ResolvedRequest | None) -> list[str]:
+    lines = [prompts]
+    if request_text:
+        lines.append(f'Request: "{request_text}"')
+    if request is not None:
+        lines += _understood(request)
+    lines.append("")
+    return lines
+
+
+def _calls(calls: list[LLMCall]) -> list[str]:
+    if not calls:
+        return []
+    lines = ["LLM calls:"]
+    for call in calls:
+        tokens = (
+            f"{call.usage.input_tokens} in, {call.usage.output_tokens} out"
+            if call.usage
+            else "no usage"
+        )
+        model = call.model or "failed"
+        lines.append(f"- {call.name}: {model} | {tokens} | {call.latency_s:.2f}s")
+    return lines
+
+
+def _problem(problem: Problem) -> str:
+    unknown = " (unknown)" if isinstance(problem, Unknown) else ""
+    return f"[{problem.rule.value}{unknown}] {problem.message}"
 
 
 def _understood(request: ResolvedRequest) -> list[str]:
@@ -231,10 +320,9 @@ def _source(request: ResolvedRequest, name: FilterName) -> str:
     return f"from {source.value}" if source else "source unknown"
 
 
-def _recommendations(result: BaselineResult) -> list[str]:
-    assert result.validation is not None
+def _recommendations(validation: ValidationResult) -> list[str]:
     lines: list[str] = []
-    for number, item in enumerate(result.validation.items, start=1):
+    for number, item in enumerate(validation.items, start=1):
         rec, match = item.recommendation, item.match
         lines.append(f"{number}. {rec.title} by {rec.author}")
         lines.append(f"   Reason: {rec.reason}")
@@ -255,13 +343,7 @@ def _recommendations(result: BaselineResult) -> list[str]:
         )
         lines.append("")
 
-    validation = result.validation
-    if validation.violations:
-        lines.append("Violations:")
-        lines += [f"- [{v.rule.value}] {v.message}" for v in validation.violations]
-    if validation.unknowns:
-        lines.append("Unknowns:")
-        lines += [f"- [{u.rule.value}] {u.message}" for u in validation.unknowns]
+    lines += _problems(validation)
     if not validation.passed:
         verdict = "FAILED"
     elif validation.fully_verified:
@@ -269,6 +351,17 @@ def _recommendations(result: BaselineResult) -> list[str]:
     else:
         verdict = "PASSED WITH UNKNOWNS"
     lines.append(f"Result: {verdict}")
+    return lines
+
+
+def _problems(validation: ValidationResult) -> list[str]:
+    lines: list[str] = []
+    if validation.violations:
+        lines.append("Violations:")
+        lines += [f"- [{v.rule.value}] {v.message}" for v in validation.violations]
+    if validation.unknowns:
+        lines.append("Unknowns:")
+        lines += [f"- [{u.rule.value}] {u.message}" for u in validation.unknowns]
     return lines
 
 
@@ -288,14 +381,16 @@ def _parser() -> argparse.ArgumentParser:
     shared.add_argument("--cache", type=Path, default=DEFAULT_CACHE_PATH, help="work key cache")
 
     commands = parser.add_subparsers(dest="command", required=True)
-    baseline = commands.add_parser(
-        "baseline", parents=[shared], help="one recommendation call, then validation"
-    )
-    baseline.add_argument(
-        "request", nargs="?", help='free-text request, e.g. "a dystopia under 400 pages"'
-    )
-    baseline.add_argument("--language", type=_language_code, help="ISO 639-1 code, e.g. en")
-    baseline.add_argument("--max-pages", type=int, help="maximum page count")
+    for name, help_text in (
+        ("baseline", "one recommendation call, then validation"),
+        ("agent", "the agent: searches, submits, gets rejections back, resubmits"),
+    ):
+        command = commands.add_parser(name, parents=[shared], help=help_text)
+        command.add_argument(
+            "request", nargs="?", help='free-text request, e.g. "a dystopia under 400 pages"'
+        )
+        command.add_argument("--language", type=_language_code, help="ISO 639-1 code, e.g. en")
+        command.add_argument("--max-pages", type=int, help="maximum page count")
 
     works = commands.add_parser(
         "works", parents=[shared], help="resolve the library to work keys and cache them"

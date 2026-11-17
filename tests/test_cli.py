@@ -1,23 +1,33 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
 
+from book_agent.agent import MAX_ITERATIONS
 from book_agent.cli import (
     EXIT_ERROR,
     EXIT_OK,
     EXIT_VIOLATIONS,
     _print_progress,  # pyright: ignore[reportPrivateUsage]
+    agent_command,
     baseline_command,
     format_progress,
     main,
     works_command,
 )
-from book_agent.domain.models import Profile
+from book_agent.domain.models import CatalogBook, Profile
 from book_agent.domain.recommendations import Filters, Recommendation
-from book_agent.llm.base import Usage
+from book_agent.llm.base import LLMResponse, ToolCallPart, Usage
+from book_agent.ports import BookSearchError
 from book_agent.work_keys import CachedWorkResolver, WorkKeyCache
-from tests.fakes import FakeBookSearch, FakeLLM, FakeWorkResolver, text_response
+from tests.fakes import (
+    FakeBookSearch,
+    FakeLLM,
+    FakeWorkResolver,
+    text_response,
+    tool_call_response,
+)
 from tests.library_data import CLEAN_THREE, PROFILE, catalog, catalog_book, rec
 from tests.library_data import book as library_book
 
@@ -227,3 +237,83 @@ def test_progress_without_a_terminal_prints_every_20_and_the_last(
         "Resolving work keys: 40 of 45",
         "Resolving work keys: 45 of 45",
     ]
+
+
+# --- agent ------------------------------------------------------------------------------
+
+
+def submission(recommendations: list[Recommendation], call_id: str = "submit-1") -> LLMResponse:
+    return tool_call_response(
+        ToolCallPart(
+            id=call_id,
+            name="submit_recommendations",
+            arguments={"recommendations": [r.model_dump() for r in recommendations]},
+        ),
+        usage=Usage(input_tokens=1000, output_tokens=100),
+    )
+
+
+DUNE_AGAIN = rec("Dune", "Frank Herbert", "Like Ficciones.")
+
+
+async def test_agent_report_for_an_accepted_run_after_a_rejection() -> None:
+    llm = FakeLLM([submission([DUNE_AGAIN, *CLEAN_THREE[1:]]), submission(CLEAN_THREE, "s-2")])
+    output, code = await agent_command(PROFILE, Filters(max_pages=600), llm=llm, books=catalog())
+
+    assert code == EXIT_OK
+    lines = output.splitlines()
+    assert lines[0] == "Prompt agent_v1 | feedback submission_feedback_v1"
+    assert "Iterations: 2 of 6 | Submissions: 2 (1 rejected)" in lines
+    rejection = lines.index("Rejection 1:")
+    assert lines[rejection + 1] == (
+        "- [already_read] 'Dune' by Frank Herbert: already read (as 'Dune (Dune Chronicles, #1)')"
+    )
+    assert "1. Hyperion by Dan Simmons" in lines
+    assert "Result: PASSED" in lines
+    call_line = re.compile(r"^- agent: fake-model \| 1000 in, 100 out \| \d+\.\d{2}s$")
+    assert lines[-4] == "LLM calls:"
+    assert all(call_line.match(line) for line in lines[-3:-1])
+    assert lines[-1] == "Total: 2000 in, 200 out"
+
+
+async def test_agent_rejections_until_the_limit_exit_with_violations() -> None:
+    script = [submission([DUNE_AGAIN, *CLEAN_THREE[1:]], f"s-{i}") for i in range(MAX_ITERATIONS)]
+    output, code = await agent_command(PROFILE, Filters(), llm=FakeLLM(script), books=catalog())
+
+    assert code == EXIT_VIOLATIONS
+    assert f"Rejection {MAX_ITERATIONS}:" in output
+    assert "ERROR (iterations_exhausted): no accepted recommendations" in output
+    assert "Last submission:" not in output  # it is the last rejection, already shown
+
+
+async def test_agent_catalog_outage_exits_with_an_error_and_shows_the_lookups() -> None:
+    class Down(FakeBookSearch):
+        async def search(
+            self, query: str, *, language: str | None = None, max_results: int = 10
+        ) -> list[CatalogBook]:
+            raise BookSearchError("Google Books returned HTTP 503")
+
+    output, code = await agent_command(
+        PROFILE, Filters(), llm=FakeLLM([submission(CLEAN_THREE)]), books=Down()
+    )
+    assert code == EXIT_ERROR
+    assert "ERROR (catalog_unavailable): the book catalog could not be reached" in output
+    assert "Last submission:" in output
+    assert (
+        "- [not_found] 'Hyperion' by Dan Simmons: lookup failed (Google Books returned HTTP 503)"
+        in output
+    )
+
+
+async def test_agent_failed_interpretation_shows_the_raw_reply() -> None:
+    llm = FakeLLM([text_response("Sure!")])
+    output, code = await agent_command(PROFILE, Filters(), "algo corto", llm=llm, books=catalog())
+    assert code == EXIT_ERROR
+    assert "ERROR: Could not interpret the request: no JSON found in the reply" in output
+    assert "Iterations:" not in output  # the agent never started
+
+
+def test_agent_command_accepts_the_baseline_arguments(tmp_path: Path) -> None:
+    # Fails on the missing CSV before any network call, after argparse accepted everything.
+    argv = ["agent", "una distopía", "--language", "EN", "--max-pages", "300"]
+    assert main([*argv, "--csv", str(tmp_path / "x.csv")]) == EXIT_ERROR
