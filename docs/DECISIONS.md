@@ -125,3 +125,19 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** A "records calls" Protocol checked at runtime (rejected: a structural check would also match `FakeSameWorkJudge`, whose `calls` holds something else); an `isinstance(judge, LLMSameWorkJudge)` check; the judge returning its call record with each verdict.
 - **Choice for now:** the `isinstance` check in `agent._validate`, copying the calls the judge made during that validation.
 - **Debt:** the agent depends on a concrete adapter class, and calls from any other judge implementation are silently missing. The cleaner fix is for `SameWorkVerdict` to carry the call that produced it (an optional `LLMCall`), so the validator can return the calls with its result and the agent needs no knowledge of the judge.
+
+## D-017 · agent_v2: search for discovery; tool descriptions versioned with the prompt (2026-11-17)
+
+- **Context:** F-005: following the `search_books` description, the model searched each book it already had in mind to confirm it existed, one search per turn, and ran out of turns. The validator already checks existence on submission.
+- **Options:** Edit agent_v1 in place; a new version; remove the search tool.
+- **Choice:** A new version, `agent_v2`, with agent_v1 kept unchanged for comparison. Search is for discovering candidates or resolving doubts about a title or author; existence is said to be checked automatically on submission; several searches go in the same turn. The system prompt's tool section says the same. Rules, the submit description, the argument schemas and the user prompt are reused from agent_v1.
+- **Tool descriptions are part of the prompt version:** they moved from `tools.py` (names, argument models and execution only) into the prompt modules, and an `AgentPrompt` fixes system prompt, tools and user prompt together. The model reads tool descriptions like the system prompt, so changing one is a prompt change that evals must be able to compare.
+- **Reason:** Search stays useful for discovery and for fixing a misremembered author (the "Las malas" case in F-005); removing it would lose that. Editing v1 in place would leave the first runs without a comparable baseline.
+
+## D-018 · A last-turn notice, inside the message that closes the next-to-last turn (2026-11-17)
+
+- **Context:** F-005: the slow run reached its last turn still searching. The model doesn't know how many turns it has left.
+- **Options:** Count turns in the system prompt; a notice on every turn ("N turns left"); a notice once, when one turn is left. For placement: a separate user message; inside the message that closes the turn.
+- **Choice:** Once, when one turn is left: the user message that closes the next-to-last turn ends with "This is your last turn. Call submit_recommendations now with your 3 best books: there are no turns left for searching." It goes after the tool results (or after the reminder, when the turn had no tool call), as a text part of the same message. It applies to every prompt version, and the trace marks it.
+- **Reason:** One message at the moment it matters is cheaper and harder to ignore than a counter on every turn. The same message avoids two user messages in a row, which providers handle differently, and keeps tool results before text, which Claude requires. The notice is loop behavior, not prompt wording to compare, so it isn't versioned; runs after this change include it for agent_v1 too, which matters when comparing them with the first agent runs.
+- **Not done:** forcing a submit-only tool choice on the last turn. `LLMClient` has no tool-choice option yet; worth adding if the notice proves not enough.
