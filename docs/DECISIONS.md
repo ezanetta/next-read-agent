@@ -158,3 +158,39 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Send the last-turn notice with 2 turns left (costs every run a turn, and a model that ignores it fails the same way); one repair turn only when a submission on the last turn is rejected.
 - **Choice:** One repair turn. `MAX_ITERATIONS = 6` regular turns, `REPAIR_TURNS = 1`, effective cap `MAX_TURNS = 7`. The repair turn is granted only when a submission on the last regular turn is rejected; the rejection feedback then ends with a repair notice (keep the accepted books, replace the rejected ones, submit now). A rejection on an earlier turn adds nothing, since a turn is left. A rejection or a search in the repair turn ends the run. A catalog outage still stops the run at once (D-014). Results, errors and the trace record whether the repair turn was used.
 - **Reason:** Every rejection gets one chance to be fixed, at a bounded cost (at most one extra request), without taking a turn away from runs that never need it. Recording its use lets evals see how often runs depend on it.
+
+## D-021 · Evals: run once, score many times (2026-11-18)
+
+- **Context:** Eval runs cost free-tier quota (about 500 requests a day). The acceptance policy has already changed once (D-014), and the phase-2 LLM judge will need the same runs.
+- **Options:** Score while running and store verdicts; store everything a run produced and score in a separate step.
+- **Choice:** Separate steps. `evals run` saves one complete record per run: identity (case set and its hash, configuration, prompt versions, git commit, library hash), the interpreted request, the outcome, the final and rejected validations, the trace and every LLM call. `evals report` only reads records and applies the acceptance policy at report time.
+- **Reason:** A policy change or a new metric rescores old runs with no LLM calls; the judge can read the stored recommendations, reasons and resolved books later.
+- **Caveat:** For the agent, rescoring judges the final validation only; the run's path (rejections, resubmissions) followed the policy in force when it ran.
+- **Configuration identity:** system, prompt version, model and thinking level. The git commit is recorded per run, and the report warns about mixed commits, but **changes that affect results outside the prompt version (validator, loop, tools) should start a fresh results directory** rather than rely on that warning: those runs aren't comparable with older ones under the same configuration name.
+
+## D-022 · Several runs per case (2026-11-18)
+
+- **Context:** The agent runs at the model's default temperature and its behavior varies between runs (parallel versus one search per turn, F-006, F-007).
+- **Options:** One run per case; several runs per case.
+- **Choice:** `--runs N` per case (3 by default), reported as accepted/runs per case and as rates per configuration.
+- **Reason:** One run per case would turn a coin flip into a verdict. Three runs fit the free tier for 13 cases and show which cases are unstable.
+
+## D-023 · Frozen case sets, enforced by hash (2026-11-18)
+
+- **Context:** Results are only comparable if the cases didn't change between runs.
+- **Options:** A convention ("don't edit"); enforcement.
+- **Choice:** Each record stores the case file's SHA-256. Once a case set has results, the runner (and the parser eval) refuse to add runs if the file's hash differs, and point to a new version file (`recommend_v2`).
+- **Reason:** A silent edit to a case would mix incomparable runs in one report; a hash catches it at no cost.
+
+## D-024 · Eval results stay private (2026-11-18)
+
+- **Context:** Records and profile snapshots contain the reader's whole library, and recommendations derived from it.
+- **Choice:** Results live in `data/evals/` (gitignored with the rest of `data/`). Only aggregate tables may be published later, after review. Case files contain no personal data and are versioned in the repo.
+- **Reason:** The repo is public; the library is personal data.
+
+## D-025 · Known limitation: the parser eval can't see a lost negation (2026-11-18)
+
+- **Context:** The parser eval checks that terms survive in the preference ("Sanderson", "Christie", "space"). A preference that keeps the term but drops the negation ("nothing from Brandon Sanderson" becoming "Sanderson") passes.
+- **Options:** Negation terms in the labels ("nothing", "not"); a human reading; an LLM judge.
+- **Choice:** No negation terms: they're fragile across languages and phrasings. The parser report prints every interpreted preference, passing or not, so all of them can be read; the phase-2 judge will check that soft constraints, negations included, keep their meaning.
+- **Reason:** A wrong automated check is worse than an honest blind spot with a human in the loop until the judge exists.
