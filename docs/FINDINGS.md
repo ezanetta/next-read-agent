@@ -114,3 +114,12 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - A submission rejected on the last regular turn gets one repair turn (D-020).
   - One search per turn: no change; evals will measure it.
 - **How it was verified:** Live Google Books requests (the 4 queries above, plus 3 to record fixtures and choose the fallback query); no LLM calls. A regression test runs the validator with the real adapter on the recorded responses: the "&" query returning only reference works, and the fallback finding the book. Unit tests for the repair turn. Not yet re-checked with a real agent run.
+
+## F-008 · "More Claire Keegan" answered with one Keegan book: an eval case for the judge (2026-11-18)
+
+- **What happened:** The F-007 request, "más libros de Claire Keegan", rerun with `agent_v2` after the D-019 and D-020 fixes. It passed: 4 iterations, parallel searches, no rejection. It didn't exercise either fix: the model picked *After Rain* (William Trevor) instead of *The News from Ireland & Other Stories*, and nothing was rejected. Both fixes are covered by unit and regression tests instead.
+  - The request asked for more Claire Keegan books, and the answer had only one, although the model found a second (*Walk the Blue Fields*) twice in its searches.
+- **How it was detected:** Manual review of the CLI output and the `--verbose` trace.
+- **What it implies:** Whether one book by the requested author, plus two similar authors, honors "more books by X" is a judgment call that hard rules can't make. Keep this request as an eval case for the LLM judge, with the trace's evidence that a second matching book was available.
+- **Fix:** None; eval case.
+- **How it was verified:** 1 real run.
