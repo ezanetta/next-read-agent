@@ -3,9 +3,12 @@
     uv run python -m book_agent.evals run --system baseline|agent [--prompt agent_v2]
         [--cases recommend_v1] [--runs 3] [--max-rpm 15] [--yes]
     uv run python -m book_agent.evals report [--cases recommend_v1]
+    uv run python -m book_agent.evals parser [--cases request_parser_v1] [--yes]
 
 run prints the plan and an estimate of LLM requests, and starts only with --yes.
 report reads the records only (no LLM calls) and writes data/evals/<cases>/report.md.
+parser interprets each labeled request once (temperature 0) and reports per-field
+accuracy, dropped preference terms, and every interpreted preference.
 Exit codes: 0 done (or nothing to do), 1 stopped early by quota (rerun to resume), 2 errors.
 """
 
@@ -17,8 +20,17 @@ from pathlib import Path
 from book_agent.adapters.goodreads import load_goodreads_export
 from book_agent.agent_run import AGENT_PROMPTS, DEFAULT_AGENT_PROMPT
 from book_agent.config import Settings, get_settings
-from book_agent.evals.cases import load_recommend_cases
+from book_agent.evals.cases import ParserCase, load_parser_cases, load_recommend_cases
 from book_agent.evals.pacing import DEFAULT_MAX_RPM, PacedLLM
+from book_agent.evals.parser_eval import (
+    load_records,
+    new_records,
+    pending,
+    records_path,
+    render_parser_report,
+    run_parser_eval,
+    scores,
+)
 from book_agent.evals.records import RESULTS_DIR, RecordStore, RunConfig, System
 from book_agent.evals.report import build_report, render_markdown
 from book_agent.evals.runner import (
@@ -38,6 +50,7 @@ from book_agent.work_keys import DEFAULT_CACHE_PATH, load_cache
 
 DEFAULT_CSV = Path("data/goodreads_library_export.csv")
 DEFAULT_CASES = "recommend_v1"
+DEFAULT_PARSER_CASES = "request_parser_v1"
 DAILY_FREE_TIER = 500  # gemini-3.5-flash-lite requests per day
 EXIT_OK, EXIT_STOPPED, EXIT_ERROR = 0, 1, 2
 
@@ -48,6 +61,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_command(args)
     if args.command == "report":
         return _report_command(args)
+    if args.command == "parser":
+        return _parser_command(args)
     raise AssertionError(f"unhandled command {args.command!r}")
 
 
@@ -116,6 +131,55 @@ def _report_command(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _parser_command(args: argparse.Namespace) -> int:
+    try:
+        loaded = load_parser_cases(args.cases)
+        settings = get_settings()
+        path = records_path(
+            args.results, args.cases, settings.gemini_model, settings.gemini_thinking_level
+        )
+        records = load_records(path)
+        to_run = pending(loaded, records)
+    except (OSError, ValueError) as e:
+        print(f"error: {e}")
+        return EXIT_ERROR
+
+    total = len(loaded.cases.cases)
+    print(f"Case set: {args.cases} ({total} cases) | model {settings.gemini_model}")
+    print(f"Runs: {total - len(to_run)} already recorded, {len(to_run)} to run")
+    print(f"Estimated LLM requests: {len(to_run)} (one per case, temperature 0)")
+    if to_run and not args.yes:
+        print("Add --yes to start.")
+        return EXIT_OK
+
+    if records is None:
+        records = new_records(
+            loaded, settings.gemini_model, settings.gemini_thinking_level, git_state().commit
+        )
+    stopped: str | None = None
+    if to_run:
+        llm = PacedLLM(build_llm(settings), max_rpm=args.max_rpm)
+        stopped = asyncio.run(
+            run_parser_eval(to_run, records, path, llm=llm, progress=_print_parser_progress)
+        )
+
+    markdown = render_parser_report(records, scores(loaded, records))
+    print(markdown)
+    if records.outcomes:
+        report_path = path.with_suffix(".md")
+        write_atomic(report_path, markdown)
+        print(f"Written to {report_path}")
+    if stopped:
+        print(f"Stopped early: {stopped}")
+        print("Run the same command again later to resume; finished cases are kept.")
+        return EXIT_STOPPED
+    return EXIT_OK
+
+
+def _print_parser_progress(number: int, total: int, case: ParserCase) -> None:
+    print(f"[{number}/{total}] {case.id}", flush=True)
+
+
 def run_config(system: System, prompt_id: str, settings: Settings) -> RunConfig:
     return RunConfig(
         system=system,
@@ -178,6 +242,12 @@ def _parser() -> argparse.ArgumentParser:
     report = commands.add_parser("report", help="score the recorded runs of a case set")
     report.add_argument("--cases", default=DEFAULT_CASES, help="case set version")
     report.add_argument("--results", type=Path, default=RESULTS_DIR, help="results directory")
+
+    parser_eval = commands.add_parser("parser", help="score the request interpreter on labels")
+    parser_eval.add_argument("--cases", default=DEFAULT_PARSER_CASES, help="case set version")
+    parser_eval.add_argument("--max-rpm", type=int, default=DEFAULT_MAX_RPM)
+    parser_eval.add_argument("--yes", action="store_true", help="start (otherwise plan only)")
+    parser_eval.add_argument("--results", type=Path, default=RESULTS_DIR)
     return parser
 
 
