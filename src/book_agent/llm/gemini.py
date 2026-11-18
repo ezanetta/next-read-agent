@@ -289,8 +289,26 @@ def to_llm_error(error: errors.APIError) -> LLMError:
     if error.code == 429:
         # APIError.details is untyped in the SDK: it holds the raw error JSON.
         details = cast(object, error.details)  # pyright: ignore[reportUnknownMemberType]
-        return LLMRateLimitError(message, retry_after=_retry_delay(details))
+        return LLMRateLimitError(
+            message, retry_after=_retry_delay(details), daily=_is_daily_quota(details)
+        )
     return LLMError(message)
+
+
+def _is_daily_quota(details: object) -> bool:
+    """Whether a google.rpc.QuotaFailure names a per-day quota, e.g. quotaId
+    "GenerateRequestsPerDayPerProjectPerModel-FreeTier"."""
+    try:
+        body = _ErrorBody.model_validate(details)
+    except ValidationError:
+        return False
+    for detail in body.error.details:
+        violations = detail.get("violations")
+        if str(detail.get("@type", "")).endswith("QuotaFailure") and isinstance(violations, list):
+            for violation in violations:
+                if isinstance(violation, dict) and "PerDay" in str(violation.get("quotaId", "")):
+                    return True
+    return False
 
 
 def _retry_delay(details: object) -> float | None:

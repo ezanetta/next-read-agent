@@ -421,13 +421,35 @@ def test_no_candidates_raises() -> None:
 # --- Errors -----------------------------------------------------------------------
 
 
-def api_error_json(code: int, status: str, *details: dict[str, str]) -> dict[str, object]:
+def api_error_json(code: int, status: str, *details: dict[str, object]) -> dict[str, object]:
     return {"error": {"code": code, "message": "Something happened", "status": status,
                       "details": list(details)}}  # fmt: skip
 
 
-def retry_info(delay: str) -> dict[str, str]:
+def retry_info(delay: str) -> dict[str, object]:
     return {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": delay}
+
+
+def quota_failure(quota_id: str) -> dict[str, object]:
+    return {
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        "violations": [{"quotaMetric": "generate_content_free_tier_requests", "quotaId": quota_id}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("quota_id", "daily"),
+    [
+        ("GenerateRequestsPerDayPerProjectPerModel-FreeTier", True),
+        ("GenerateRequestsPerMinutePerProjectPerModel-FreeTier", False),
+    ],
+)
+def test_429_says_whether_the_quota_is_daily(quota_id: str, daily: bool) -> None:
+    body = api_error_json(429, "RESOURCE_EXHAUSTED", quota_failure(quota_id), retry_info("9s"))
+    mapped = to_llm_error(errors.ClientError(429, body))
+    assert isinstance(mapped, LLMRateLimitError)
+    assert mapped.daily is daily
+    assert mapped.retry_after == 9.0
 
 
 @pytest.mark.parametrize(("delay", "seconds"), [("17s", 17.0), ("1.5s", 1.5)])
@@ -444,6 +466,7 @@ def test_429_without_retry_delay() -> None:
     mapped = to_llm_error(error)
     assert isinstance(mapped, LLMRateLimitError)
     assert mapped.retry_after is None
+    assert not mapped.daily  # unknown scope: treated as a short-term limit
 
 
 def test_402_resource_exhausted_is_not_a_rate_limit() -> None:

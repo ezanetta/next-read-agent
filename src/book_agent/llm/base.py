@@ -31,9 +31,12 @@ class LLMError(Exception):
 class LLMRateLimitError(LLMError):
     """The provider rejected the request for rate or quota reasons."""
 
-    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+    def __init__(
+        self, message: str, *, retry_after: float | None = None, daily: bool = False
+    ) -> None:
         super().__init__(message)
         self.retry_after = retry_after  # seconds, when the provider suggests one
+        self.daily = daily  # a daily quota: waiting minutes won't help
 
 
 class LLMRefusalError(LLMError):
