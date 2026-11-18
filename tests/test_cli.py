@@ -402,3 +402,17 @@ async def test_agent_verbose_trace_marks_the_repair_turn() -> None:
     assert code == EXIT_OK
     assert f"Iterations: {MAX_TURNS} of {MAX_ITERATIONS} + 1 repair turn |" in output
     assert output.count("  (repair turn granted)") == 1
+
+
+def test_min_pages_flag_is_accepted(tmp_path: Path) -> None:
+    # Fails on the missing CSV before any network call, after argparse accepted the flag.
+    argv = ["agent", "--min-pages", "300", "--max-pages", "500", "--csv", str(tmp_path / "x.csv")]
+    assert main(argv) == EXIT_ERROR
+
+
+def test_contradictory_page_flags_are_a_clean_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = ["baseline", "--min-pages", "500", "--max-pages", "300", "--csv", str(tmp_path / "x")]
+    assert main(argv) == EXIT_ERROR
+    assert "min_pages 500 is above max_pages 300" in capsys.readouterr().out

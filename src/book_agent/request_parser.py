@@ -43,6 +43,7 @@ class _Reply(BaseModel):
     preference: str | None = None
     language: str | None = None
     max_pages: int | None = None
+    min_pages: int | None = None  # asked for from request_parser_v3 on (D-026)
 
 
 async def interpret_request(
@@ -99,7 +100,10 @@ def parse_interpretation(text: str) -> ParsedRequest:
     # Only here: the baseline's parsing, and so its measured behavior, stays strict.
     reply = parse_model(_Reply, extract_json(text, strict=False))
     language = primary_language(reply.language) if reply.language else None
-    filters = parse_model(Filters, {"language": language, "max_pages": reply.max_pages})
+    filters = parse_model(
+        Filters,
+        {"language": language, "max_pages": reply.max_pages, "min_pages": reply.min_pages},
+    )
     preference = reply.preference.strip() if reply.preference else None
     return ParsedRequest(preference=preference or None, filters=filters)
 
@@ -107,8 +111,9 @@ def parse_interpretation(text: str) -> ParsedRequest:
 class RequestResolution(BaseModel, frozen=True):
     """The request to act on, and the interpretation behind it (if there was text)."""
 
-    request: ResolvedRequest | None  # None when interpretation failed: stop the run (D-007)
+    request: ResolvedRequest | None  # None when it can't be acted on: stop the run (D-007)
     interpretation: Interpretation | None  # None when there was no request text
+    error: str | None = None  # why request is None
 
 
 async def resolve_request(text: str | None, flags: Filters, *, llm: LLMClient) -> RequestResolution:
@@ -125,8 +130,19 @@ async def resolve_request(text: str | None, flags: Filters, *, llm: LLMClient) -
 
     interpretation = await interpret_request(request, llm=llm)
     if interpretation.parsed is None:
-        return RequestResolution(request=None, interpretation=interpretation)
-    filters, sources = merge_filters(interpretation.parsed.filters, flags)
+        return RequestResolution(
+            request=None,
+            interpretation=interpretation,
+            error=f"Could not interpret the request: {interpretation.error}",
+        )
+    try:
+        filters, sources = merge_filters(interpretation.parsed.filters, flags)
+    except ValueError as e:  # e.g. a minimum in the text above a maximum given as a flag
+        return RequestResolution(
+            request=None,
+            interpretation=interpretation,
+            error=f"The request contradicts the flags: {e}",
+        )
     resolved = ResolvedRequest(
         text=request,
         preference=interpretation.parsed.preference,

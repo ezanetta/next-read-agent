@@ -285,3 +285,29 @@ def test_the_shared_extractor_stays_strict_by_default() -> None:
         "language": None,
         "max_pages": None,
     }
+
+
+async def test_resolve_reports_bounds_that_contradict_the_flags() -> None:
+    reply = json.dumps(
+        {"preference": "a saga", "language": None, "max_pages": None, "min_pages": 500}
+    )
+    llm = FakeLLM([text_response(reply)])
+    resolution = await resolve_request("a saga over 500 pages", Filters(max_pages=300), llm=llm)
+    assert resolution.request is None
+    assert resolution.error == (
+        "The request contradicts the flags: min_pages 500 (from text) is above "
+        "max_pages 300 (from flag)"
+    )
+
+
+def test_min_pages_is_read_from_the_reply() -> None:
+    reply = json.dumps({"preference": None, "language": "en", "max_pages": 400, "min_pages": 200})
+    assert parse_interpretation(reply).filters == Filters(
+        language="en", max_pages=400, min_pages=200
+    )
+
+
+def test_a_reply_with_contradicting_bounds_is_rejected() -> None:
+    reply = json.dumps({"preference": "x", "language": None, "max_pages": 300, "min_pages": 500})
+    with pytest.raises(ReplyParseError, match="min_pages 500 is above max_pages 300"):
+        parse_interpretation(reply)

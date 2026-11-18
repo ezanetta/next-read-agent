@@ -19,6 +19,7 @@ from tests.library_data import (
     CATALOG,
     CLEAN_THREE,
     FOUNDATION,
+    HYPERION,
     HYPERION_SHORT,
     METAMORPHOSIS,
     NO_LANGUAGE,
@@ -618,3 +619,39 @@ async def test_a_reason_without_any_read_title_keeps_the_original_message() -> N
     assert result.violations[0].message == (
         "'Hyperion' by Dan Simmons: the reason cites no book from the reader's history"
     )
+
+
+# --- Minimum page count (D-026) -----------------------------------------------------------
+
+
+async def test_a_book_below_the_minimum_is_a_violation() -> None:
+    # Foundation has 255 pages in the test catalog.
+    result = await validate(CLEAN_THREE, Filters(min_pages=300))
+    assert (Rule.MIN_PAGES, 2) in rules(result)
+    violation = next(v for v in result.violations if v.rule is Rule.MIN_PAGES)
+    assert violation.message == "'Foundation' by Isaac Asimov: 255 pages, min 300"
+    assert result.items[0].min_pages is Check.PASS  # Hyperion: 482 pages
+
+
+async def test_the_minimum_is_inclusive() -> None:
+    result = await validate(CLEAN_THREE, Filters(min_pages=255))
+    assert Rule.MIN_PAGES not in [v.rule for v in result.violations]
+
+
+async def test_unknown_page_count_is_unknown_for_the_minimum_too() -> None:
+    solaris = rec("Solaris", "Stanislaw Lem", "Strange, like Dune.")
+    result = await validate(with_clean(solaris), Filters(min_pages=100))
+    assert [(u.rule, u.index) for u in result.unknowns] == [(Rule.MIN_PAGES, 0)]
+    assert result.items[0].min_pages is Check.UNKNOWN
+
+
+async def test_the_edition_meeting_both_bounds_is_picked() -> None:
+    # Hyperion has a 482-page and a 350-page edition; only the longer one has >= 400.
+    result = await validate(CLEAN_THREE, Filters(min_pages=400, max_pages=500))
+    assert result.items[0].match == HYPERION
+    assert result.items[0].min_pages is Check.PASS and result.items[0].max_pages is Check.PASS
+
+
+async def test_min_pages_is_skipped_without_the_filter() -> None:
+    result = await validate(CLEAN_THREE)
+    assert all(item.min_pages is Check.SKIPPED for item in result.items)

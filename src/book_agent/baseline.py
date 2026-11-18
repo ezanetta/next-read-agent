@@ -88,11 +88,11 @@ async def run_baseline(
             }
         )
     if resolution.request is None:
-        assert interpretation is not None  # only a failed interpretation gives no request
+        assert interpretation is not None  # only text that can't be acted on gives no request
         return result.model_copy(
             update={
                 "raw_text": interpretation.raw_text,
-                "error": f"Could not interpret the request: {interpretation.error}",
+                "error": resolution.error,
                 "error_kind": "interpretation",
             }
         )

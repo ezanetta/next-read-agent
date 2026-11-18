@@ -9,7 +9,7 @@ from book_agent.domain.recommendations import Filters
 
 MAX_REQUEST_CHARS = 500
 
-FilterName = Literal["language", "max_pages"]
+FilterName = Literal["language", "max_pages", "min_pages"]
 
 
 class FilterSource(StrEnum):
@@ -33,22 +33,30 @@ class ResolvedRequest(BaseModel, frozen=True):
     sources: dict[FilterName, FilterSource]  # one entry per filter that is set
 
 
+_FILTER_NAMES: tuple[FilterName, ...] = ("language", "max_pages", "min_pages")
+
+
 def merge_filters(
     interpreted: Filters, flags: Filters
 ) -> tuple[Filters, dict[FilterName, FilterSource]]:
-    """Explicit flags override interpreted values field by field, recording each source."""
+    """Explicit flags override interpreted values field by field, recording each source.
+
+    Raises ValueError if the merged bounds contradict each other (a minimum above the
+    maximum), e.g. --max-pages 300 against "more than 500 pages" in the text.
+    """
     sources: dict[FilterName, FilterSource] = {}
-
-    language = flags.language or interpreted.language
-    if flags.language:
-        sources["language"] = FilterSource.FLAG
-    elif interpreted.language:
-        sources["language"] = FilterSource.TEXT
-
-    max_pages = flags.max_pages or interpreted.max_pages
-    if flags.max_pages:
-        sources["max_pages"] = FilterSource.FLAG
-    elif interpreted.max_pages:
-        sources["max_pages"] = FilterSource.TEXT
-
-    return Filters(language=language, max_pages=max_pages), sources
+    merged: dict[str, object] = {}
+    for name in _FILTER_NAMES:
+        flag, text = getattr(flags, name), getattr(interpreted, name)
+        merged[name] = flag or text
+        if flag:
+            sources[name] = FilterSource.FLAG
+        elif text:
+            sources[name] = FilterSource.TEXT
+    low, high = merged["min_pages"], merged["max_pages"]
+    if isinstance(low, int) and isinstance(high, int) and low > high:
+        raise ValueError(
+            f"min_pages {low} (from {sources['min_pages'].value}) is above "
+            f"max_pages {high} (from {sources['max_pages'].value})"
+        )
+    return Filters.model_validate(merged), sources

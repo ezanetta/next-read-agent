@@ -1,7 +1,7 @@
 """Command-line entry point.
 
     uv run python -m book_agent.cli baseline ["free-text request"] [--language en]
-        [--max-pages 400] [--csv PATH] [--cache PATH]
+        [--max-pages 400] [--min-pages 200] [--csv PATH] [--cache PATH]
     uv run python -m book_agent.cli agent ["free-text request"] [same options as baseline]
         [--prompt agent_v1|agent_v2] [--verbose]
     uv run python -m book_agent.cli works [--refresh] [--csv PATH] [--cache PATH]
@@ -78,12 +78,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     verbose: bool = getattr(args, "verbose", False)
     _configure_logging(verbose)
     try:
+        # Flags first: a contradictory combination fails before any file is read.
+        flags = (
+            Filters(language=args.language, max_pages=args.max_pages, min_pages=args.min_pages)
+            if args.command != "works"
+            else Filters()
+        )
         profile = load_goodreads_export(args.csv, profile_name="Me")
         settings = get_settings()
         cache = load_cache(args.cache)
         if args.command == "works":
             return asyncio.run(_works(profile, settings, cache, args.cache, refresh=args.refresh))
-        flags = Filters(language=args.language, max_pages=args.max_pages)
         llm = build_llm(settings)
         return asyncio.run(
             _run(
@@ -99,7 +104,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 prompt=AGENT_PROMPTS[getattr(args, "prompt", DEFAULT_AGENT_PROMPT.prompt_id)],
             )
         )
-    except (OSError, ValueError) as e:  # missing file, bad CSV or cache, invalid settings
+    # Missing file, bad CSV or cache, invalid settings, contradictory flags.
+    except (OSError, ValueError) as e:
         print(f"error: {e}")
         return EXIT_ERROR
 
@@ -372,6 +378,8 @@ def _understood(request: ResolvedRequest) -> list[str]:
         filters.append(f"language={request.filters.language} ({_source(request, 'language')})")
     if request.filters.max_pages:
         filters.append(f"max_pages={request.filters.max_pages} ({_source(request, 'max_pages')})")
+    if request.filters.min_pages:
+        filters.append(f"min_pages={request.filters.min_pages} ({_source(request, 'min_pages')})")
     if filters:
         lines.append("Filters: " + ", ".join(filters))
     elif request.text:
@@ -400,6 +408,7 @@ def _recommendations(validation: ValidationResult) -> list[str]:
             "not in library": item.not_in_library,
             "language": item.language,
             "max pages": item.max_pages,
+            "min pages": item.min_pages,
             "cites history": item.cites_library,
         }
         lines.append(
@@ -456,6 +465,7 @@ def _parser() -> argparse.ArgumentParser:
         )
         command.add_argument("--language", type=_language_code, help="ISO 639-1 code, e.g. en")
         command.add_argument("--max-pages", type=int, help="maximum page count")
+        command.add_argument("--min-pages", type=int, help="minimum page count")
         if name == "agent":
             command.add_argument(
                 "--prompt",

@@ -1,8 +1,9 @@
 """Recommendation requests, model output, and the result of checking it against hard rules."""
 
 from enum import StrEnum
+from typing import Self
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from book_agent.domain.models import Book, CatalogBook
 
@@ -10,10 +11,25 @@ EXPECTED_RECOMMENDATIONS = 3
 
 
 class Filters(BaseModel, frozen=True):
-    """Hard constraints from the request. None means "no constraint"."""
+    """Hard constraints from the request. None means "no constraint".
+
+    Page bounds are inclusive (D-006, D-026): "under 400" is max_pages 400, "more than
+    600" is min_pages 600.
+    """
 
     language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")  # ISO 639-1, e.g. "en"
     max_pages: int | None = Field(default=None, gt=0)
+    min_pages: int | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def _bounds_in_order(self) -> Self:
+        if (
+            self.min_pages is not None
+            and self.max_pages is not None
+            and self.min_pages > self.max_pages
+        ):
+            raise ValueError(f"min_pages {self.min_pages} is above max_pages {self.max_pages}")
+        return self
 
 
 class Recommendation(BaseModel, frozen=True):
@@ -45,6 +61,7 @@ class Rule(StrEnum):
     CURRENTLY_READING = "currently_reading"
     LANGUAGE = "language"
     MAX_PAGES = "max_pages"
+    MIN_PAGES = "min_pages"
     CITES_LIBRARY = "cites_library"
     # Only as an Unknown: the same-work check failed for an author already in the library.
     # Not a pass: the book may be a translation or retitled edition of one already there.
@@ -98,6 +115,7 @@ class CheckedRecommendation(BaseModel, frozen=True):
     not_in_library: Check
     language: Check
     max_pages: Check
+    min_pages: Check = Check.SKIPPED  # default keeps records from before D-026 readable
     cites_library: Check
 
 
