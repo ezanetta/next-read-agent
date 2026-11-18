@@ -154,8 +154,19 @@ def test_cli_plans_without_calling_until_yes(
         get_settings.cache_clear()
     out = capsys.readouterr().out
     assert code == evals_cli.EXIT_OK
-    assert "| prompt request_parser_v2 |" in out  # v2 is the default
+    assert "| prompt request_parser_v3 |" in out  # v3 is the default
     assert "Runs: 0 already recorded, 2 to run" in out
     assert "Estimated LLM requests: 2" in out
     assert out.rstrip().endswith("Add --yes to start.")
     assert not (tmp_path / "r").exists()
+
+
+def test_min_pages_is_scored_as_its_own_field() -> None:
+    over_600 = ParserCase(
+        id="over-600", request="un libro de más de 600 páginas", has_preference=False, min_pages=600
+    )
+    assert score(over_600, ParserOutcome(case_id="x", min_pages=600)).passed
+    missed = score(
+        over_600, ParserOutcome(case_id="x", preference="un libro de más de 600 páginas")
+    )
+    assert (missed.min_pages_ok, missed.preference_ok) == (False, False)

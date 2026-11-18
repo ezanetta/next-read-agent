@@ -94,7 +94,7 @@ async def test_baseline_records_are_complete(tmp_path: Path) -> None:
     assert classic.config == BASELINE and classic.run_index == 1
     assert classic.git_commit == "abc123" and not classic.git_dirty
     assert classic.request is not None and classic.request.filters == Filters(max_pages=600)
-    assert classic.request_prompt_id == "request_parser_v2"
+    assert classic.request_prompt_id == "request_parser_v3"
     assert classic.final_validation is not None and classic.final_validation.passed
     assert classic.recommendations is not None and classic.raw_text is not None
     assert [c.name for c in classic.calls] == ["interpret_request", "recommend"]

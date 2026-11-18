@@ -1,5 +1,6 @@
 import json
 import re
+from types import ModuleType
 
 import pytest
 
@@ -10,10 +11,10 @@ from book_agent.domain.requests import (
     ParsedRequest,
     ResolvedRequest,
 )
-from book_agent.evals.cases import load_parser_cases, load_recommend_cases
+from book_agent.evals.cases import CASES_DIR, load_parser_cases, load_recommend_cases
 from book_agent.json_reply import ReplyParseError, extract_json
 from book_agent.llm.base import LLMError
-from book_agent.prompts import request_parser_v1, request_parser_v2
+from book_agent.prompts import request_parser_v1, request_parser_v2, request_parser_v3
 from book_agent.prompts.user_content import request_block
 from book_agent.request_parser import (
     DEFAULT_PARSER_PROMPT,
@@ -98,9 +99,9 @@ async def test_interpret_request_sends_a_delimited_request() -> None:
     assert result.parsed == ParsedRequest(
         preference="a dystopia", filters=Filters(language="en", max_pages=400)
     )
-    assert result.prompt_id == "request_parser_v2"
+    assert result.prompt_id == "request_parser_v3"
     request = llm.requests[0]
-    assert request.system == request_parser_v2.SYSTEM
+    assert request.system == request_parser_v3.SYSTEM
     assert request.messages[0].text == (
         "<request>\na dystopia under 400 pages in English\n</request>"
     )
@@ -237,28 +238,39 @@ def test_v2_examples_show_unfilterable_constraints_staying() -> None:
     assert '{"preference": "una saga de al menos 800 páginas", "language": "de"' in system
 
 
-def test_v2_examples_are_not_eval_cases() -> None:
+def all_eval_requests() -> list[str]:
+    """Every request in every case set under evals/cases, current and future."""
+    requests: list[str] = []
+    for path in sorted(CASES_DIR.glob("*.json")):
+        version = path.stem
+        if version.startswith("request_parser_"):
+            requests += [c.request for c in load_parser_cases(version).cases.cases]
+        else:
+            requests += [c.request for c in load_recommend_cases(version).cases.cases if c.request]
+    return requests
+
+
+@pytest.mark.parametrize("prompt", [request_parser_v2, request_parser_v3])
+def test_examples_are_not_eval_cases(prompt: ModuleType) -> None:
     # Few-shot examples equal to eval requests would let the parser eval measure
     # memorized answers instead of the rule.
-    examples = re.findall(r"<request>(.*?)</request>", request_parser_v2.SYSTEM)
-    assert len(examples) == 4
-    eval_requests = [c.request for c in load_parser_cases("request_parser_v1").cases.cases]
-    eval_requests += [
-        c.request for c in load_recommend_cases("recommend_v1").cases.cases if c.request
-    ]
+    examples = re.findall(r"<request>(.*?)</request>", prompt.SYSTEM)
+    assert examples
+    eval_requests = all_eval_requests()
+    assert len(eval_requests) >= 34  # 23 parser requests + 11 recommend cases with text
     for example in examples:
         for request in eval_requests:
             assert request.casefold() not in example.casefold(), (example, request)
 
 
-async def test_default_prompt_is_v2_and_v1_can_still_be_chosen() -> None:
+async def test_default_prompt_is_v3_and_v1_can_still_be_chosen() -> None:
     llm = FakeLLM([text_response(interpreter_reply("x")), text_response(interpreter_reply("x"))])
     default = await interpret_request("a dystopia", llm=llm)
     v1 = await interpret_request("a dystopia", llm=llm, prompt=PARSER_PROMPTS["request_parser_v1"])
-    assert (default.prompt_id, v1.prompt_id) == ("request_parser_v2", "request_parser_v1")
-    assert llm.requests[0].system == request_parser_v2.SYSTEM
+    assert (default.prompt_id, v1.prompt_id) == ("request_parser_v3", "request_parser_v1")
+    assert llm.requests[0].system == request_parser_v3.SYSTEM
     assert llm.requests[1].system == request_parser_v1.SYSTEM
-    assert DEFAULT_PARSER_PROMPT is request_parser_v2.PROMPT
+    assert DEFAULT_PARSER_PROMPT is request_parser_v3.PROMPT
 
 
 # --- Control characters inside strings (F-010) -------------------------------------------
@@ -311,3 +323,65 @@ def test_a_reply_with_contradicting_bounds_is_rejected() -> None:
     reply = json.dumps({"preference": "x", "language": None, "max_pages": 300, "min_pages": 500})
     with pytest.raises(ReplyParseError, match="min_pages 500 is above max_pages 300"):
         parse_interpretation(reply)
+
+
+# --- request_parser_v3 (D-026) -----------------------------------------------------------
+
+
+def test_v3_asks_for_min_pages_with_inclusive_lower_bounds() -> None:
+    system = request_parser_v3.SYSTEM
+    assert '"min_pages": integer or null}' in system
+    assert (
+        '"over 600", "more than 600", "at least 600", "600 or more" and "más de 600" all give 600'
+        in system
+    )
+    assert '"between 200 and 400" gives 200' in system
+    assert '("long", "largo") and approximate numbers ("around 700") are NOT limits' in system
+
+
+def test_v3_treats_a_minimum_above_the_maximum_as_a_contradiction() -> None:
+    assert "If min_pages would be larger than max_pages, the request contradicts itself" in (
+        request_parser_v3.SYSTEM
+    )
+    assert (
+        '{"preference": "una novela corta de más de 700 páginas y menos de 250", '
+        '"language": null, "max_pages": null, "min_pages": null}'
+    ) in request_parser_v3.SYSTEM
+
+
+def test_v3_keeps_the_v2_preference_rule_and_language_rule() -> None:
+    assert (
+        "Remove text from it ONLY when that text became the language, max_pages or min_pages"
+        in (request_parser_v3.SYSTEM)
+    )
+    assert "Never drop a constraint just because it is not a filter." in request_parser_v3.SYSTEM
+
+    def rule(system: str, name: str) -> str:
+        start = system.index(f"- {name}:")
+        return system[start : system.index("\n- ", start + 1)]
+
+    assert rule(request_parser_v3.SYSTEM, "language") == rule(request_parser_v2.SYSTEM, "language")
+
+
+def test_v3_examples_show_both_bounds_and_vague_lengths() -> None:
+    system = request_parser_v3.SYSTEM
+    assert (
+        '{"preference": "a biography", "language": null, "max_pages": 300, "min_pages": 150}'
+        in system
+    )
+    assert (
+        '{"preference": "una saga", "language": "de", "max_pages": null, "min_pages": 800}'
+        in system
+    )
+    assert (
+        '{"preference": "a long epic, around 900 pages", "language": null, "max_pages": null, '
+        '"min_pages": null}'
+    ) in system
+
+
+async def test_v3_reply_with_a_minimum_is_parsed_with_strict_off() -> None:
+    reply = '{"preference": "a\n saga", "language": null, "max_pages": null, "min_pages": 600}'
+    llm = FakeLLM([text_response(reply)])
+    result = await interpret_request("a saga over 600 pages", llm=llm)
+    assert result.parsed is not None
+    assert result.parsed.filters == Filters(min_pages=600)

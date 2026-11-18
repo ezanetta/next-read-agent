@@ -111,7 +111,7 @@ async def test_report_shows_what_was_understood_and_each_call() -> None:
         understood,
     )
     assert code == EXIT_OK
-    assert output.startswith("Prompt baseline_v2 | request parser request_parser_v2\n")
+    assert output.startswith("Prompt baseline_v2 | request parser request_parser_v3\n")
     assert 'Request: "una distopía de menos de 600 páginas en inglés"' in output
     assert "Preference: una distopía" in output
     assert "Filters: language=en (from text), max_pages=500 (from flag)" in output

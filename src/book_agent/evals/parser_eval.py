@@ -32,6 +32,7 @@ class ParserOutcome(BaseModel, frozen=True):
     preference: str | None = None
     language: str | None = None
     max_pages: int | None = None
+    min_pages: int | None = None
     error: str | None = None
     raw_text: str | None = None
 
@@ -55,11 +56,12 @@ class ParserScore(BaseModel, frozen=True):
     preference_ok: bool
     language_ok: bool
     max_pages_ok: bool
+    min_pages_ok: bool
     dropped_terms: list[str]
 
     @property
     def filters_ok(self) -> bool:
-        return self.preference_ok and self.language_ok and self.max_pages_ok
+        return self.preference_ok and self.language_ok and self.max_pages_ok and self.min_pages_ok
 
     @property
     def passed(self) -> bool:
@@ -81,6 +83,7 @@ def score(case: ParserCase, outcome: ParserOutcome) -> ParserScore:
         and (outcome.preference is not None) == case.has_preference,
         language_ok=outcome.error is None and outcome.language == case.language,
         max_pages_ok=outcome.error is None and outcome.max_pages == case.max_pages,
+        min_pages_ok=outcome.error is None and outcome.min_pages == case.min_pages,
         dropped_terms=[t for t in case.preference_contains if fold(t) not in preference],
     )
 
@@ -132,6 +135,7 @@ async def run_parser_eval(
                 preference=parsed.preference if parsed else None,
                 language=parsed.filters.language if parsed else None,
                 max_pages=parsed.filters.max_pages if parsed else None,
+                min_pages=parsed.filters.min_pages if parsed else None,
                 error=interpretation.error,
                 raw_text=interpretation.raw_text,
             )
@@ -179,6 +183,7 @@ def render_parser_report(records: ParserRecords, results: list[ParserScore]) -> 
         f"| preference present | {sum(s.preference_ok for s in results)}/{total} |",
         f"| language | {sum(s.language_ok for s in results)}/{total} |",
         f"| max_pages | {sum(s.max_pages_ok for s in results)}/{total} |",
+        f"| min_pages | {sum(s.min_pages_ok for s in results)}/{total} |",
         f"| preference terms kept | {kept}/{len(with_terms)} cases |",
         f"| all fields | {sum(s.passed for s in results)}/{total} |",
         "",
@@ -213,6 +218,10 @@ def _filter_lines(s: ParserScore) -> list[str]:
     if not s.language_ok:
         lines.append(
             f"- {s.case.id}: language expected {s.case.language!r}, got {s.outcome.language!r}"
+        )
+    if not s.min_pages_ok:
+        lines.append(
+            f"- {s.case.id}: min_pages expected {s.case.min_pages!r}, got {s.outcome.min_pages!r}"
         )
     if not s.max_pages_ok:
         lines.append(

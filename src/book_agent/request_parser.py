@@ -20,14 +20,15 @@ from book_agent.domain.validation import primary_language
 from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message
 from book_agent.llm.calls import LLMCall
-from book_agent.prompts import request_parser_v1, request_parser_v2
+from book_agent.prompts import request_parser_v1, request_parser_v2, request_parser_v3
 from book_agent.prompts.parser_prompt import ParserPrompt
 
 CALL_NAME = "interpret_request"
 PARSER_PROMPTS: dict[str, ParserPrompt] = {
-    p.prompt_id: p for p in (request_parser_v1.PROMPT, request_parser_v2.PROMPT)
+    p.prompt_id: p
+    for p in (request_parser_v1.PROMPT, request_parser_v2.PROMPT, request_parser_v3.PROMPT)
 }
-DEFAULT_PARSER_PROMPT = request_parser_v2.PROMPT  # F-009: v1 drops soft constraints
+DEFAULT_PARSER_PROMPT = request_parser_v3.PROMPT  # D-026: min_pages (v1 also had F-009)
 DEFAULT_MAX_TOKENS = 512  # room for a little thinking on top of a tiny JSON answer
 
 

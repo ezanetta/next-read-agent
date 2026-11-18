@@ -35,6 +35,7 @@ class ParserCase(BaseModel, frozen=True):
     has_preference: bool
     language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
     max_pages: int | None = Field(default=None, gt=0)
+    min_pages: int | None = Field(default=None, gt=0)  # labeled from request_parser_v2 on
     # Terms that must survive in the preference, ignoring case and accents.
     preference_contains: list[str] = []
 
