@@ -27,10 +27,7 @@ import logging
 import re
 import sys
 from collections.abc import Sequence
-from contextlib import AsyncExitStack
 from pathlib import Path
-
-import httpx
 
 from book_agent.adapters.goodreads import load_goodreads_export
 from book_agent.agent import MAX_ITERATIONS, REPAIR_TURNS, AgentFailure, ToolTrace, TurnTrace
@@ -52,10 +49,11 @@ from book_agent.ports import BookSearch, WorkResolver
 from book_agent.prompts.agent_prompt import AgentPrompt
 from book_agent.prompts.user_content import one_line
 from book_agent.wiring import (
-    build_book_search,
+    NO_CONTACT,
     build_llm,
     build_open_library_http,
     build_work_resolver,
+    catalog_services,
 )
 from book_agent.work_keys import (
     DEFAULT_CACHE_PATH,
@@ -63,7 +61,6 @@ from book_agent.work_keys import (
     Checkpoint,
     Progress,
     WorkKeyCache,
-    coverage,
     format_coverage,
     load_cache,
     resolve_library,
@@ -71,7 +68,6 @@ from book_agent.work_keys import (
 )
 
 DEFAULT_CSV = Path("data/goodreads_library_export.csv")
-NO_CONTACT = "OPEN_LIBRARY_CONTACT is not set in .env"
 EXIT_OK, EXIT_VIOLATIONS, EXIT_ERROR = 0, 1, 2
 
 _ISO_639_1 = re.compile(r"^[a-z]{2}$")
@@ -121,23 +117,8 @@ async def _run(
     verbose: bool = False,
     prompt: AgentPrompt = DEFAULT_AGENT_PROMPT,
 ) -> int:
-    notes: list[str] = []
-    async with AsyncExitStack() as stack:
-        http = await stack.enter_async_context(httpx.AsyncClient(timeout=15))
-        books = build_book_search(settings, http)
-        works: CachedWorkResolver | None = None
-        open_library = build_open_library_http(settings)
-        if open_library is None:
-            notes.append(f"Work-key matching is off: {NO_CONTACT}.")
-        else:
-            await stack.enter_async_context(open_library)
-            works = CachedWorkResolver(build_work_resolver(open_library), cache)
-            library = coverage(profile, cache)
-            if not library.complete:
-                notes.append(
-                    f"Work keys: {library.unchecked} library ISBNs not resolved yet; "
-                    "run the works command first."
-                )
+    async with catalog_services(settings, profile, cache, cache_path) as services:
+        books, works = services.books, services.works
         if command == "agent":
             output, code = await agent_command(
                 profile,
@@ -153,9 +134,7 @@ async def _run(
             output, code = await baseline_command(
                 profile, flags, request, llm=llm, books=books, works=works
             )
-        if works is not None and works.changed:
-            save_cache(works.cache, cache_path)
-    print("\n".join([*notes, output]))
+    print("\n".join([*services.notes, output]))
     return code
 
 

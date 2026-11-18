@@ -8,7 +8,7 @@ parsing problems: they end up in result.error, so an eval run always gets one re
 """
 
 from time import perf_counter
-from typing import cast
+from typing import Literal, cast
 
 from pydantic import BaseModel
 
@@ -28,6 +28,9 @@ CALL_NAME = "recommend"
 DEFAULT_MAX_TOKENS = 2048
 
 
+BaselineFailure = Literal["interpretation", "llm_error", "unparseable"]
+
+
 class RecommendationParseError(ReplyParseError):
     """The model's reply could not be read as a recommendation list."""
 
@@ -45,6 +48,7 @@ class BaselineResult(BaseModel, frozen=True):
     parsed: RecommendationList | None = None
     validation: ValidationResult | None = None
     error: str | None = None  # interpretation failure, LLM failure or unparseable reply
+    error_kind: BaselineFailure | None = None
 
     @property
     def passed(self) -> bool:
@@ -89,6 +93,7 @@ async def run_baseline(
             update={
                 "raw_text": interpretation.raw_text,
                 "error": f"Could not interpret the request: {interpretation.error}",
+                "error_kind": "interpretation",
             }
         )
     resolved = resolution.request
@@ -106,7 +111,11 @@ async def run_baseline(
     except LLMError as e:
         failed = LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
         return result.model_copy(
-            update={"calls": [*result.calls, failed], "error": f"LLM call failed: {e}"}
+            update={
+                "calls": [*result.calls, failed],
+                "error": f"LLM call failed: {e}",
+                "error_kind": "llm_error",
+            }
         )
 
     call = LLMCall(
@@ -124,7 +133,9 @@ async def run_baseline(
         reason = str(e)
         if response.stop_reason is StopReason.MAX_TOKENS:
             reason += " (the reply was cut off at max_tokens)"
-        return result.model_copy(update={"error": f"Unparseable reply: {reason}"})
+        return result.model_copy(
+            update={"error": f"Unparseable reply: {reason}", "error_kind": "unparseable"}
+        )
 
     started = perf_counter()
     judge = LLMSameWorkJudge(llm)

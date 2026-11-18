@@ -12,7 +12,7 @@ from book_agent.baseline import (
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, MatchEvidence, Recommendation, Rule
 from book_agent.domain.requests import FilterSource
-from book_agent.llm.base import LLMError, StopReason, Usage
+from book_agent.llm.base import LLMError, LLMResponse, StopReason, Usage
 from book_agent.prompts import baseline_v1, request_parser_v1, same_work_v1
 from tests.fakes import FakeLLM, text_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
@@ -341,3 +341,26 @@ async def test_blank_request_counts_as_no_request() -> None:
     assert [c.name for c in result.calls] == ["recommend"]
     assert result.request_text is None and result.request_prompt_id is None
     assert result.passed
+
+
+@pytest.mark.parametrize(
+    ("script", "request_text", "kind"),
+    [
+        ([text_response("Sure!")], "a classic", "interpretation"),
+        ([LLMError("503")], None, "llm_error"),
+        ([text_response("not json at all")], None, "unparseable"),
+    ],
+)
+async def test_errors_say_their_kind(
+    script: list[LLMResponse | Exception], request_text: str | None, kind: str
+) -> None:
+    result = await run_baseline(
+        PROFILE, Filters(), request=request_text, llm=FakeLLM(script), books=catalog()
+    )
+    assert result.error is not None
+    assert result.error_kind == kind
+
+
+async def test_a_successful_run_has_no_error_kind() -> None:
+    result, _ = await run(reply(CLEAN_THREE))
+    assert result.error_kind is None
