@@ -248,15 +248,20 @@ def _check_one(
             Unknown(rule=Rule.MAX_PAGES, index=index, message=f"{label}: page count unknown")
         )
 
-    cited = [b.title for b in profile.read_books if mentions_title(rec.reason, b.title)]
+    mentioned = [b for b in profile.read_books if mentions_title(rec.reason, b.title)]
+    # Citing the recommended book itself is no evidence of taste (F-004): "since you loved
+    # The Pearl, read The Pearl". It is the same work by title, or the library book it
+    # collides with (a translation, found by work key or the judge).
+    cited = [b.title for b in mentioned if not _is_itself(rec, b, library_match)]
     cites_library = Check.PASS if cited else Check.FAIL
     if not cited:
+        why = (
+            "the reason cites only the recommended book itself"
+            if mentioned
+            else "the reason cites no book from the reader's history"
+        )
         violations.append(
-            Violation(
-                rule=Rule.CITES_LIBRARY,
-                index=index,
-                message=f"{label}: the reason cites no book from the reader's history",
-            )
+            Violation(rule=Rule.CITES_LIBRARY, index=index, message=f"{label}: {why}")
         )
 
     item = CheckedRecommendation(
@@ -273,6 +278,11 @@ def _check_one(
         cites_library=cites_library,
     )
     return item, violations, unknowns
+
+
+def _is_itself(rec: Recommendation, book: Book, library_match: Book | None) -> bool:
+    """Whether a library book is the recommended book itself, for citation purposes."""
+    return book == library_match or same_work(rec.title, [rec.author], book.title, [book.author])
 
 
 async def _check_library(

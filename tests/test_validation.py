@@ -136,7 +136,9 @@ async def test_next_mistborn_book_is_not_reported_as_read() -> None:
 
 
 async def test_same_isbn_with_a_different_title_is_already_read() -> None:
-    result = await validate(with_clean(rec("The Desert Planet Saga", "Frank Herbert")))
+    # The reason cites Ficciones: citing Dune would be citing the book itself (F-004).
+    desert = rec("The Desert Planet Saga", "Frank Herbert", "Like Ficciones.")
+    result = await validate(with_clean(desert))
     assert rules(result) == [(Rule.ALREADY_READ, 0)]
 
 
@@ -577,3 +579,42 @@ async def test_a_failing_fallback_is_a_lookup_failure() -> None:
     result = await validate(CLEAN_THREE, books=FallbackFails(CATALOG))
     assert [u.rule for u in result.unknowns] == [Rule.NOT_FOUND] * 3
     assert result.violations == []
+
+
+# --- Citing the recommended book itself (F-004) -------------------------------------------
+
+
+async def test_citing_only_the_recommended_book_itself_does_not_count() -> None:
+    # Found in a real run: "since you loved The Pearl, read The Pearl".
+    result = await validate(
+        with_clean(rec("Dune", "Frank Herbert", "Since you loved Dune, read Dune."))
+    )
+    assert rules(result) == [(Rule.ALREADY_READ, 0), (Rule.CITES_LIBRARY, 0)]
+    assert result.items[0].cited_titles == []
+    assert result.violations[1].message == (
+        "'Dune' by Frank Herbert: the reason cites only the recommended book itself"
+    )
+
+
+async def test_citing_itself_and_another_read_book_counts_the_other() -> None:
+    result = await validate(
+        with_clean(rec("Dune", "Frank Herbert", "Like Dune, and like Ficciones."))
+    )
+    assert rules(result) == [(Rule.ALREADY_READ, 0)]
+    assert result.items[0].cited_titles == ["Ficciones"]
+
+
+async def test_citing_the_translation_it_collides_with_does_not_count() -> None:
+    # The judge says The Metamorphosis is La metamorfosis; citing it is citing itself.
+    judge = FakeSameWorkJudge({"The Metamorphosis": SameWorkVerdict(answer=SAME, candidate=1)})
+    kafka = rec("The Metamorphosis", "Franz Kafka", "You loved La metamorfosis.")
+    result = await validate_with_judge(with_clean(kafka), judge)
+    assert rules(result) == [(Rule.ALREADY_READ, 0), (Rule.CITES_LIBRARY, 0)]
+    assert "cites only the recommended book itself" in result.violations[1].message
+
+
+async def test_a_reason_without_any_read_title_keeps_the_original_message() -> None:
+    result = await validate(with_clean(rec("Hyperion", "Dan Simmons", "A great read.")))
+    assert result.violations[0].message == (
+        "'Hyperion' by Dan Simmons: the reason cites no book from the reader's history"
+    )

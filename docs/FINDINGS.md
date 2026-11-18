@@ -58,8 +58,8 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 
 - **What happened:** In a real baseline run (F-001, Run 1), the model recommended *The Pearl* with a reason citing *The Pearl* as the book the reader liked. The book was already read and was caught as `ALREADY_READ`, but `cites_library` passed, because the reason does mention a read title.
 - **How it was detected:** Manual review of the CLI output.
-- **Fix:** Not yet. `cites_library` should not count a citation of the recommended work itself (same title variants, or the library book it collides with).
-- **How it was verified:** Not yet.
+- **Fix:** `cites_library` no longer counts a citation of the recommended work itself: the same work by title variants, or the library book it collides with (by ISBN, title, work key or the judge, so a translation counts as itself too). A reason that cites only the book itself fails with "the reason cites only the recommended book itself". `agent_v1` and `agent_v2` also ask for this in the prompt.
+- **How it was verified:** Unit tests: self-citation alone fails; self plus another read book counts the other; citing the translation it collides with fails; a reason with no read title keeps the original message.
 
 ## F-005 · The agent searched to confirm books it already had in mind, and ran out of turns (2026-11-17)
 
