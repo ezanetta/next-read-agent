@@ -88,3 +88,24 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - The feedback path needs a test with real data, for example a request or profile that makes violations likely, before relying on it.
 - **Fix:** None needed for the agent loop. Quality judging is future work.
 - **How it was verified:** 5 real runs with `agent_v2`.
+
+## F-007 · First real rejection: no turn left to fix it, and the rejection was a false positive (2026-11-18)
+
+- **What happened:** "más libros de Claire Keegan" with `agent_v2`. The model searched one book per turn for 5 turns, got the last-turn notice, and submitted on turn 6. The submission was rejected and the run failed with `iterations_exhausted`. Three problems:
+  1. **Budget:** the last-turn notice (D-018) and the feedback path don't fit together. A submission on the last turn can be rejected, but no turn is left to fix it.
+  2. **False positive in the validator:** 'The News from Ireland & Other Stories' by William Trevor was rejected as `not_found`. It's a real book; the model's own search on turn 5 returned it as the second result.
+  3. **One search per turn appeared in 3 of 7 `agent_v2` runs** (F-006 plus 2 more), so parallel searching isn't reliable on flash-lite.
+- **How it was detected:** The `--verbose` trace of the failing run; then live Google Books requests reproducing the validator's lookup.
+- **Cause of the false positive:** the literal "&" in the search query, not the title matcher. The validator searches `"<title> <author>"`:
+
+  | Query sent to Google Books | Book in the top 5? |
+  |---|---|
+  | `The News from Ireland & Other Stories William Trevor` (the validator's) | no: 5 reference works that mention it |
+  | `The News from Ireland and Other Stories William Trevor` | yes, first |
+  | `The News from Ireland William Trevor` | yes, second |
+  | `intitle:"The News from Ireland" inauthor:Trevor` | yes, first |
+
+  The matcher already treats "&" as "and" and would have matched the book; it never received it. A second gap showed up: the fielded search also returns editions titled just 'The News from Ireland', which the matcher doesn't treat as the same book as '... & Other Stories'.
+- **What it implies:** A `NOT_FOUND` violation can be wrong when the catalog search ranks the book outside the top 5. Since D-014 makes it blocking, a false negative in retrieval rejects a real book; existence checks need a more robust lookup before "not found" is trusted. One-search-per-turn is left for evals to measure; no prompt change yet.
+- **Fix:** Pending review.
+- **How it was verified:** Live Google Books requests (4 queries above); no LLM calls.
