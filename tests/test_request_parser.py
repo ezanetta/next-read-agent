@@ -11,7 +11,7 @@ from book_agent.domain.requests import (
     ResolvedRequest,
 )
 from book_agent.evals.cases import load_parser_cases, load_recommend_cases
-from book_agent.json_reply import ReplyParseError
+from book_agent.json_reply import ReplyParseError, extract_json
 from book_agent.llm.base import LLMError
 from book_agent.prompts import request_parser_v1, request_parser_v2
 from book_agent.prompts.user_content import request_block
@@ -259,3 +259,29 @@ async def test_default_prompt_is_v2_and_v1_can_still_be_chosen() -> None:
     assert llm.requests[0].system == request_parser_v2.SYSTEM
     assert llm.requests[1].system == request_parser_v1.SYSTEM
     assert DEFAULT_PARSER_PROMPT is request_parser_v2.PROMPT
+
+
+# --- Control characters inside strings (F-010) -------------------------------------------
+
+# The exact reply from the request_parser_v2 eval run for "scifi-not-space".
+NEWLINE_IN_STRING = (
+    '```json\n{"preference": "A\n sci fi book that is not about space", '
+    '"language": null, "max_pages": null}\n```'
+)
+
+
+def test_a_literal_newline_inside_the_preference_is_accepted() -> None:
+    parsed = parse_interpretation(NEWLINE_IN_STRING)
+    assert parsed.preference == "A\n sci fi book that is not about space"
+    assert parsed.filters == Filters()
+
+
+def test_the_shared_extractor_stays_strict_by_default() -> None:
+    # The baseline parses with the default: its measured behavior must not change.
+    with pytest.raises(ReplyParseError, match="Invalid control character"):
+        extract_json(NEWLINE_IN_STRING)
+    assert extract_json(NEWLINE_IN_STRING, strict=False) == {
+        "preference": "A\n sci fi book that is not about space",
+        "language": None,
+        "max_pages": None,
+    }

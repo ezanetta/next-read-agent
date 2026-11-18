@@ -91,10 +91,13 @@ async def interpret_request(
 def parse_interpretation(text: str) -> ParsedRequest:
     """Read the interpreter's JSON reply. Raises ReplyParseError with a specific reason.
 
-    Tolerates code fences, an upper-case or regional language code ("EN", "en-US"), and
-    a blank preference; rejects anything that isn't an ISO 639-1 code ("english").
+    Tolerates code fences, a literal newline inside a string, an upper-case or regional
+    language code ("EN", "en-US"), and a blank preference; rejects anything that isn't an
+    ISO 639-1 code ("english").
     """
-    reply = parse_model(_Reply, extract_json(text))
+    # strict=False: a literal newline inside the preference string is harmless (F-010).
+    # Only here: the baseline's parsing, and so its measured behavior, stays strict.
+    reply = parse_model(_Reply, extract_json(text, strict=False))
     language = primary_language(reply.language) if reply.language else None
     filters = parse_model(Filters, {"language": language, "max_pages": reply.max_pages})
     preference = reply.preference.strip() if reply.preference else None

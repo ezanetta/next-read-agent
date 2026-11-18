@@ -364,3 +364,10 @@ async def test_errors_say_their_kind(
 async def test_a_successful_run_has_no_error_kind() -> None:
     result, _ = await run(reply(CLEAN_THREE))
     assert result.error_kind is None
+
+
+def test_baseline_parsing_stays_strict_about_control_characters() -> None:
+    # F-010 relaxed only the request parser; the baseline's measured behavior is unchanged.
+    reply = '{"recommendations": [{"title": "A\nB", "author": "X", "reason": "Like Dune."}]}'
+    with pytest.raises(RecommendationParseError, match="Invalid control character"):
+        parse_recommendations(reply)
