@@ -7,7 +7,7 @@ import httpx
 import pytest
 import respx
 
-from book_agent.adapters.google_books import BASE_URL, GoogleBooksSearch
+from book_agent.adapters.google_books import BASE_URL, GoogleBooksSearch, fielded_query
 from book_agent.domain.models import CatalogBook
 from book_agent.ports import BookSearch, BookSearchError
 
@@ -297,3 +297,56 @@ async def test_errors_never_leak_the_api_key(
         with pytest.raises(BookSearchError) as error:
             await books.search("dune")
         assert "super-secret-key" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("query", "sent"),
+    [
+        (
+            "The News from Ireland & Other Stories William Trevor",
+            "The News from Ireland and Other Stories William Trevor",
+        ),
+        ("Pride&Prejudice", "Pride and Prejudice"),
+        ("Dune Frank Herbert", "Dune Frank Herbert"),
+    ],
+)
+async def test_ampersand_is_sent_as_and(
+    books: GoogleBooksSearch, search_route: respx.Route, query: str, sent: str
+) -> None:
+    # F-007: a literal "&" made Google Books rank reference works above the book.
+    await books.search(query)
+    assert search_route.calls.last.request.url.params["q"] == sent
+
+
+@pytest.mark.parametrize(
+    ("title", "author", "query"),
+    [
+        (
+            "The News from Ireland & Other Stories",
+            "William Trevor",
+            'intitle:"The News from Ireland" inauthor:Trevor',
+        ),
+        (
+            "Sapiens: A Brief History of Humankind",
+            "Yuval Noah Harari",
+            'intitle:"Sapiens" inauthor:Harari',
+        ),
+        (
+            "The Little Prince",
+            "Antoine de Saint-Exupéry",
+            'intitle:"The Little Prince" inauthor:"Saint-Exupéry"',
+        ),
+        ('The "Odd" Book (Series, #2)', "A. Writer", 'intitle:"The Odd Book" inauthor:Writer'),
+    ],
+)
+def test_fielded_query(title: str, author: str, query: str) -> None:
+    assert fielded_query(title, author) == query
+
+
+async def test_find_sends_the_fielded_query(
+    books: GoogleBooksSearch, search_route: respx.Route
+) -> None:
+    await books.find("The News from Ireland & Other Stories", "William Trevor", max_results=5)
+    params = search_route.calls.last.request.url.params
+    assert params["q"] == 'intitle:"The News from Ireland" inauthor:Trevor'
+    assert params["maxResults"] == "5"

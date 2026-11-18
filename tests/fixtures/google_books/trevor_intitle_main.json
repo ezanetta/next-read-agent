@@ -1,0 +1,194 @@
+{
+ "kind": "books#volumes",
+ "totalItems": 3,
+ "items": [
+  {
+   "kind": "books#volume",
+   "id": "qHVbAAAAMAAJ",
+   "etag": "J+AUT7hqdAU",
+   "selfLink": "https://www.googleapis.com/books/v1/volumes/qHVbAAAAMAAJ",
+   "volumeInfo": {
+    "title": "The News from Ireland & Other Stories",
+    "authors": [
+     "William Trevor"
+    ],
+    "publisher": "Vintage",
+    "publishedDate": "1986",
+    "description": "Featuring \"The News From Ireland\"--Set on the estate of the Protestant Pulvertafts during the famine years of the 1840s--this collection of short stories exemplifies the qualities of subtlety, honesty and humanity.",
+    "industryIdentifiers": [
+     {
+      "type": "OTHER",
+      "identifier": "UOM:39015012972769"
+     }
+    ],
+    "readingModes": {
+     "text": false,
+     "image": false
+    },
+    "pageCount": 296,
+    "printType": "BOOK",
+    "categories": [
+     "Fiction"
+    ],
+    "maturityRating": "NOT_MATURE",
+    "allowAnonLogging": false,
+    "contentVersion": "0.9.2.0.preview.0",
+    "panelizationSummary": {
+     "containsEpubBubbles": false,
+     "containsImageBubbles": false
+    },
+    "imageLinks": {
+     "smallThumbnail": "http://books.google.com/books/content?id=qHVbAAAAMAAJ&printsec=frontcover&img=1&zoom=5&source=gbs_api",
+     "thumbnail": "http://books.google.com/books/content?id=qHVbAAAAMAAJ&printsec=frontcover&img=1&zoom=1&source=gbs_api"
+    },
+    "language": "en",
+    "previewLink": "http://books.google.de/books?id=qHVbAAAAMAAJ&dq=intitle:%22The+News+from+Ireland%22+inauthor:Trevor&hl=&as_pt=BOOKS&cd=1&source=gbs_api",
+    "infoLink": "http://books.google.de/books?id=qHVbAAAAMAAJ&dq=intitle:%22The+News+from+Ireland%22+inauthor:Trevor&hl=&as_pt=BOOKS&source=gbs_api",
+    "canonicalVolumeLink": "https://books.google.com/books/about/The_News_from_Ireland_Other_Stories.html?hl=&id=qHVbAAAAMAAJ"
+   },
+   "saleInfo": {
+    "country": "DE",
+    "saleability": "NOT_FOR_SALE",
+    "isEbook": false
+   },
+   "accessInfo": {
+    "country": "DE",
+    "viewability": "NO_PAGES",
+    "embeddable": false,
+    "publicDomain": false,
+    "textToSpeechPermission": "ALLOWED",
+    "epub": {
+     "isAvailable": false
+    },
+    "pdf": {
+     "isAvailable": false
+    },
+    "webReaderLink": "http://play.google.com/books/reader?id=qHVbAAAAMAAJ&hl=&as_pt=BOOKS&source=gbs_api",
+    "accessViewStatus": "NONE",
+    "quoteSharingAllowed": false
+   },
+   "searchInfo": {
+    "textSnippet": "Featuring &quot;The News From Ireland&quot;--Set on the estate of the Protestant Pulvertafts during the famine years of the 1840s--this collection of short stories exemplifies the qualities of subtlety, honesty and humanity."
+   }
+  },
+  {
+   "kind": "books#volume",
+   "id": "I1rfswEACAAJ",
+   "etag": "eXukmtoWrQA",
+   "selfLink": "https://www.googleapis.com/books/v1/volumes/I1rfswEACAAJ",
+   "volumeInfo": {
+    "title": "The News from Ireland",
+    "subtitle": "12 Stories",
+    "authors": [
+     "William Trevor"
+    ],
+    "publishedDate": "1987",
+    "industryIdentifiers": [
+     {
+      "type": "OTHER",
+      "identifier": "OCLC:176890689"
+     }
+    ],
+    "readingModes": {
+     "text": false,
+     "image": false
+    },
+    "pageCount": 284,
+    "printType": "BOOK",
+    "maturityRating": "NOT_MATURE",
+    "allowAnonLogging": false,
+    "contentVersion": "preview-1.0.0",
+    "panelizationSummary": {
+     "containsEpubBubbles": false,
+     "containsImageBubbles": false
+    },
+    "language": "en",
+    "previewLink": "http://books.google.de/books?id=I1rfswEACAAJ&dq=intitle:%22The+News+from+Ireland%22+inauthor:Trevor&hl=&as_pt=BOOKS&cd=2&source=gbs_api",
+    "infoLink": "http://books.google.de/books?id=I1rfswEACAAJ&dq=intitle:%22The+News+from+Ireland%22+inauthor:Trevor&hl=&as_pt=BOOKS&source=gbs_api",
+    "canonicalVolumeLink": "https://books.google.com/books/about/The_News_from_Ireland.html?hl=&id=I1rfswEACAAJ"
+   },
+   "saleInfo": {
+    "country": "DE",
+    "saleability": "NOT_FOR_SALE",
+    "isEbook": false
+   },
+   "accessInfo": {
+    "country": "DE",
+    "viewability": "NO_PAGES",
+    "embeddable": false,
+    "publicDomain": false,
+    "textToSpeechPermission": "ALLOWED",
+    "epub": {
+     "isAvailable": false
+    },
+    "pdf": {
+     "isAvailable": false
+    },
+    "webReaderLink": "http://play.google.com/books/reader?id=I1rfswEACAAJ&hl=&as_pt=BOOKS&source=gbs_api",
+    "accessViewStatus": "NONE",
+    "quoteSharingAllowed": false
+   }
+  },
+  {
+   "kind": "books#volume",
+   "id": "ZZCzQgAACAAJ",
+   "etag": "f9xDddz3tUs",
+   "selfLink": "https://www.googleapis.com/books/v1/volumes/ZZCzQgAACAAJ",
+   "volumeInfo": {
+    "title": "The News from Ireland",
+    "subtitle": "And Other Stories",
+    "authors": [
+     "William Trevor"
+    ],
+    "publishedDate": "1987",
+    "industryIdentifiers": [
+     {
+      "type": "ISBN_10",
+      "identifier": "0140105786"
+     },
+     {
+      "type": "ISBN_13",
+      "identifier": "9780140105780"
+     }
+    ],
+    "readingModes": {
+     "text": false,
+     "image": false
+    },
+    "pageCount": 284,
+    "printType": "BOOK",
+    "categories": [
+     "Ireland"
+    ],
+    "maturityRating": "NOT_MATURE",
+    "allowAnonLogging": false,
+    "contentVersion": "preview-1.0.0",
+    "language": "en",
+    "previewLink": "http://books.google.de/books?id=ZZCzQgAACAAJ&dq=intitle:%22The+News+from+Ireland%22+inauthor:Trevor&hl=&as_pt=BOOKS&cd=3&source=gbs_api",
+    "infoLink": "http://books.google.de/books?id=ZZCzQgAACAAJ&dq=intitle:%22The+News+from+Ireland%22+inauthor:Trevor&hl=&as_pt=BOOKS&source=gbs_api",
+    "canonicalVolumeLink": "https://books.google.com/books/about/The_News_from_Ireland.html?hl=&id=ZZCzQgAACAAJ"
+   },
+   "saleInfo": {
+    "country": "DE",
+    "saleability": "NOT_FOR_SALE",
+    "isEbook": false
+   },
+   "accessInfo": {
+    "country": "DE",
+    "viewability": "NO_PAGES",
+    "embeddable": false,
+    "publicDomain": false,
+    "textToSpeechPermission": "ALLOWED",
+    "epub": {
+     "isAvailable": false
+    },
+    "pdf": {
+     "isAvailable": false
+    },
+    "webReaderLink": "http://play.google.com/books/reader?id=ZZCzQgAACAAJ&hl=&as_pt=BOOKS&source=gbs_api",
+    "accessViewStatus": "NONE",
+    "quoteSharingAllowed": false
+   }
+  }
+ ]
+}

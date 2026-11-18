@@ -4,6 +4,7 @@ from book_agent.domain.models import CatalogBook, Profile
 from book_agent.domain.recommendations import (
     Check,
     Filters,
+    Lookup,
     MatchEvidence,
     Recommendation,
     Rule,
@@ -526,3 +527,53 @@ async def test_isbn10_in_the_library_matches_isbn13_in_the_catalog() -> None:
     )
     assert rules(result) == [(Rule.ALREADY_READ, 0)]
     assert result.violations[0].evidence is MatchEvidence.ISBN
+
+
+# --- Fallback lookup (D-019) ------------------------------------------------------------
+
+
+class SearchMisses(FakeBookSearch):
+    """The free-text search ranks the book out, as Google Books did in F-007."""
+
+    async def search(
+        self, query: str, *, language: str | None = None, max_results: int = 10
+    ) -> list[CatalogBook]:
+        self.searches.append((query, language, max_results))
+        return []
+
+
+async def test_books_found_by_the_search_say_so() -> None:
+    books = catalog()
+    result = await validate(CLEAN_THREE, books=books)
+    assert [item.found_by for item in result.items] == [Lookup.SEARCH] * 3
+    assert books.finds == []  # no fallback needed
+
+
+async def test_fallback_finds_what_the_search_missed() -> None:
+    books = SearchMisses(CATALOG)
+    result = await validate(CLEAN_THREE, Filters(language="en"), books=books)
+
+    assert result.violations == []
+    assert [item.found_by for item in result.items] == [Lookup.FALLBACK] * 3
+    assert len(books.searches) == 6  # with and without the language filter, per book
+    assert books.finds[0] == ("Hyperion", "Dan Simmons")
+
+
+async def test_not_found_only_after_the_fallback_also_misses() -> None:
+    books = catalog()
+    result = await validate(with_clean(rec("The Silent Library", "Nobody Real")), books=books)
+    assert rules(result) == [(Rule.NOT_FOUND, 0)]
+    assert books.finds == [("The Silent Library", "Nobody Real")]
+    assert result.items[0].found_by is None
+
+
+async def test_a_failing_fallback_is_a_lookup_failure() -> None:
+    class FallbackFails(SearchMisses):
+        async def find(
+            self, title: str, author: str, *, max_results: int = 10
+        ) -> list[CatalogBook]:
+            raise BookSearchError("Google Books request timed out")
+
+    result = await validate(CLEAN_THREE, books=FallbackFails(CATALOG))
+    assert [u.rule for u in result.unknowns] == [Rule.NOT_FOUND] * 3
+    assert result.violations == []

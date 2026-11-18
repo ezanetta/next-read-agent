@@ -65,6 +65,13 @@ class MatchEvidence(StrEnum):
         return self in (MatchEvidence.LLM_SAME, MatchEvidence.LLM_UNSURE)
 
 
+class Lookup(StrEnum):
+    """Which catalog lookup found a recommendation's edition."""
+
+    SEARCH = "search"  # the free-text search, with or without the language filter
+    FALLBACK = "fallback"  # the stricter title + author lookup, after the search missed
+
+
 class Violation(BaseModel, frozen=True):
     rule: Rule
     index: int | None  # position in the recommendation list; None for list-level rules
@@ -83,6 +90,7 @@ class Unknown(BaseModel, frozen=True):
 class CheckedRecommendation(BaseModel, frozen=True):
     recommendation: Recommendation
     match: CatalogBook | None  # the resolved edition: link, pages, language, cover
+    found_by: Lookup | None = None  # None when not found; FALLBACK counts rescued books
     library_match: Book | None  # the profile book it collides with, if any
     library_evidence: MatchEvidence | None = None  # what decided library_match
     cited_titles: list[str]  # profile titles the reason mentions

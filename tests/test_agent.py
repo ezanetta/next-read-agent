@@ -13,7 +13,9 @@ from book_agent.agent import (
     CALL_NAME,
     LAST_TURN_NOTICE,
     MAX_ITERATIONS,
+    MAX_TURNS,
     REMINDER,
+    REPAIR_NOTICE,
     AgentError,
     AgentFailure,
     AgentResult,
@@ -138,6 +140,9 @@ class FailingBookSearch:
         if self.failures is None or self.calls <= self.failures:
             raise BookSearchError("Google Books request timed out")
         return await self.catalog.search(query, language=language, max_results=max_results)
+
+    async def find(self, title: str, author: str, *, max_results: int = 10) -> list[CatalogBook]:
+        return await self.search(f"{title} {author}", max_results=max_results)
 
     async def get_details(self, volume_id: str) -> CatalogBook | None:
         return await self.catalog.get_details(volume_id)
@@ -360,19 +365,22 @@ async def test_max_iterations_raises_after_exactly_that_many_requests() -> None:
 
 async def test_iterations_exhausted_after_repeated_rejections() -> None:
     bad = [DUNE_AGAIN, *CLEAN_THREE[1:]]
-    script = [submit(bad, call_id=f"submit-{i}") for i in range(MAX_ITERATIONS)]
+    script = [submit(bad, call_id=f"submit-{i}") for i in range(MAX_TURNS)]
     error, llm = await run_expecting_error(script)
 
+    # The rejection on the last regular turn earned the repair turn; that one was
+    # rejected too, so the run stops at the effective cap.
     assert str(error) == (
-        f"no accepted recommendations after {MAX_ITERATIONS} iterations "
-        f"({MAX_ITERATIONS} submissions rejected)"
+        f"no accepted recommendations after {MAX_TURNS} iterations including 1 repair turn "
+        f"({MAX_TURNS} submissions rejected)"
     )
     assert error.failure is AgentFailure.ITERATIONS_EXHAUSTED
-    assert len(error.rejections) == MAX_ITERATIONS
+    assert error.repair_turn_used and error.iterations == MAX_TURNS
+    assert len(error.rejections) == MAX_TURNS
     assert error.last_validation is error.rejections[-1]
     assert error.last_validation is not None
     assert [(v.rule, v.index) for v in error.last_validation.violations] == [(Rule.ALREADY_READ, 0)]
-    assert len(llm.requests) == MAX_ITERATIONS
+    assert len(llm.requests) == MAX_TURNS
 
 
 async def test_llm_failure_raises_with_the_failed_call_recorded() -> None:
@@ -489,3 +497,78 @@ async def test_runs_that_finish_early_never_get_the_notice() -> None:
     result, llm = await run([tool_call_response(search()), submit()])
     assert result.iterations == 2
     assert all(LAST_TURN_NOTICE not in text_parts(m) for r in llm.requests for m in r.messages)
+
+
+# --- Repair turn (D-020) ------------------------------------------------------------------
+
+BAD_LIST = [DUNE_AGAIN, *CLEAN_THREE[1:]]
+
+
+def searches(count: int) -> list[LLMResponse]:
+    return [tool_call_response(search(f"search-{i}")) for i in range(count)]
+
+
+async def test_rejection_on_the_last_turn_gets_one_repair_turn() -> None:
+    script = [*searches(MAX_ITERATIONS - 1), submit(BAD_LIST, "submit-1"), submit(call_id="s-2")]
+    result, llm = await run(script)
+
+    assert result.recommendations.recommendations == CLEAN_THREE
+    assert result.repair_turn_used
+    assert result.iterations == MAX_TURNS == len(llm.requests)
+    closing = llm.requests[MAX_TURNS - 1].messages[-1]
+    assert isinstance(closing.parts[0], ToolResultPart) and closing.parts[0].is_error
+    assert closing.parts[0].content.startswith("Submission rejected.")
+    assert text_parts(closing) == [REPAIR_NOTICE]  # after the feedback, same message
+    assert result.turns[MAX_ITERATIONS - 1].repair_turn_granted
+
+
+async def test_a_rejection_in_the_repair_turn_ends_the_run() -> None:
+    script = [*searches(MAX_ITERATIONS - 1), submit(BAD_LIST, "s-1"), submit(BAD_LIST, "s-2")]
+    error, llm = await run_expecting_error(script)
+
+    assert error.failure is AgentFailure.ITERATIONS_EXHAUSTED
+    assert error.repair_turn_used
+    assert len(error.rejections) == 2 and len(llm.requests) == MAX_TURNS
+
+
+async def test_searching_in_the_repair_turn_ends_the_run() -> None:
+    script = [*searches(MAX_ITERATIONS - 1), submit(BAD_LIST), tool_call_response(search("x"))]
+    error, llm = await run_expecting_error(script)
+    assert error.repair_turn_used and len(llm.requests) == MAX_TURNS
+
+
+async def test_an_earlier_rejection_never_adds_a_turn() -> None:
+    # Rejected on the next-to-last turn: the last regular turn is left to fix it.
+    script = [*searches(MAX_ITERATIONS - 2), submit(BAD_LIST), tool_call_response(search("x"))]
+    error, llm = await run_expecting_error(script)
+
+    assert not error.repair_turn_used
+    assert len(llm.requests) == MAX_ITERATIONS
+    assert all(not t.repair_turn_granted for t in error.turns)
+
+
+async def test_no_repair_turn_when_the_last_turn_only_searches() -> None:
+    error, llm = await run_expecting_error(searches(MAX_ITERATIONS))
+    assert not error.repair_turn_used and len(llm.requests) == MAX_ITERATIONS
+
+
+async def test_a_catalog_outage_on_the_last_turn_still_stops_at_once() -> None:
+    llm = FakeLLM([*searches(MAX_ITERATIONS - 1), submit()])
+    with pytest.raises(AgentError) as info:
+        await run_agent(
+            system=SYSTEM,
+            user_prompt=USER_PROMPT,
+            tools=TOOLS,
+            llm=llm,
+            books=FailingBookSearch(),
+            profile=PROFILE,
+            filters=NO_FILTERS,
+        )
+    assert info.value.failure is AgentFailure.CATALOG_UNAVAILABLE
+    assert not info.value.repair_turn_used
+    assert len(llm.requests) == MAX_ITERATIONS
+
+
+async def test_accepted_runs_without_repair_say_so() -> None:
+    result, _ = await run([submit()])
+    assert not result.repair_turn_used

@@ -88,3 +88,38 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - The feedback path needs a test with real data, for example a request or profile that makes violations likely, before relying on it.
 - **Fix:** None needed for the agent loop. Quality judging is future work.
 - **How it was verified:** 5 real runs with `agent_v2`.
+
+## F-007 · First real rejection: no turn left to fix it, and the rejection was a false positive (2026-11-18)
+
+- **What happened:** "más libros de Claire Keegan" with `agent_v2`. The model searched one book per turn for 5 turns, got the last-turn notice, and submitted on turn 6. The submission was rejected and the run failed with `iterations_exhausted`. Three problems:
+  1. **Budget:** the last-turn notice (D-018) and the feedback path don't fit together. A submission on the last turn can be rejected, but no turn is left to fix it.
+  2. **False positive in the validator:** 'The News from Ireland & Other Stories' by William Trevor was rejected as `not_found`. It's a real book; the model's own search on turn 5 returned it as the second result.
+  3. **One search per turn appeared in 3 of 7 `agent_v2` runs** (F-006 plus 2 more), so parallel searching isn't reliable on flash-lite.
+- **How it was detected:** The `--verbose` trace of the failing run; then live Google Books requests reproducing the validator's lookup.
+- **Cause of the false positive:** the literal "&" in the search query, not the title matcher. The validator searches `"<title> <author>"`:
+
+  | Query sent to Google Books | Book in the top 5? |
+  |---|---|
+  | `The News from Ireland & Other Stories William Trevor` (the validator's) | no: 5 reference works that mention it |
+  | `The News from Ireland and Other Stories William Trevor` | yes, first |
+  | `The News from Ireland William Trevor` | yes, second |
+  | `intitle:"The News from Ireland" inauthor:Trevor` | yes, first |
+
+  The matcher already treats "&" as "and" and would have matched the book; it never received it.
+- **Known gap, not fixed:** the title variant "X & Other Stories" (or "X and Other Stories") versus "X". A fielded search also returns editions titled just 'The News from Ireland', which the matcher doesn't treat as the same book as '... & Other Stories': no ":" separates the two parts, so D-001's variants don't apply. Collections retitled this way can be missed by the existence check and by the library check.
+- **What it implies:** A `NOT_FOUND` violation can be wrong when the catalog search ranks the book outside the top 5. Since D-014 makes it blocking, a false negative in retrieval rejects a real book; existence checks need a more robust lookup before "not found" is trusted. One-search-per-turn is left for evals to measure; no prompt change yet.
+- **Fix:**
+  - The Google Books adapter sends "&" as "and" in every query.
+  - Before reporting a book as not found, the validator tries a stricter title + author lookup (`intitle:"<core of the title>" inauthor:<surname>`), and records `found_by` (search or fallback) so evals can count rescued books (D-019). A phrase search for the full title with "and" (`intitle:"The News from Ireland and Other Stories"`) missed the edition titled with "&"; the core of the title, before the first "&", found it first. So the fallback uses the core.
+  - A submission rejected on the last regular turn gets one repair turn (D-020).
+  - One search per turn: no change; evals will measure it.
+- **How it was verified:** Live Google Books requests (the 4 queries above, plus 3 to record fixtures and choose the fallback query); no LLM calls. A regression test runs the validator with the real adapter on the recorded responses: the "&" query returning only reference works, and the fallback finding the book. Unit tests for the repair turn. Not yet re-checked with a real agent run.
+
+## F-008 · "More Claire Keegan" answered with one Keegan book: an eval case for the judge (2026-11-18)
+
+- **What happened:** The F-007 request, "más libros de Claire Keegan", rerun with `agent_v2` after the D-019 and D-020 fixes. It passed: 4 iterations, parallel searches, no rejection. It didn't exercise either fix: the model picked *After Rain* (William Trevor) instead of *The News from Ireland & Other Stories*, and nothing was rejected. Both fixes are covered by unit and regression tests instead.
+  - The request asked for more Claire Keegan books, and the answer had only one, although the model found a second (*Walk the Blue Fields*) twice in its searches.
+- **How it was detected:** Manual review of the CLI output and the `--verbose` trace.
+- **What it implies:** Whether one book by the requested author, plus two similar authors, honors "more books by X" is a judgment call that hard rules can't make. Keep this request as an eval case for the LLM judge, with the trace's evidence that a second matching book was available.
+- **Fix:** None; eval case.
+- **How it was verified:** 1 real run.

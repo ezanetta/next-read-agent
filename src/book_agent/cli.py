@@ -33,7 +33,7 @@ from pathlib import Path
 import httpx
 
 from book_agent.adapters.goodreads import load_goodreads_export
-from book_agent.agent import MAX_ITERATIONS, AgentFailure, ToolTrace, TurnTrace
+from book_agent.agent import MAX_ITERATIONS, REPAIR_TURNS, AgentFailure, ToolTrace, TurnTrace
 from book_agent.agent_run import (
     AGENT_PROMPTS,
     DEFAULT_AGENT_PROMPT,
@@ -44,7 +44,7 @@ from book_agent.baseline import BaselineResult, run_baseline
 from book_agent.config import Settings, get_settings
 from book_agent.domain.acceptance import Problem, blocking_problems
 from book_agent.domain.models import Profile
-from book_agent.domain.recommendations import Check, Filters, Unknown, ValidationResult
+from book_agent.domain.recommendations import Check, Filters, Lookup, Unknown, ValidationResult
 from book_agent.domain.requests import FilterName, ResolvedRequest
 from book_agent.llm.base import LLMClient
 from book_agent.llm.calls import LLMCall
@@ -284,7 +284,8 @@ def format_agent_run(run: AgentRun, *, verbose: bool = False) -> str:
     if run.request is not None:
         rejected = f" ({len(run.rejections)} rejected)" if run.rejections else ""
         lines.append(
-            f"Iterations: {run.iterations} of {MAX_ITERATIONS} | "
+            f"Iterations: {run.iterations} of {MAX_ITERATIONS}"
+            f"{f' + {REPAIR_TURNS} repair turn' if run.repair_turn_used else ''} | "
             f"Submissions: {run.submissions}{rejected}"
         )
         lines.append("")
@@ -326,6 +327,8 @@ def format_trace(turns: list[TurnTrace]) -> list[str]:
             lines.append(f"  {tool.name} {_arguments(tool)} -> {error}{tool.outcome}")
         if turn.last_turn_notice:
             lines.append("  (last-turn notice sent)")
+        if turn.repair_turn_granted:
+            lines.append("  (repair turn granted)")
     return lines
 
 
@@ -409,7 +412,8 @@ def _recommendations(validation: ValidationResult) -> list[str]:
         lines.append(f"{number}. {rec.title} by {rec.author}")
         lines.append(f"   Reason: {rec.reason}")
         if match is not None:
-            lines.append(f"   Matched: {match.title} | {match.link}")
+            via = " (found by the fallback lookup)" if item.found_by is Lookup.FALLBACK else ""
+            lines.append(f"   Matched: {match.title} | {match.link}{via}")
             pages = match.pages or "unknown"
             lines.append(f"   Pages: {pages} | Language: {match.language or 'unknown'}")
         checks = {

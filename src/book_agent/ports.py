@@ -38,6 +38,14 @@ class BookSearch(Protocol):
         """
         ...
 
+    async def find(self, title: str, author: str, *, max_results: int = 10) -> list[CatalogBook]:
+        """A stricter lookup by title and author, for when a free-text search misses a book.
+
+        Returns candidate editions, most relevant first; the caller decides which match.
+        Raises BookSearchError if the lookup fails.
+        """
+        ...
+
 
 class SameWorkJudge(Protocol):
     """Decides whether a book is the same work as one of a few candidates.
