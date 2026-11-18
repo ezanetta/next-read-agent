@@ -26,6 +26,17 @@ BASE_URL = "https://www.googleapis.com/books/v1"
 MAX_RESULTS_LIMIT = 40  # the API rejects maxResults above 40
 
 _YEAR_PATTERN = re.compile(r"^(\d{4})")
+_AMPERSAND = re.compile(r"\s*&\s*")
+
+
+def clean_query(query: str) -> str:
+    """The query as Google Books ranks it best: "&" spelled "and".
+
+    A literal "&" pushes the book itself out of the results: "The News from Ireland &
+    Other Stories William Trevor" returned only reference works, while the same query
+    with "and" ranked the book first (F-007).
+    """
+    return _AMPERSAND.sub(" and ", query).strip()
 
 
 class GoogleBooksSearch:
@@ -44,7 +55,7 @@ class GoogleBooksSearch:
         self, query: str, *, language: str | None = None, max_results: int = 10
     ) -> list[CatalogBook]:
         params: dict[str, str | int] = {
-            "q": query,
+            "q": clean_query(query),
             "maxResults": max(1, min(max_results, MAX_RESULTS_LIMIT)),
             "printType": "books",
         }

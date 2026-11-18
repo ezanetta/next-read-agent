@@ -297,3 +297,22 @@ async def test_errors_never_leak_the_api_key(
         with pytest.raises(BookSearchError) as error:
             await books.search("dune")
         assert "super-secret-key" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("query", "sent"),
+    [
+        (
+            "The News from Ireland & Other Stories William Trevor",
+            "The News from Ireland and Other Stories William Trevor",
+        ),
+        ("Pride&Prejudice", "Pride and Prejudice"),
+        ("Dune Frank Herbert", "Dune Frank Herbert"),
+    ],
+)
+async def test_ampersand_is_sent_as_and(
+    books: GoogleBooksSearch, search_route: respx.Route, query: str, sent: str
+) -> None:
+    # F-007: a literal "&" made Google Books rank reference works above the book.
+    await books.search(query)
+    assert search_route.calls.last.request.url.params["q"] == sent
