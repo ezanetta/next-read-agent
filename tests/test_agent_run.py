@@ -5,7 +5,7 @@ from book_agent.agent_run import AGENT_PROMPTS, DEFAULT_AGENT_PROMPT, run_agent_
 from book_agent.domain.recommendations import Filters, Recommendation
 from book_agent.domain.requests import FilterSource
 from book_agent.llm.base import LLMError, LLMResponse, ToolCallPart
-from book_agent.prompts import agent_v1, agent_v2, request_parser_v1
+from book_agent.prompts import agent_v1, agent_v2, request_parser_v2
 from tests.fakes import FakeLLM, text_response, tool_call_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
 
@@ -37,7 +37,7 @@ async def test_request_is_interpreted_then_the_agent_runs() -> None:
     assert run.request.sources == {"language": FilterSource.TEXT, "max_pages": FilterSource.FLAG}
     assert [c.name for c in run.calls] == ["interpret_request", CALL_NAME]
     assert (run.iterations, run.submissions) == (1, 1)
-    assert (run.prompt_id, run.request_prompt_id) == ("agent_v2", "request_parser_v1")
+    assert (run.prompt_id, run.request_prompt_id) == ("agent_v2", "request_parser_v2")
 
     agent_request = llm.requests[1]
     assert agent_request.system == agent_v2.SYSTEM
@@ -64,7 +64,7 @@ async def test_failed_interpretation_stops_before_the_agent() -> None:
     assert run.error == "Could not interpret the request: no JSON found in the reply"
     assert run.raw_text == "Sure, a classic!"
     assert len(llm.requests) == 1
-    assert llm.requests[0].system == request_parser_v1.SYSTEM
+    assert llm.requests[0].system == request_parser_v2.SYSTEM
 
 
 async def test_agent_failure_keeps_its_evidence() -> None:

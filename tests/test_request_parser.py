@@ -1,4 +1,5 @@
 import json
+import re
 
 import pytest
 
@@ -9,11 +10,18 @@ from book_agent.domain.requests import (
     ParsedRequest,
     ResolvedRequest,
 )
+from book_agent.evals.cases import load_parser_cases, load_recommend_cases
 from book_agent.json_reply import ReplyParseError
 from book_agent.llm.base import LLMError
-from book_agent.prompts import request_parser_v1
+from book_agent.prompts import request_parser_v1, request_parser_v2
 from book_agent.prompts.user_content import request_block
-from book_agent.request_parser import interpret_request, parse_interpretation, resolve_request
+from book_agent.request_parser import (
+    DEFAULT_PARSER_PROMPT,
+    PARSER_PROMPTS,
+    interpret_request,
+    parse_interpretation,
+    resolve_request,
+)
 from tests.fakes import FakeLLM, text_response
 
 
@@ -90,9 +98,9 @@ async def test_interpret_request_sends_a_delimited_request() -> None:
     assert result.parsed == ParsedRequest(
         preference="a dystopia", filters=Filters(language="en", max_pages=400)
     )
-    assert result.prompt_id == "request_parser_v1"
+    assert result.prompt_id == "request_parser_v2"
     request = llm.requests[0]
-    assert request.system == request_parser_v1.SYSTEM
+    assert request.system == request_parser_v2.SYSTEM
     assert request.messages[0].text == (
         "<request>\na dystopia under 400 pages in English\n</request>"
     )
@@ -191,3 +199,63 @@ async def test_resolve_reports_a_failed_interpretation_without_a_request() -> No
     assert resolution.request is None
     assert resolution.interpretation is not None
     assert resolution.interpretation.error == "no JSON found in the reply"
+
+
+# --- request_parser_v2 (F-009) -----------------------------------------------------------
+
+
+def test_v2_removes_text_only_when_it_became_a_filter() -> None:
+    system = request_parser_v2.SYSTEM
+    assert (
+        "Remove text from it ONLY when that text became the language or max_pages value" in system
+    )
+    assert "Never drop a constraint just because it is not a filter." in system
+    for kept in ("several acceptable languages", "a minimum page count", '"around 700 pages"'):
+        assert kept in system
+    assert "keep the whole phrase" in system
+
+
+def test_v2_keeps_the_v1_filter_rules() -> None:
+    def rule(system: str, name: str) -> str:
+        start = system.index(f"- {name}:")
+        return system[start : system.index("\n- ", start + 1)]
+
+    for name in ("language", "max_pages"):
+        assert rule(request_parser_v2.SYSTEM, name) == rule(request_parser_v1.SYSTEM, name)
+
+
+def test_v2_examples_show_unfilterable_constraints_staying() -> None:
+    system = request_parser_v2.SYSTEM
+    assert (
+        '{"preference": "una novela policial, en francés o en italiano", "language": null, '
+        '"max_pages": null}'
+    ) in system
+    assert (
+        '{"preference": "a biography between 150 and 300 pages", "language": null, '
+        '"max_pages": 300}'
+    ) in system
+    assert '{"preference": "una saga de al menos 800 páginas", "language": "de"' in system
+
+
+def test_v2_examples_are_not_eval_cases() -> None:
+    # Few-shot examples equal to eval requests would let the parser eval measure
+    # memorized answers instead of the rule.
+    examples = re.findall(r"<request>(.*?)</request>", request_parser_v2.SYSTEM)
+    assert len(examples) == 4
+    eval_requests = [c.request for c in load_parser_cases("request_parser_v1").cases.cases]
+    eval_requests += [
+        c.request for c in load_recommend_cases("recommend_v1").cases.cases if c.request
+    ]
+    for example in examples:
+        for request in eval_requests:
+            assert request.casefold() not in example.casefold(), (example, request)
+
+
+async def test_default_prompt_is_v2_and_v1_can_still_be_chosen() -> None:
+    llm = FakeLLM([text_response(interpreter_reply("x")), text_response(interpreter_reply("x"))])
+    default = await interpret_request("a dystopia", llm=llm)
+    v1 = await interpret_request("a dystopia", llm=llm, prompt=PARSER_PROMPTS["request_parser_v1"])
+    assert (default.prompt_id, v1.prompt_id) == ("request_parser_v2", "request_parser_v1")
+    assert llm.requests[0].system == request_parser_v2.SYSTEM
+    assert llm.requests[1].system == request_parser_v1.SYSTEM
+    assert DEFAULT_PARSER_PROMPT is request_parser_v2.PROMPT

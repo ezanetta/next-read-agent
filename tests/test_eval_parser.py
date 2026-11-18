@@ -20,6 +20,7 @@ from book_agent.evals.parser_eval import (
     scores,
 )
 from book_agent.llm.base import LLMResponse
+from book_agent.prompts import request_parser_v2
 from tests.fakes import FakeLLM, text_response
 
 SANDERSON = ParserCase(
@@ -84,24 +85,28 @@ def write_cases(tmp_path: Path, cases: list[ParserCase]) -> Path:
 
 async def test_run_saves_each_outcome_and_resumes(tmp_path: Path) -> None:
     loaded = load_parser_cases("p_v1", write_cases(tmp_path, [SANDERSON, FILTERS_ONLY]))
-    path = records_path(tmp_path / "results", "p_v1", "fake-model", None)
-    records = new_records(loaded, "fake-model", None, "abc")
+    path = records_path(tmp_path / "results", "p_v1", "request_parser_v2", "fake-model", None)
+    records = new_records(loaded, "request_parser_v2", "fake-model", None, "abc")
 
     llm = FakeLLM(
         [interpreted("fantasy, 700 pages, nothing from Sanderson"), QuotaExhausted("daily")]
     )
-    stopped = await run_parser_eval(pending(loaded, None), records, path, llm=llm)
+    stopped = await run_parser_eval(
+        pending(loaded, None), records, path, llm=llm, prompt=request_parser_v2.PROMPT
+    )
 
     assert stopped == "daily"
     saved = load_records(path)
     assert saved is not None and [o.case_id for o in saved.outcomes] == ["fantasy-no-sanderson"]
     assert [c.id for c in pending(loaded, saved)] == ["filters-only"]
     assert llm.requests[0].temperature == 0.0
+    assert llm.requests[0].system == request_parser_v2.SYSTEM
+    assert path.name == "request_parser_v2-fake-model-default.json"
 
 
 def test_a_changed_case_file_is_refused_once_it_has_results(tmp_path: Path) -> None:
     loaded = load_parser_cases("p_v1", write_cases(tmp_path, [SANDERSON]))
-    records = new_records(loaded, "m", None, None)
+    records = new_records(loaded, "request_parser_v2", "m", None, None)
     records.outcomes.append(ParserOutcome(case_id=SANDERSON.id, preference="fantasy"))
     changed = load_parser_cases("p_v1", write_cases(tmp_path, [SANDERSON, FILTERS_ONLY]))
     with pytest.raises(ValueError, match="changed after it had results"):
@@ -110,7 +115,7 @@ def test_a_changed_case_file_is_refused_once_it_has_results(tmp_path: Path) -> N
 
 def test_report_prints_accuracy_mismatches_and_every_preference(tmp_path: Path) -> None:
     loaded = load_parser_cases("p_v1", write_cases(tmp_path, [SANDERSON, FILTERS_ONLY]))
-    records = new_records(loaded, "fake-model", None, None)
+    records = new_records(loaded, "request_parser_v2", "fake-model", None, None)
     records.outcomes += [
         # Keeps every term but inverts the negation: invisible to term matching.
         ParserOutcome(case_id=SANDERSON.id, preference="fantasy around 700 pages by Sanderson"),
@@ -149,6 +154,7 @@ def test_cli_plans_without_calling_until_yes(
         get_settings.cache_clear()
     out = capsys.readouterr().out
     assert code == evals_cli.EXIT_OK
+    assert "| prompt request_parser_v2 |" in out  # v2 is the default
     assert "Runs: 0 already recorded, 2 to run" in out
     assert "Estimated LLM requests: 2" in out
     assert out.rstrip().endswith("Add --yes to start.")

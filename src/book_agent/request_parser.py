@@ -20,9 +20,14 @@ from book_agent.domain.validation import primary_language
 from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message
 from book_agent.llm.calls import LLMCall
-from book_agent.prompts import request_parser_v1
+from book_agent.prompts import request_parser_v1, request_parser_v2
+from book_agent.prompts.parser_prompt import ParserPrompt
 
 CALL_NAME = "interpret_request"
+PARSER_PROMPTS: dict[str, ParserPrompt] = {
+    p.prompt_id: p for p in (request_parser_v1.PROMPT, request_parser_v2.PROMPT)
+}
+DEFAULT_PARSER_PROMPT = request_parser_v2.PROMPT  # F-009: v1 drops soft constraints
 DEFAULT_MAX_TOKENS = 512  # room for a little thinking on top of a tiny JSON answer
 
 
@@ -41,9 +46,13 @@ class _Reply(BaseModel):
 
 
 async def interpret_request(
-    text: str, *, llm: LLMClient, max_tokens: int = DEFAULT_MAX_TOKENS
+    text: str,
+    *,
+    llm: LLMClient,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    prompt: ParserPrompt = DEFAULT_PARSER_PROMPT,
 ) -> Interpretation:
-    prompt_id = request_parser_v1.PROMPT_ID
+    prompt_id = prompt.prompt_id
     request = text.strip()
     if not request:
         return Interpretation(prompt_id=prompt_id, error="the request is empty")
@@ -56,8 +65,8 @@ async def interpret_request(
     started = perf_counter()
     try:
         response = await llm.complete(
-            system=request_parser_v1.SYSTEM,
-            messages=[Message.user(request_parser_v1.build_user_prompt(request))],
+            system=prompt.system,
+            messages=[Message.user(prompt.build_user_prompt(request))],
             max_tokens=max_tokens,
             temperature=0.0,  # extraction should give the same answer every time
         )

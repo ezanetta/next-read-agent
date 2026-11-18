@@ -21,7 +21,7 @@ from book_agent.evals.cases import LoadedCases, ParserCase, ParserCaseSet
 from book_agent.evals.pacing import QuotaExhausted
 from book_agent.files import write_atomic
 from book_agent.llm.base import LLMClient
-from book_agent.prompts import request_parser_v1
+from book_agent.prompts.parser_prompt import ParserPrompt
 from book_agent.request_parser import interpret_request
 
 
@@ -85,8 +85,11 @@ def score(case: ParserCase, outcome: ParserOutcome) -> ParserScore:
     )
 
 
-def records_path(results: Path, case_set: str, model: str, thinking: str | None) -> Path:
-    name = f"{request_parser_v1.PROMPT_ID}-{model}-{thinking or 'default'}.json"
+def records_path(
+    results: Path, case_set: str, prompt_id: str, model: str, thinking: str | None
+) -> Path:
+    """One file per configuration: prompt version, model and thinking level."""
+    name = f"{prompt_id}-{model}-{thinking or 'default'}.json"
     return results / case_set / name.replace("/", "_")
 
 
@@ -111,6 +114,7 @@ async def run_parser_eval(
     path: Path,
     *,
     llm: LLMClient,
+    prompt: ParserPrompt,
     progress: Callable[[int, int, ParserCase], None] | None = None,
 ) -> str | None:
     """Interpret each case once and save after each. Returns the stop reason, if any."""
@@ -118,7 +122,7 @@ async def run_parser_eval(
         if progress is not None:
             progress(number, len(cases), case)
         try:
-            interpretation = await interpret_request(case.request, llm=llm)
+            interpretation = await interpret_request(case.request, llm=llm, prompt=prompt)
         except QuotaExhausted as e:
             return str(e)
         parsed = interpretation.parsed
@@ -137,12 +141,16 @@ async def run_parser_eval(
 
 
 def new_records(
-    loaded: LoadedCases[ParserCaseSet], model: str, thinking: str | None, git_commit: str | None
+    loaded: LoadedCases[ParserCaseSet],
+    prompt_id: str,
+    model: str,
+    thinking: str | None,
+    git_commit: str | None,
 ) -> ParserRecords:
     return ParserRecords(
         case_set=loaded.cases.version,
         cases_sha256=loaded.sha256,
-        prompt_id=request_parser_v1.PROMPT_ID,
+        prompt_id=prompt_id,
         model=model,
         thinking_level=thinking,
         git_commit=git_commit,

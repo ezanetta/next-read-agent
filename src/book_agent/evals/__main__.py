@@ -3,7 +3,8 @@
     uv run python -m book_agent.evals run --system baseline|agent [--prompt agent_v2]
         [--cases recommend_v1] [--runs 3] [--max-rpm 15] [--yes]
     uv run python -m book_agent.evals report [--cases recommend_v1]
-    uv run python -m book_agent.evals parser [--cases request_parser_v1] [--yes]
+    uv run python -m book_agent.evals parser [--cases request_parser_v1]
+        [--prompt request_parser_v2] [--yes]
 
 run prints the plan and an estimate of LLM requests, and starts only with --yes.
 report reads the records only (no LLM calls) and writes data/evals/<cases>/report.md.
@@ -45,6 +46,7 @@ from book_agent.evals.runner import (
 )
 from book_agent.files import write_atomic
 from book_agent.prompts import baseline_v1
+from book_agent.request_parser import DEFAULT_PARSER_PROMPT, PARSER_PROMPTS
 from book_agent.wiring import build_llm, catalog_services
 from book_agent.work_keys import DEFAULT_CACHE_PATH, load_cache
 
@@ -135,8 +137,13 @@ def _parser_command(args: argparse.Namespace) -> int:
     try:
         loaded = load_parser_cases(args.cases)
         settings = get_settings()
+        prompt = PARSER_PROMPTS[args.prompt]
         path = records_path(
-            args.results, args.cases, settings.gemini_model, settings.gemini_thinking_level
+            args.results,
+            args.cases,
+            prompt.prompt_id,
+            settings.gemini_model,
+            settings.gemini_thinking_level,
         )
         records = load_records(path)
         to_run = pending(loaded, records)
@@ -145,7 +152,10 @@ def _parser_command(args: argparse.Namespace) -> int:
         return EXIT_ERROR
 
     total = len(loaded.cases.cases)
-    print(f"Case set: {args.cases} ({total} cases) | model {settings.gemini_model}")
+    print(
+        f"Case set: {args.cases} ({total} cases) | prompt {prompt.prompt_id} "
+        f"| model {settings.gemini_model}"
+    )
     print(f"Runs: {total - len(to_run)} already recorded, {len(to_run)} to run")
     print(f"Estimated LLM requests: {len(to_run)} (one per case, temperature 0)")
     if to_run and not args.yes:
@@ -154,13 +164,19 @@ def _parser_command(args: argparse.Namespace) -> int:
 
     if records is None:
         records = new_records(
-            loaded, settings.gemini_model, settings.gemini_thinking_level, git_state().commit
+            loaded,
+            prompt.prompt_id,
+            settings.gemini_model,
+            settings.gemini_thinking_level,
+            git_state().commit,
         )
     stopped: str | None = None
     if to_run:
         llm = PacedLLM(build_llm(settings), max_rpm=args.max_rpm)
         stopped = asyncio.run(
-            run_parser_eval(to_run, records, path, llm=llm, progress=_print_parser_progress)
+            run_parser_eval(
+                to_run, records, path, llm=llm, prompt=prompt, progress=_print_parser_progress
+            )
         )
 
     markdown = render_parser_report(records, scores(loaded, records))
@@ -245,6 +261,12 @@ def _parser() -> argparse.ArgumentParser:
 
     parser_eval = commands.add_parser("parser", help="score the request interpreter on labels")
     parser_eval.add_argument("--cases", default=DEFAULT_PARSER_CASES, help="case set version")
+    parser_eval.add_argument(
+        "--prompt",
+        choices=sorted(PARSER_PROMPTS),
+        default=DEFAULT_PARSER_PROMPT.prompt_id,
+        help=f"request parser prompt version (default {DEFAULT_PARSER_PROMPT.prompt_id})",
+    )
     parser_eval.add_argument("--max-rpm", type=int, default=DEFAULT_MAX_RPM)
     parser_eval.add_argument("--yes", action="store_true", help="start (otherwise plan only)")
     parser_eval.add_argument("--results", type=Path, default=RESULTS_DIR)

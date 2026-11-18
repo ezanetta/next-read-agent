@@ -13,7 +13,7 @@ from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, MatchEvidence, Recommendation, Rule
 from book_agent.domain.requests import FilterSource
 from book_agent.llm.base import LLMError, LLMResponse, StopReason, Usage
-from book_agent.prompts import baseline_v1, request_parser_v1, same_work_v1
+from book_agent.prompts import baseline_v1, request_parser_v2, same_work_v1
 from tests.fakes import FakeLLM, text_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
 from tests.library_data import book as library_book
@@ -285,7 +285,7 @@ async def test_request_is_interpreted_then_used_for_recommending() -> None:
         reply(CLEAN_THREE),
     )
     interpret, recommend = llm.requests
-    assert interpret.system == request_parser_v1.SYSTEM
+    assert interpret.system == request_parser_v2.SYSTEM
     assert recommend.system == baseline_v1.SYSTEM
     assert recommend.messages[0].text == baseline_v1.build_user_prompt(
         PROFILE, Filters(language="en", max_pages=600), "a dystopia"
@@ -295,7 +295,7 @@ async def test_request_is_interpreted_then_used_for_recommending() -> None:
     assert result.request.preference == "a dystopia"
     assert result.request.filters == Filters(language="en", max_pages=600)
     assert result.request.sources == {"language": FilterSource.TEXT, "max_pages": FilterSource.TEXT}
-    assert result.request_prompt_id == "request_parser_v1"
+    assert result.request_prompt_id == "request_parser_v2"
     assert [c.name for c in result.calls] == ["interpret_request", "recommend"]
     assert result.total_usage == Usage(input_tokens=1700, output_tokens=150)
     assert result.passed
