@@ -2,8 +2,10 @@
 
     uv run python -m book_agent.evals run --system baseline|agent [--prompt agent_v2]
         [--cases recommend_v1] [--runs 3] [--max-rpm 15] [--yes]
+    uv run python -m book_agent.evals report [--cases recommend_v1]
 
 run prints the plan and an estimate of LLM requests, and starts only with --yes.
+report reads the records only (no LLM calls) and writes data/evals/<cases>/report.md.
 Exit codes: 0 done (or nothing to do), 1 stopped early by quota (rerun to resume), 2 errors.
 """
 
@@ -18,6 +20,7 @@ from book_agent.config import Settings, get_settings
 from book_agent.evals.cases import load_recommend_cases
 from book_agent.evals.pacing import DEFAULT_MAX_RPM, PacedLLM
 from book_agent.evals.records import RESULTS_DIR, RecordStore, RunConfig, System
+from book_agent.evals.report import build_report, render_markdown
 from book_agent.evals.runner import (
     Plan,
     PlannedRun,
@@ -28,6 +31,7 @@ from book_agent.evals.runner import (
     plan_runs,
     run_plan,
 )
+from book_agent.files import write_atomic
 from book_agent.prompts import baseline_v1
 from book_agent.wiring import build_llm, catalog_services
 from book_agent.work_keys import DEFAULT_CACHE_PATH, load_cache
@@ -42,6 +46,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "run":
         return _run_command(args)
+    if args.command == "report":
+        return _report_command(args)
     raise AssertionError(f"unhandled command {args.command!r}")
 
 
@@ -92,6 +98,22 @@ def _run_command(args: argparse.Namespace) -> int:
     summary = asyncio.run(execute())
     print(format_summary(summary, plan, store.root / loaded.cases.version / config.id))
     return EXIT_STOPPED if summary.stopped else EXIT_OK
+
+
+def _report_command(args: argparse.Namespace) -> int:
+    store = RecordStore(args.results)
+    try:
+        records = store.load_all(args.cases)
+    except ValueError as e:
+        print(f"error: {e}")
+        return EXIT_ERROR
+    markdown = render_markdown(build_report(args.cases, records))
+    print(markdown)
+    if records:
+        path = store.root / args.cases / "report.md"
+        write_atomic(path, markdown)
+        print(f"Written to {path}")
+    return EXIT_OK
 
 
 def run_config(system: System, prompt_id: str, settings: Settings) -> RunConfig:
@@ -152,6 +174,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--csv", type=Path, default=DEFAULT_CSV, help="Goodreads export")
     run.add_argument("--cache", type=Path, default=DEFAULT_CACHE_PATH, help="work key cache")
     run.add_argument("--results", type=Path, default=RESULTS_DIR, help="results directory")
+
+    report = commands.add_parser("report", help="score the recorded runs of a case set")
+    report.add_argument("--cases", default=DEFAULT_CASES, help="case set version")
+    report.add_argument("--results", type=Path, default=RESULTS_DIR, help="results directory")
     return parser
 
 
