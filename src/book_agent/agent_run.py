@@ -16,15 +16,15 @@ from book_agent.domain.validation import WorkMatching
 from book_agent.llm.base import LLMClient, Usage
 from book_agent.llm.calls import LLMCall, total_usage
 from book_agent.ports import BookSearch, WorkResolver
-from book_agent.prompts import agent_v1, agent_v2, submission_feedback_v1
+from book_agent.prompts import agent_v1, agent_v2, agent_v3, submission_feedback_v1
 from book_agent.prompts.agent_prompt import AgentPrompt
 from book_agent.request_parser import resolve_request
 from book_agent.same_work_judge import LLMSameWorkJudge
 
 AGENT_PROMPTS: dict[str, AgentPrompt] = {
-    prompt.prompt_id: prompt for prompt in (agent_v1.PROMPT, agent_v2.PROMPT)
+    prompt.prompt_id: prompt for prompt in (agent_v1.PROMPT, agent_v2.PROMPT, agent_v3.PROMPT)
 }
-DEFAULT_AGENT_PROMPT = agent_v2.PROMPT
+DEFAULT_AGENT_PROMPT = agent_v3.PROMPT  # D-026: its user prompt states min_pages
 
 
 class AgentRun(BaseModel, frozen=True):

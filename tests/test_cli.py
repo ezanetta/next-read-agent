@@ -50,7 +50,7 @@ async def command(
 async def test_report_for_a_clean_run() -> None:
     output, code = await command(reply(CLEAN_THREE), Filters(max_pages=600))
     assert code == EXIT_OK
-    assert output.startswith("Prompt baseline_v1\n")
+    assert output.startswith("Prompt baseline_v2\n")
     assert "Filters: max_pages=600 (from flag)" in output
     assert "Request:" not in output
     assert "1. Hyperion by Dan Simmons" in output
@@ -111,7 +111,7 @@ async def test_report_shows_what_was_understood_and_each_call() -> None:
         understood,
     )
     assert code == EXIT_OK
-    assert output.startswith("Prompt baseline_v1 | request parser request_parser_v2\n")
+    assert output.startswith("Prompt baseline_v2 | request parser request_parser_v2\n")
     assert 'Request: "una distopía de menos de 600 páginas en inglés"' in output
     assert "Preference: una distopía" in output
     assert "Filters: language=en (from text), max_pages=500 (from flag)" in output
@@ -263,7 +263,7 @@ async def test_agent_report_for_an_accepted_run_after_a_rejection() -> None:
 
     assert code == EXIT_OK
     lines = output.splitlines()
-    assert lines[0] == "Prompt agent_v2 | feedback submission_feedback_v1"
+    assert lines[0] == "Prompt agent_v3 | feedback submission_feedback_v1"
     assert "Iterations: 2 of 6 | Submissions: 2 (1 rejected)" in lines
     rejection = lines.index("Rejection 1:")
     assert lines[rejection + 1] == (

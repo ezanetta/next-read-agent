@@ -20,7 +20,7 @@ from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message, StopReason, Usage
 from book_agent.llm.calls import LLMCall, total_usage
 from book_agent.ports import BookSearch, WorkResolver
-from book_agent.prompts import baseline_v1
+from book_agent.prompts import baseline_v2 as baseline_prompt  # D-026: states min_pages
 from book_agent.request_parser import resolve_request
 from book_agent.same_work_judge import LLMSameWorkJudge
 
@@ -76,7 +76,7 @@ async def run_baseline(
     stops the run before the recommendation call, so typed constraints are never dropped.
     With `works`, equal work keys settle the same-work question before the LLM judge.
     """
-    result = BaselineResult(prompt_id=baseline_v1.PROMPT_ID)
+    result = BaselineResult(prompt_id=baseline_prompt.PROMPT_ID)
     resolution = await resolve_request(request, flags, llm=llm)
     interpretation = resolution.interpretation
     if interpretation is not None:
@@ -103,8 +103,10 @@ async def run_baseline(
     started = perf_counter()
     try:
         response = await llm.complete(
-            system=baseline_v1.SYSTEM,
-            messages=[Message.user(baseline_v1.build_user_prompt(profile, filters, preference))],
+            system=baseline_prompt.SYSTEM,
+            messages=[
+                Message.user(baseline_prompt.build_user_prompt(profile, filters, preference))
+            ],
             max_tokens=max_tokens,
             temperature=temperature,
         )

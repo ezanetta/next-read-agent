@@ -20,6 +20,7 @@ from pathlib import Path
 
 from book_agent.adapters.goodreads import load_goodreads_export
 from book_agent.agent_run import AGENT_PROMPTS, DEFAULT_AGENT_PROMPT
+from book_agent.baseline import baseline_prompt
 from book_agent.config import Settings, get_settings
 from book_agent.evals.cases import ParserCase, load_parser_cases, load_recommend_cases
 from book_agent.evals.pacing import DEFAULT_MAX_RPM, PacedLLM
@@ -45,7 +46,6 @@ from book_agent.evals.runner import (
     run_plan,
 )
 from book_agent.files import write_atomic
-from book_agent.prompts import baseline_v1
 from book_agent.request_parser import DEFAULT_PARSER_PROMPT, PARSER_PROMPTS
 from book_agent.wiring import build_llm, catalog_services
 from book_agent.work_keys import DEFAULT_CACHE_PATH, load_cache
@@ -74,7 +74,9 @@ def _run_command(args: argparse.Namespace) -> int:
         loaded = load_recommend_cases(args.cases)
         settings = get_settings()
         prompt = AGENT_PROMPTS[args.prompt] if system == "agent" else None
-        config = run_config(system, prompt.prompt_id if prompt else baseline_v1.PROMPT_ID, settings)
+        config = run_config(
+            system, prompt.prompt_id if prompt else baseline_prompt.PROMPT_ID, settings
+        )
         store = RecordStore(args.results)
         plan = plan_runs(loaded, config, args.runs, store)
         profile = load_goodreads_export(args.csv, profile_name="Me")

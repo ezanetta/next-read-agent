@@ -13,7 +13,7 @@ from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, MatchEvidence, Recommendation, Rule
 from book_agent.domain.requests import FilterSource
 from book_agent.llm.base import LLMError, LLMResponse, StopReason, Usage
-from book_agent.prompts import baseline_v1, request_parser_v2, same_work_v1
+from book_agent.prompts import baseline_v1, baseline_v2, request_parser_v2, same_work_v1
 from tests.fakes import FakeLLM, text_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
 from tests.library_data import book as library_book
@@ -121,10 +121,10 @@ def test_prompt_states_filters_only_when_given() -> None:
 async def test_request_uses_the_versioned_prompt() -> None:
     result, llm = await run(reply(CLEAN_THREE))
     request = llm.requests[0]
-    assert request.system == baseline_v1.SYSTEM
-    assert request.messages[0].text == baseline_v1.build_user_prompt(PROFILE, Filters())
+    assert request.system == baseline_v2.SYSTEM
+    assert request.messages[0].text == baseline_v2.build_user_prompt(PROFILE, Filters())
     assert request.tools == ()
-    assert result.prompt_id == "baseline_v1"
+    assert result.prompt_id == "baseline_v2"
 
 
 # --- The whole flow -------------------------------------------------------------------
@@ -286,8 +286,8 @@ async def test_request_is_interpreted_then_used_for_recommending() -> None:
     )
     interpret, recommend = llm.requests
     assert interpret.system == request_parser_v2.SYSTEM
-    assert recommend.system == baseline_v1.SYSTEM
-    assert recommend.messages[0].text == baseline_v1.build_user_prompt(
+    assert recommend.system == baseline_v2.SYSTEM
+    assert recommend.messages[0].text == baseline_v2.build_user_prompt(
         PROFILE, Filters(language="en", max_pages=600), "a dystopia"
     )
 
