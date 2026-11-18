@@ -133,3 +133,15 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **Cause:** One pattern: the parser strips anything that *looks* like a filter, even when it couldn't express it as one. The v1 prompt says to leave out "the parts used for language and max_pages", which the model reads as "anything about language or pages".
 - **Fix:** `request_parser_v2`: text may leave the preference only when it became a filter; anything that can't be expressed as one (several languages, a minimum, "around N") stays, in the reader's own words. v2 is the default for the baseline and the agent; v1 stays frozen.
 - **How it was verified:** Unit tests for the prompt rule. The parser eval is to be rerun with v2.
+
+## F-010 · request_parser_v2: equal score, cheaper errors (2026-11-18)
+
+- **What happened:** Parser eval with `request_parser_v2` (same 23 labels, `gemini-3.5-flash-lite`). Both F-009 cases were fixed ("en inglés o en español" and "between 200 and 400 pages" stayed in the preference), and all three negations were kept. Two new issues:
+  1. **Invalid JSON on a correct interpretation:** for "A sci fi book that is not about space", the model put a literal newline inside the preference string (`"A\n sci fi book that is not about space"`), which strict JSON parsing rejects.
+  2. **v2 sometimes repeats a filter in the preference:** "books in English under 250 pages" gave `max_pages` 250 and preference "books under 250 pages", so the label expecting no preference failed. The same happened in `at-most-300` and `history-nonfiction`, which still passed because their preference was expected anyway.
+- **How it was detected:** The parser eval's errors and mismatch sections, and reading every interpreted preference.
+- **Equal scores hid errors of different cost:** v1 and v2 both scored 21 of 23 fully correct, but v1's errors silently dropped constraints the reader asked for, while v2's mostly repeat a filter in the preference, which is harmless: the filter is still enforced, and the recommender reads a constraint twice. A single accuracy number would have called them equal. The eval's per-field breakdown and the printed preferences are what showed the difference.
+- **Fix:**
+  - The request parser reads its reply with `json.loads(strict=False)`, the standard option for control characters inside strings; nothing else is repaired (D-010 amended). Only the parser: the baseline's parsing stays strict, so its measured behavior doesn't change. That case's record was removed for a rerun.
+  - The repeated filter is a known limitation of v2, not a reason for v3.
+- **How it was verified:** A unit test with the exact raw reply; a test that the shared extractor and the baseline stay strict. The one case is to be rerun.

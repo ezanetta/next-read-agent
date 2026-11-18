@@ -71,6 +71,7 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Repair the JSON (fix escapes, use a lenient parser); keep strict parsing and ask the prompt to avoid escapes.
 - **Choice:** Strict parsing stays. `baseline_v1` asks for accented and non-ASCII characters to be written directly, never as `\u` escapes.
 - **Reason:** The agent will return recommendations through tool calling, where the provider delivers structured arguments, so repair code would only serve the baseline. Strict parsing keeps malformed replies visible as failures that evals can count.
+- **Amended (2026-11-18):** the request parser reads its reply with `json.loads(strict=False)`, which only allows control characters such as a literal newline inside strings (F-010). It's a standard parser option, not repair, and it doesn't apply to the baseline, whose parsing stays strict.
 
 ## D-011 · Hybrid work matching: Open Library work keys, then an LLM same-work check (2026-11-15)
 
