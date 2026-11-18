@@ -141,3 +141,20 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Choice:** Once, when one turn is left: the user message that closes the next-to-last turn ends with "This is your last turn. Call submit_recommendations now with your 3 best books: there are no turns left for searching." It goes after the tool results (or after the reminder, when the turn had no tool call), as a text part of the same message. It applies to every prompt version, and the trace marks it.
 - **Reason:** One message at the moment it matters is cheaper and harder to ignore than a counter on every turn. The same message avoids two user messages in a row, which providers handle differently, and keeps tool results before text, which Claude requires. The notice is loop behavior, not prompt wording to compare, so it isn't versioned; runs after this change include it for agent_v1 too, which matters when comparing them with the first agent runs.
 - **Not done:** forcing a submit-only tool choice on the last turn. `LLMClient` has no tool-choice option yet; worth adding if the notice proves not enough.
+
+## D-019 · A title + author lookup before reporting a book as not found (2026-11-18)
+
+- **Context:** F-007: a real book was rejected as `NOT_FOUND` because Google Books ranked only reference works for the validator's free-text query. Since D-014, `NOT_FOUND` blocks acceptance, so a retrieval miss rejects a real book.
+- **Options:** Search more results (cost on every lookup, and the book may still rank lower); clean the query only; a second, stricter lookup only when the first finds no match.
+- **Choice:** Both a cleaner query and a fallback.
+  - The adapter sends "&" as "and" in every query, the direct cause in F-007.
+  - `BookSearch.find(title, author)` is a stricter lookup. For Google Books it's `intitle:"<core of the title>" inauthor:<surname>`, where the core is the title before the first ":", "&", "(", ";" or "[". The validator calls it only when the free-text search (with and without the language filter) finds no matching edition; its candidates go through the same title and author matching.
+  - Each checked recommendation records `found_by`: `search` or `fallback`.
+- **Reason:** One extra request, only for books that would otherwise be rejected, makes "not found" depend on two different retrieval strategies instead of one ranking. The core of the title, not the full title, because a phrase search for "... and Other Stories" missed the edition titled "... & Other Stories" (F-007). The fielded syntax is Google-specific, so it lives behind the port. `found_by` lets evals count how often the fallback rescues a real book, and whether it ever lets a wrong edition through.
+
+## D-020 · One repair turn after a rejected last-turn submission (2026-11-18)
+
+- **Context:** F-007: the model submitted on its last turn after the last-turn notice (D-018), the submission was rejected, and no turn was left to fix it. The notice and the feedback path didn't fit together.
+- **Options:** Send the last-turn notice with 2 turns left (costs every run a turn, and a model that ignores it fails the same way); one repair turn only when a submission on the last turn is rejected.
+- **Choice:** One repair turn. `MAX_ITERATIONS = 6` regular turns, `REPAIR_TURNS = 1`, effective cap `MAX_TURNS = 7`. The repair turn is granted only when a submission on the last regular turn is rejected; the rejection feedback then ends with a repair notice (keep the accepted books, replace the rejected ones, submit now). A rejection on an earlier turn adds nothing, since a turn is left. A rejection or a search in the repair turn ends the run. A catalog outage still stops the run at once (D-014). Results, errors and the trace record whether the repair turn was used.
+- **Reason:** Every rejection gets one chance to be fixed, at a bounded cost (at most one extra request), without taking a turn away from runs that never need it. Recording its use lets evals see how often runs depend on it.

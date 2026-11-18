@@ -105,7 +105,12 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   | `The News from Ireland William Trevor` | yes, second |
   | `intitle:"The News from Ireland" inauthor:Trevor` | yes, first |
 
-  The matcher already treats "&" as "and" and would have matched the book; it never received it. A second gap showed up: the fielded search also returns editions titled just 'The News from Ireland', which the matcher doesn't treat as the same book as '... & Other Stories'.
+  The matcher already treats "&" as "and" and would have matched the book; it never received it.
+- **Known gap, not fixed:** the title variant "X & Other Stories" (or "X and Other Stories") versus "X". A fielded search also returns editions titled just 'The News from Ireland', which the matcher doesn't treat as the same book as '... & Other Stories': no ":" separates the two parts, so D-001's variants don't apply. Collections retitled this way can be missed by the existence check and by the library check.
 - **What it implies:** A `NOT_FOUND` violation can be wrong when the catalog search ranks the book outside the top 5. Since D-014 makes it blocking, a false negative in retrieval rejects a real book; existence checks need a more robust lookup before "not found" is trusted. One-search-per-turn is left for evals to measure; no prompt change yet.
-- **Fix:** Pending review.
-- **How it was verified:** Live Google Books requests (4 queries above); no LLM calls.
+- **Fix:**
+  - The Google Books adapter sends "&" as "and" in every query.
+  - Before reporting a book as not found, the validator tries a stricter title + author lookup (`intitle:"<core of the title>" inauthor:<surname>`), and records `found_by` (search or fallback) so evals can count rescued books (D-019). A phrase search for the full title with "and" (`intitle:"The News from Ireland and Other Stories"`) missed the edition titled with "&"; the core of the title, before the first "&", found it first. So the fallback uses the core.
+  - A submission rejected on the last regular turn gets one repair turn (D-020).
+  - One search per turn: no change; evals will measure it.
+- **How it was verified:** Live Google Books requests (the 4 queries above, plus 3 to record fixtures and choose the fallback query); no LLM calls. A regression test runs the validator with the real adapter on the recorded responses: the "&" query returning only reference works, and the fallback finding the book. Unit tests for the repair turn. Not yet re-checked with a real agent run.
