@@ -123,3 +123,13 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **What it implies:** Whether one book by the requested author, plus two similar authors, honors "more books by X" is a judgment call that hard rules can't make. Keep this request as an eval case for the LLM judge, with the trace's evidence that a second matching book was available.
 - **Fix:** None; eval case.
 - **How it was verified:** 1 real run.
+
+## F-009 · The request parser drops soft constraints it can't turn into filters (2026-11-18)
+
+- **What happened:** First run of the parser eval (`request_parser_v1`, 23 labeled requests, `gemini-3.5-flash-lite`). Filters were right in 23 of 23 cases, and all three negations ("nothing from Brandon Sanderson", "not about space", "nothing by Agatha Christie") were kept verbatim. Two soft constraints were dropped:
+  - "un thriller, en inglés o en español" became "un thriller": two acceptable languages can't be a filter (`Filters` holds one), so they vanished.
+  - "a romance between 200 and 400 pages" became "a romance": the minimum has no field, so it vanished along with the maximum that did become a filter.
+- **How it was detected:** The parser eval's "dropped preference terms" section, and reading every interpreted preference in the report.
+- **Cause:** One pattern: the parser strips anything that *looks* like a filter, even when it couldn't express it as one. The v1 prompt says to leave out "the parts used for language and max_pages", which the model reads as "anything about language or pages".
+- **Fix:** `request_parser_v2`: text may leave the preference only when it became a filter; anything that can't be expressed as one (several languages, a minimum, "around N") stays, in the reader's own words. v2 is the default for the baseline and the agent; v1 stays frozen.
+- **How it was verified:** Unit tests for the prompt rule. The parser eval is to be rerun with v2.
