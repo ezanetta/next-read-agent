@@ -37,6 +37,7 @@ class AgentRun(BaseModel, frozen=True):
     calls: list[LLMCall] = []
     iterations: int = 0
     turns: list[TurnTrace] = []  # what each agent turn did: tool calls and outcomes
+    repair_turn_used: bool = False  # a rejected last-turn submission got one extra turn
     rejections: list[ValidationResult] = []  # each rejected submission, in order
     recommendations: RecommendationList | None = None  # the accepted submission
     validation: ValidationResult | None = None  # of the accepted submission
@@ -114,6 +115,7 @@ async def run_agent_pipeline(
                 "calls": [*run.calls, *e.calls],
                 "iterations": e.iterations,
                 "turns": e.turns,
+                "repair_turn_used": e.repair_turn_used,
                 "rejections": e.rejections,
                 "last_validation": e.last_validation,
                 "failure": e.failure,
@@ -125,6 +127,7 @@ async def run_agent_pipeline(
             "calls": [*run.calls, *result.calls],
             "iterations": result.iterations,
             "turns": result.turns,
+            "repair_turn_used": result.repair_turn_used,
             "rejections": result.rejections,
             "recommendations": result.recommendations,
             "validation": result.validation,

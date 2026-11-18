@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from book_agent.agent import MAX_ITERATIONS
+from book_agent.agent import MAX_ITERATIONS, MAX_TURNS
 from book_agent.cli import (
     EXIT_ERROR,
     EXIT_OK,
@@ -278,11 +278,12 @@ async def test_agent_report_for_an_accepted_run_after_a_rejection() -> None:
 
 
 async def test_agent_rejections_until_the_limit_exit_with_violations() -> None:
-    script = [submission([DUNE_AGAIN, *CLEAN_THREE[1:]], f"s-{i}") for i in range(MAX_ITERATIONS)]
+    script = [submission([DUNE_AGAIN, *CLEAN_THREE[1:]], f"s-{i}") for i in range(MAX_TURNS)]
     output, code = await agent_command(PROFILE, Filters(), llm=FakeLLM(script), books=catalog())
 
     assert code == EXIT_VIOLATIONS
-    assert f"Rejection {MAX_ITERATIONS}:" in output
+    assert f"Iterations: {MAX_TURNS} of {MAX_ITERATIONS} + 1 repair turn |" in output
+    assert f"Rejection {MAX_TURNS}:" in output
     assert "ERROR (iterations_exhausted): no accepted recommendations" in output
     assert "Last submission:" not in output  # it is the last rejection, already shown
 
@@ -386,3 +387,18 @@ def test_agent_prompt_option_accepts_the_registered_versions(tmp_path: Path) -> 
     assert main(["agent", "--prompt", "agent_v1", "--csv", csv]) == EXIT_ERROR
     with pytest.raises(SystemExit):
         main(["agent", "--prompt", "agent_v9", "--csv", csv])
+
+
+async def test_agent_verbose_trace_marks_the_repair_turn() -> None:
+    search = ToolCallPart(id="s", name="search_books", arguments={"query": "foundation"})
+    script = [
+        *(tool_call_response(search) for _ in range(MAX_ITERATIONS - 1)),
+        submission([DUNE_AGAIN, *CLEAN_THREE[1:]]),
+        submission(CLEAN_THREE, "s-2"),
+    ]
+    output, code = await agent_command(
+        PROFILE, Filters(), llm=FakeLLM(script), books=catalog(), verbose=True
+    )
+    assert code == EXIT_OK
+    assert f"Iterations: {MAX_TURNS} of {MAX_ITERATIONS} + 1 repair turn |" in output
+    assert output.count("  (repair turn granted)") == 1

@@ -59,7 +59,9 @@ from book_agent.tools import (
     format_search_results,
 )
 
-MAX_ITERATIONS = 6
+MAX_ITERATIONS = 6  # regular turns
+REPAIR_TURNS = 1  # extra turns, only after a submission on the last regular turn is rejected
+MAX_TURNS = MAX_ITERATIONS + REPAIR_TURNS  # the effective cap on LLM requests (D-020)
 MAX_TOKENS_PER_TURN = 2048
 CALL_NAME = "agent"
 REMINDER = "Submit your answer by calling the submit_recommendations tool."
@@ -69,6 +71,13 @@ LAST_TURN_NOTICE = (
 )
 """Sent with the message that closes the next-to-last turn, for every prompt version
 (D-018). Without it, a model searching one book per turn ran out of turns (F-005)."""
+REPAIR_NOTICE = (
+    "Your submission was rejected on your last turn. You get one extra turn to fix it: "
+    "keep the accepted books, replace only the rejected ones, and call "
+    "submit_recommendations now. There are no turns left for searching."
+)
+"""Sent after the rejection feedback when a submission on the last regular turn is
+rejected, so every rejection gets one chance to be fixed (D-020, F-007)."""
 
 
 class ToolTrace(BaseModel, frozen=True):
@@ -90,6 +99,7 @@ class TurnTrace(BaseModel, frozen=True):
     tools: list[ToolTrace] = []
     note: str | None = None  # for turns without tool calls
     last_turn_notice: bool = False  # the message closing this turn carried LAST_TURN_NOTICE
+    repair_turn_granted: bool = False  # ... and REPAIR_NOTICE: a repair turn follows
 
 
 class AgentResult(BaseModel, frozen=True):
@@ -101,6 +111,7 @@ class AgentResult(BaseModel, frozen=True):
     calls: list[LLMCall]  # agent turns ("agent") and same-work judge calls, in order
     iterations: int  # LLM requests made by the loop
     turns: list[TurnTrace] = []  # one per completed LLM request, in order
+    repair_turn_used: bool = False  # the accepted submission came in the repair turn
     feedback_prompt_id: str = submission_feedback_v1.PROMPT_ID
 
     @property
@@ -140,6 +151,7 @@ class AgentError(Exception):
         calls: list[LLMCall] | None = None,
         iterations: int = 0,
         turns: list[TurnTrace] | None = None,
+        repair_turn_used: bool = False,
     ) -> None:
         super().__init__(message)
         self.failure = failure
@@ -148,6 +160,7 @@ class AgentError(Exception):
         self.calls = list(calls or [])
         self.iterations = iterations
         self.turns = list(turns or [])
+        self.repair_turn_used = repair_turn_used
 
 
 @dataclass
@@ -157,6 +170,7 @@ class _RunState:
     calls: list[LLMCall] = field(default_factory=list[LLMCall])
     rejections: list[ValidationResult] = field(default_factory=list[ValidationResult])
     turns: list[TurnTrace] = field(default_factory=list[TurnTrace])
+    repair_turn_used: bool = False
 
     def error(
         self,
@@ -173,6 +187,7 @@ class _RunState:
             calls=self.calls,
             iterations=iterations,
             turns=self.turns,
+            repair_turn_used=self.repair_turn_used,
         )
 
     def record_turn(
@@ -182,6 +197,7 @@ class _RunState:
         tools: list[ToolTrace],
         note: str | None = None,
         last_turn_notice: bool = False,
+        repair_turn_granted: bool = False,
     ) -> None:
         self.turns.append(
             TurnTrace(
@@ -192,6 +208,7 @@ class _RunState:
                 tools=list(tools),
                 note=note,
                 last_turn_notice=last_turn_notice,
+                repair_turn_granted=repair_turn_granted,
             )
         )
 
@@ -210,7 +227,10 @@ async def run_agent(
     messages: list[Message] = [Message.user(user_prompt)]
     state = _RunState()
 
-    for iteration in range(1, MAX_ITERATIONS + 1):
+    limit = MAX_ITERATIONS  # raised to MAX_TURNS when the repair turn is granted
+    iteration = 0
+    while iteration < limit:
+        iteration += 1
         try:
             response = await _complete(llm, system, tools, messages, state.calls)
         except LLMError as e:
@@ -229,13 +249,14 @@ async def run_agent(
             state.record_turn(
                 iteration, response, [], note="no tool call: reminder sent", last_turn_notice=notice
             )
-            messages.append(_closing_message([TextPart(text=REMINDER)], notice))
+            messages.append(_closing_message([TextPart(text=REMINDER)], last_turn=notice))
             continue
 
         # A call cut off at MAX_TOKENS still runs: malformed arguments go back as an
         # error like any other invalid arguments (D-015).
         results: list[ToolResultPart] = []
         traces: list[ToolTrace] = []
+        rejected_this_turn = False
         for call in response.message.tool_calls:
             if call.name == SEARCH_BOOKS:
                 result, outcome = await _search(call, books)
@@ -282,32 +303,46 @@ async def run_agent(
                     calls=state.calls,
                     iterations=iteration,
                     turns=state.turns,
+                    repair_turn_used=state.repair_turn_used,
                 )
             state.rejections.append(validation)
+            rejected_this_turn = True
             feedback = submission_feedback_v1.build_feedback(submitted.recommendations, validation)
             results.append(error_result(call, feedback))
             traces.append(_trace(call, _rejection_outcome(validation), is_error=True))
 
         notice = iteration == MAX_ITERATIONS - 1
-        state.record_turn(iteration, response, traces, last_turn_notice=notice)
-        messages.append(_closing_message(results, notice))
+        # Only a rejection on the last regular turn earns the repair turn: earlier ones
+        # still have a turn left, and a rejection in the repair turn ends the run.
+        repair = rejected_this_turn and iteration == MAX_ITERATIONS
+        if repair:
+            limit = MAX_TURNS
+            state.repair_turn_used = True
+        state.record_turn(
+            iteration, response, traces, last_turn_notice=notice, repair_turn_granted=repair
+        )
+        messages.append(_closing_message(results, last_turn=notice, repair=repair))
 
     rejected = f" ({len(state.rejections)} submissions rejected)" if state.rejections else ""
+    repair_turn = f" including {REPAIR_TURNS} repair turn" if state.repair_turn_used else ""
     raise state.error(
-        f"no accepted recommendations after {MAX_ITERATIONS} iterations{rejected}",
+        f"no accepted recommendations after {iteration} iterations{repair_turn}{rejected}",
         AgentFailure.ITERATIONS_EXHAUSTED,
-        MAX_ITERATIONS,
+        iteration,
     )
 
 
-def _closing_message(parts: Sequence[ToolResultPart | TextPart], last_turn: bool) -> Message:
-    """The user message that ends a turn, with the last-turn notice appended when due.
+def _closing_message(
+    parts: Sequence[ToolResultPart | TextPart], *, last_turn: bool = False, repair: bool = False
+) -> Message:
+    """The user message that ends a turn, with the last-turn or repair notice when due.
 
-    The notice goes last, after any tool results, in the same message: two user messages
-    in a row are avoided, and Claude requires tool results before text (D-018).
+    Notices go last, after any tool results, in the same message: two user messages in a
+    row are avoided, and Claude requires tool results before text (D-018).
     """
-    notice = (TextPart(text=LAST_TURN_NOTICE),) if last_turn else ()
-    return Message(role="user", parts=(*parts, *notice))
+    notices = [LAST_TURN_NOTICE] if last_turn else []
+    notices += [REPAIR_NOTICE] if repair else []
+    return Message(role="user", parts=(*parts, *(TextPart(text=n) for n in notices)))
 
 
 async def _complete(

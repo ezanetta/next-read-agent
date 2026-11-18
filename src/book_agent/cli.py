@@ -33,7 +33,7 @@ from pathlib import Path
 import httpx
 
 from book_agent.adapters.goodreads import load_goodreads_export
-from book_agent.agent import MAX_ITERATIONS, AgentFailure, ToolTrace, TurnTrace
+from book_agent.agent import MAX_ITERATIONS, REPAIR_TURNS, AgentFailure, ToolTrace, TurnTrace
 from book_agent.agent_run import (
     AGENT_PROMPTS,
     DEFAULT_AGENT_PROMPT,
@@ -284,7 +284,8 @@ def format_agent_run(run: AgentRun, *, verbose: bool = False) -> str:
     if run.request is not None:
         rejected = f" ({len(run.rejections)} rejected)" if run.rejections else ""
         lines.append(
-            f"Iterations: {run.iterations} of {MAX_ITERATIONS} | "
+            f"Iterations: {run.iterations} of {MAX_ITERATIONS}"
+            f"{f' + {REPAIR_TURNS} repair turn' if run.repair_turn_used else ''} | "
             f"Submissions: {run.submissions}{rejected}"
         )
         lines.append("")
@@ -326,6 +327,8 @@ def format_trace(turns: list[TurnTrace]) -> list[str]:
             lines.append(f"  {tool.name} {_arguments(tool)} -> {error}{tool.outcome}")
         if turn.last_turn_notice:
             lines.append("  (last-turn notice sent)")
+        if turn.repair_turn_granted:
+            lines.append("  (repair turn granted)")
     return lines
 
 
