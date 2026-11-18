@@ -139,6 +139,9 @@ class FailingBookSearch:
             raise BookSearchError("Google Books request timed out")
         return await self.catalog.search(query, language=language, max_results=max_results)
 
+    async def find(self, title: str, author: str, *, max_results: int = 10) -> list[CatalogBook]:
+        return await self.search(f"{title} {author}", max_results=max_results)
+
     async def get_details(self, volume_id: str) -> CatalogBook | None:
         return await self.catalog.get_details(volume_id)
 

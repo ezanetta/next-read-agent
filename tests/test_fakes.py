@@ -68,3 +68,14 @@ async def test_get_details_returns_book_or_none(fake: FakeBookSearch) -> None:
     assert await fake.get_details("ficciones") == FICCIONES
     assert await fake.get_details("missing") is None
     assert fake.detail_lookups == ["ficciones", "missing"]
+
+
+async def test_fake_find_matches_title_words_and_the_surname() -> None:
+    trevor = catalog_book("t", "The News from Ireland & Other Stories", "William Trevor", "en")
+    books = FakeBookSearch([trevor])
+    assert await books.find("The News from Ireland", "W. Trevor") == [trevor]
+    assert await books.find("The News from Ireland", "Someone Else") == []
+    assert books.finds == [
+        ("The News from Ireland", "W. Trevor"),
+        ("The News from Ireland", "Someone Else"),
+    ]

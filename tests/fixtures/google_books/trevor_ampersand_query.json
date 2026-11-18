@@ -1,0 +1,426 @@
+{
+ "kind": "books#volumes",
+ "totalItems": 344,
+ "items": [
+  {
+   "kind": "books#volume",
+   "id": "Px9s1oIjj88C",
+   "etag": "pKZ/eX5njGs",
+   "selfLink": "https://www.googleapis.com/books/v1/volumes/Px9s1oIjj88C",
+   "volumeInfo": {
+    "title": "The Facts on File Companion to the British Short Story",
+    "authors": [
+     "Andrew Maunder"
+    ],
+    "publisher": "Infobase Publishing",
+    "publishedDate": "2007",
+    "description": "A comprehensive reference to short fiction from Great Britain, Ireland, and the British Commonwealth. With approximately 450 entries, this A-to-Z guide explores the literary contributions of such writers as Joseph Conrad, James Joyce, D H Lawrence, Rudyard Kipling, Oscar Wilde, Katherine Mansfield, Martin Amis, and others.",
+    "industryIdentifiers": [
+     {
+      "type": "ISBN_13",
+      "identifier": "9780816074969"
+     },
+     {
+      "type": "ISBN_10",
+      "identifier": "0816074968"
+     }
+    ],
+    "readingModes": {
+     "text": false,
+     "image": true
+    },
+    "pageCount": 545,
+    "printType": "BOOK",
+    "categories": [
+     "Literary Criticism"
+    ],
+    "maturityRating": "NOT_MATURE",
+    "allowAnonLogging": false,
+    "contentVersion": "0.2.2.0.preview.1",
+    "panelizationSummary": {
+     "containsEpubBubbles": false,
+     "containsImageBubbles": false
+    },
+    "imageLinks": {
+     "smallThumbnail": "http://books.google.com/books/content?id=Px9s1oIjj88C&printsec=frontcover&img=1&zoom=5&edge=curl&source=gbs_api",
+     "thumbnail": "http://books.google.com/books/content?id=Px9s1oIjj88C&printsec=frontcover&img=1&zoom=1&edge=curl&source=gbs_api"
+    },
+    "language": "en",
+    "previewLink": "http://books.google.de/books?id=Px9s1oIjj88C&pg=PA433&dq=The+News+from+Ireland+%26+Other+Stories+William+Trevor&hl=&as_pt=BOOKS&cd=1&source=gbs_api",
+    "infoLink": "http://books.google.de/books?id=Px9s1oIjj88C&dq=The+News+from+Ireland+%26+Other+Stories+William+Trevor&hl=&as_pt=BOOKS&source=gbs_api",
+    "canonicalVolumeLink": "https://books.google.com/books/about/The_Facts_on_File_Companion_to_the_Briti.html?hl=&id=Px9s1oIjj88C"
+   },
+   "saleInfo": {
+    "country": "DE",
+    "saleability": "NOT_FOR_SALE",
+    "isEbook": false
+   },
+   "accessInfo": {
+    "country": "DE",
+    "viewability": "PARTIAL",
+    "embeddable": true,
+    "publicDomain": false,
+    "textToSpeechPermission": "ALLOWED",
+    "epub": {
+     "isAvailable": false
+    },
+    "pdf": {
+     "isAvailable": true,
+     "acsTokenLink": "http://books.google.de/books/download/The_Facts_on_File_Companion_to_the_Briti-sample-pdf.acsm?id=Px9s1oIjj88C&format=pdf&output=acs4_fulfillment_token&dl_type=sample&source=gbs_api"
+    },
+    "webReaderLink": "http://play.google.com/books/reader?id=Px9s1oIjj88C&hl=&as_pt=BOOKS&source=gbs_api",
+    "accessViewStatus": "SAMPLE",
+    "quoteSharingAllowed": false
+   },
+   "searchInfo": {
+    "textSnippet": "Andrew Maunder. <b>TREVOR</b>, <b>WILLIAM</b> 433 that they have made to define and sustain their narrow stations in the world. In <b>other</b> instances, social changes or political issues from the broader world are inter- jected into the equally parochial&nbsp;..."
+   }
+  },
+  {
+   "kind": "books#volume",
+   "id": "am1PhEWMqdIC",
+   "etag": "3SJ4zhjnTLY",
+   "selfLink": "https://www.googleapis.com/books/v1/volumes/am1PhEWMqdIC",
+   "volumeInfo": {
+    "title": "The Encyclopedia of Twentieth-Century Fiction, 3 Volume Set",
+    "authors": [
+     "Brian W. Shaffer"
+    ],
+    "publisher": "John Wiley & Sons",
+    "publishedDate": "2011-01-25",
+    "description": "This Encyclopedia offers an indispensable reference guide to twentieth-century fiction in the English-language. With nearly 500 contributors and over one million words, it is the most comprehensive and authoritative reference guide to twentieth-century fiction in the English language. Contains over 500 entries of 1000-3000 words written in lucid, jargon-free prose, by an international cast of leading scholars Arranged in three volumes covering British and Irish Fiction, American Fiction, and World Fiction, with each volume edited by a leading scholar in the field Entries cover major writers (such as Saul Bellow, Raymond Chandler, John Steinbeck, Virginia Woolf, A.S. Byatt, Samual Beckett, D.H. Lawrence, Zadie Smith, Salman Rushdie, V.S. Naipaul, Nadine Gordimer, Alice Munro, Chinua Achebe, J.M. Coetzee, and Ngûgî Wa Thiong’o) and their key works Examines the genres and sub-genres of fiction in English across the twentieth century (including crime fiction, Sci-Fi, chick lit, the noir novel, and the avant-garde novel) as well as the major movements, debates, and rubrics within the field, such as censorship, globalization, modernist fiction, fiction and the film industry, and the fiction of migration, diaspora, and exile",
+    "industryIdentifiers": [
+     {
+      "type": "ISBN_13",
+      "identifier": "9781405192446"
+     },
+     {
+      "type": "ISBN_10",
+      "identifier": "1405192445"
+     }
+    ],
+    "readingModes": {
+     "text": false,
+     "image": true
+    },
+    "pageCount": 1581,
+    "printType": "BOOK",
+    "categories": [
+     "Literary Criticism"
+    ],
+    "maturityRating": "NOT_MATURE",
+    "allowAnonLogging": false,
+    "contentVersion": "0.3.3.0.preview.1",
+    "panelizationSummary": {
+     "containsEpubBubbles": false,
+     "containsImageBubbles": false
+    },
+    "imageLinks": {
+     "smallThumbnail": "http://books.google.com/books/content?id=am1PhEWMqdIC&printsec=frontcover&img=1&zoom=5&edge=curl&source=gbs_api",
+     "thumbnail": "http://books.google.com/books/content?id=am1PhEWMqdIC&printsec=frontcover&img=1&zoom=1&edge=curl&source=gbs_api"
+    },
+    "language": "en",
+    "previewLink": "http://books.google.de/books?id=am1PhEWMqdIC&pg=PA366&dq=The+News+from+Ireland+%26+Other+Stories+William+Trevor&hl=&as_pt=BOOKS&cd=2&source=gbs_api",
+    "infoLink": "http://books.google.de/books?id=am1PhEWMqdIC&dq=The+News+from+Ireland+%26+Other+Stories+William+Trevor&hl=&as_pt=BOOKS&source=gbs_api",
+    "canonicalVolumeLink": "https://books.google.com/books/about/The_Encyclopedia_of_Twentieth_Century_Fi.html?hl=&id=am1PhEWMqdIC"
+   },
+   "saleInfo": {
+    "country": "DE",
+    "saleability": "NOT_FOR_SALE",
+    "isEbook": false
+   },
+   "accessInfo": {
+    "country": "DE",
+    "viewability": "PARTIAL",
+    "embeddable": true,
+    "publicDomain": false,
+    "textToSpeechPermission": "ALLOWED",
+    "epub": {
+     "isAvailable": false
+    },
+    "pdf": {
+     "isAvailable": true,
+     "acsTokenLink": "http://books.google.de/books/download/The_Encyclopedia_of_Twentieth_Century_Fi-sample-pdf.acsm?id=am1PhEWMqdIC&format=pdf&output=acs4_fulfillment_token&dl_type=sample&source=gbs_api"
+    },
+    "webReaderLink": "http://play.google.com/books/reader?id=am1PhEWMqdIC&hl=&as_pt=BOOKS&source=gbs_api",
+    "accessViewStatus": "SAMPLE",
+    "quoteSharingAllowed": false
+   },
+   "searchInfo": {
+    "textSnippet": "... <b>The News from Ireland</b> and <b>Other Stories</b> . London : Bodley Head . <b>Trevor</b> , W. ( 1988 ) . The Silence in the Garden . London : Bodley Head . <b>Trevor</b> , W. ( 1990 ) Family Sins and <b>Other Stories</b> . London : Bodley Head ... <b>TREVOR</b> , <b>WILLIAM</b>."
+   }
+  },
+  {
+   "kind": "books#volume",
+   "id": "oIPlEAAAQBAJ",
+   "etag": "e6b/A+02ZiM",
+   "selfLink": "https://www.googleapis.com/books/v1/volumes/oIPlEAAAQBAJ",
+   "volumeInfo": {
+    "title": "Cuentos irlandeses contemporáneos",
+    "authors": [
+     "Jorge Fondebrider"
+    ],
+    "publisher": "Editorial Universidad de Guadalajara",
+    "publishedDate": "2023-11-24",
+    "description": "James Joyce da inicio a la modernidad de las letras irlandesas con la publicación de \"Los muertos\", cuento que abre esta exhaustiva compilación de veinticinco relatos editada por Sinéad Mac Aodha y Jorge Fondebrider. Esta antología -en palabras de sus editores- tiene como única ambición que los lectores \"descubran una nueva constelación de autores, que sepan algo que antes no sabían y que de esa forma encuentren conocimiento, compañía y consuelo\"",
+    "industryIdentifiers": [
+     {
+      "type": "ISBN_13",
+      "identifier": "9786075810287"
+     },
+     {
+      "type": "ISBN_10",
+      "identifier": "6075810285"
+     }
+    ],
+    "readingModes": {
+     "text": true,
+     "image": true
+    },
+    "pageCount": 339,
+    "printType": "BOOK",
+    "categories": [
+     "Fiction"
+    ],
+    "maturityRating": "NOT_MATURE",
+    "allowAnonLogging": false,
+    "contentVersion": "0.1.1.0.preview.3",
+    "panelizationSummary": {
+     "containsEpubBubbles": false,
+     "containsImageBubbles": false
+    },
+    "imageLinks": {
+     "smallThumbnail": "http://books.google.com/books/content?id=oIPlEAAAQBAJ&printsec=frontcover&img=1&zoom=5&edge=curl&source=gbs_api",
+     "thumbnail": "http://books.google.com/books/content?id=oIPlEAAAQBAJ&printsec=frontcover&img=1&zoom=1&edge=curl&source=gbs_api"
+    },
+    "language": "es",
+    "previewLink": "http://books.google.de/books?id=oIPlEAAAQBAJ&pg=PT103&dq=The+News+from+Ireland+%26+Other+Stories+William+Trevor&hl=&as_pt=BOOKS&cd=3&source=gbs_api",
+    "infoLink": "https://play.google.com/store/books/details?id=oIPlEAAAQBAJ&source=gbs_api",
+    "canonicalVolumeLink": "https://play.google.com/store/books/details?id=oIPlEAAAQBAJ"
+   },
+   "saleInfo": {
+    "country": "DE",
+    "saleability": "FOR_SALE",
+    "isEbook": true,
+    "listPrice": {
+     "amount": 17.99,
+     "currencyCode": "EUR"
+    },
+    "retailPrice": {
+     "amount": 17.99,
+     "currencyCode": "EUR"
+    },
+    "buyLink": "https://play.google.com/store/books/details?id=oIPlEAAAQBAJ&rdid=book-oIPlEAAAQBAJ&rdot=1&source=gbs_api",
+    "offers": [
+     {
+      "finskyOfferType": 1,
+      "listPrice": {
+       "amountInMicros": 17990000,
+       "currencyCode": "EUR"
+      },
+      "retailPrice": {
+       "amountInMicros": 17990000,
+       "currencyCode": "EUR"
+      },
+      "giftable": true
+     }
+    ]
+   },
+   "accessInfo": {
+    "country": "DE",
+    "viewability": "PARTIAL",
+    "embeddable": true,
+    "publicDomain": false,
+    "textToSpeechPermission": "ALLOWED",
+    "epub": {
+     "isAvailable": true,
+     "acsTokenLink": "http://books.google.de/books/download/Cuentos_irlandeses_contempor%C3%A1neos-sample-epub.acsm?id=oIPlEAAAQBAJ&format=epub&output=acs4_fulfillment_token&dl_type=sample&source=gbs_api"
+    },
+    "pdf": {
+     "isAvailable": true,
+     "acsTokenLink": "http://books.google.de/books/download/Cuentos_irlandeses_contempor%C3%A1neos-sample-pdf.acsm?id=oIPlEAAAQBAJ&format=pdf&output=acs4_fulfillment_token&dl_type=sample&source=gbs_api"
+    },
+    "webReaderLink": "http://play.google.com/books/reader?id=oIPlEAAAQBAJ&hl=&as_pt=BOOKS&source=gbs_api",
+    "accessViewStatus": "SAMPLE",
+    "quoteSharingAllowed": false
+   },
+   "searchInfo": {
+    "textSnippet": "Jorge Fondebrider Sinéad Mac Aodha. William. Trevor. Traducción de Jorge Fondebrider <b>William Trevor</b> (Mitchelstown ... <b>Other Stories</b> (1967), Mrs. Eckdorf in O&#39;Neill&#39;s Hotel (1969), Miss Gomez and the Brethren (1971), The Ballroom of&nbsp;..."
+   }
+  },
+  {
+   "kind": "books#volume",
+   "id": "6XXhAQAAQBAJ",
+   "etag": "+D1OpIhtmtk",
+   "selfLink": "https://www.googleapis.com/books/v1/volumes/6XXhAQAAQBAJ",
+   "volumeInfo": {
+    "title": "A Reader's Companion to the Short Story in English",
+    "authors": [
+     "Erin Fallon",
+     "R.C. Feddersen",
+     "James Kurtzleben",
+     "Maurice A. Lee",
+     "Susan Rochette-Crawley"
+    ],
+    "publisher": "Routledge",
+    "publishedDate": "2013-10-31",
+    "description": "Although the short story has existed in various forms for centuries, it has particularly flourished during the last hundred years. Reader's Companion to the Short Story in English includes alphabetically-arranged entries for 50 English-language short story writers from around the world. Most of these writers have been active since 1960, and they reflect a wide range of experiences and perspectives in their works. Each entry is written by an expert contributor and includes biography, a review of existing criticism, a lengthier analysis of specific works, and a selected bibliography of primary and secondary sources. The volume begins with a detailed introduction to the short story genre and concludes with an annotated bibliography of major works on short story theory.",
+    "industryIdentifiers": [
+     {
+      "type": "ISBN_13",
+      "identifier": "9781135976224"
+     },
+     {
+      "type": "ISBN_10",
+      "identifier": "1135976228"
+     }
+    ],
+    "readingModes": {
+     "text": false,
+     "image": true
+    },
+    "pageCount": 465,
+    "printType": "BOOK",
+    "categories": [
+     "Literary Criticism"
+    ],
+    "averageRating": 5,
+    "ratingsCount": 1,
+    "maturityRating": "NOT_MATURE",
+    "allowAnonLogging": false,
+    "contentVersion": "0.5.2.0.preview.1",
+    "panelizationSummary": {
+     "containsEpubBubbles": false,
+     "containsImageBubbles": false
+    },
+    "imageLinks": {
+     "smallThumbnail": "http://books.google.com/books/content?id=6XXhAQAAQBAJ&printsec=frontcover&img=1&zoom=5&edge=curl&source=gbs_api",
+     "thumbnail": "http://books.google.com/books/content?id=6XXhAQAAQBAJ&printsec=frontcover&img=1&zoom=1&edge=curl&source=gbs_api"
+    },
+    "language": "en",
+    "previewLink": "http://books.google.de/books?id=6XXhAQAAQBAJ&pg=PA410&dq=The+News+from+Ireland+%26+Other+Stories+William+Trevor&hl=&as_pt=BOOKS&cd=4&source=gbs_api",
+    "infoLink": "https://play.google.com/store/books/details?id=6XXhAQAAQBAJ&source=gbs_api",
+    "canonicalVolumeLink": "https://play.google.com/store/books/details?id=6XXhAQAAQBAJ"
+   },
+   "saleInfo": {
+    "country": "DE",
+    "saleability": "FOR_SALE",
+    "isEbook": true,
+    "listPrice": {
+     "amount": 52.42,
+     "currencyCode": "EUR"
+    },
+    "retailPrice": {
+     "amount": 38.72,
+     "currencyCode": "EUR"
+    },
+    "buyLink": "https://play.google.com/store/books/details?id=6XXhAQAAQBAJ&rdid=book-6XXhAQAAQBAJ&rdot=1&source=gbs_api",
+    "offers": [
+     {
+      "finskyOfferType": 1,
+      "listPrice": {
+       "amountInMicros": 52420000,
+       "currencyCode": "EUR"
+      },
+      "retailPrice": {
+       "amountInMicros": 38720000,
+       "currencyCode": "EUR"
+      },
+      "giftable": true
+     }
+    ]
+   },
+   "accessInfo": {
+    "country": "DE",
+    "viewability": "PARTIAL",
+    "embeddable": true,
+    "publicDomain": false,
+    "textToSpeechPermission": "ALLOWED",
+    "epub": {
+     "isAvailable": false
+    },
+    "pdf": {
+     "isAvailable": true,
+     "acsTokenLink": "http://books.google.de/books/download/A_Reader_s_Companion_to_the_Short_Story-sample-pdf.acsm?id=6XXhAQAAQBAJ&format=pdf&output=acs4_fulfillment_token&dl_type=sample&source=gbs_api"
+    },
+    "webReaderLink": "http://play.google.com/books/reader?id=6XXhAQAAQBAJ&hl=&as_pt=BOOKS&source=gbs_api",
+    "accessViewStatus": "SAMPLE",
+    "quoteSharingAllowed": false
+   },
+   "searchInfo": {
+    "textSnippet": "... <b>The News from Ireland</b> and <b>Other Stories</b> . New York : Viking , 1986 . A Night with Mrs. da Tanka : A Play . New York : French , 1972 . Nights at the Alexandra ... <b>William Trevor</b> 410 A Reader&#39;s Companion to the Short <b>Story</b> in English."
+   }
+  },
+  {
+   "kind": "books#volume",
+   "id": "yFAfAQAAIAAJ",
+   "etag": "8fDQE8TILHA",
+   "selfLink": "https://www.googleapis.com/books/v1/volumes/yFAfAQAAIAAJ",
+   "volumeInfo": {
+    "title": "New Irish Writing",
+    "subtitle": "Essays in Memory of Raymond J. Porter",
+    "authors": [
+     "Raymond J. Porter",
+     "James D. Brophy",
+     "Eamon Grennan"
+    ],
+    "publisher": "Twayne Publishers",
+    "publishedDate": "1989",
+    "industryIdentifiers": [
+     {
+      "type": "OTHER",
+      "identifier": "STANFORD:36105038502394"
+     }
+    ],
+    "readingModes": {
+     "text": false,
+     "image": false
+    },
+    "pageCount": 280,
+    "printType": "BOOK",
+    "categories": [
+     "Literary Collections"
+    ],
+    "maturityRating": "NOT_MATURE",
+    "allowAnonLogging": false,
+    "contentVersion": "1.5.1.0.preview.0",
+    "panelizationSummary": {
+     "containsEpubBubbles": false,
+     "containsImageBubbles": false
+    },
+    "imageLinks": {
+     "smallThumbnail": "http://books.google.com/books/content?id=yFAfAQAAIAAJ&printsec=frontcover&img=1&zoom=5&source=gbs_api",
+     "thumbnail": "http://books.google.com/books/content?id=yFAfAQAAIAAJ&printsec=frontcover&img=1&zoom=1&source=gbs_api"
+    },
+    "language": "en",
+    "previewLink": "http://books.google.de/books?id=yFAfAQAAIAAJ&q=The+News+from+Ireland+%26+Other+Stories+William+Trevor&dq=The+News+from+Ireland+%26+Other+Stories+William+Trevor&hl=&as_pt=BOOKS&cd=5&source=gbs_api",
+    "infoLink": "http://books.google.de/books?id=yFAfAQAAIAAJ&dq=The+News+from+Ireland+%26+Other+Stories+William+Trevor&hl=&as_pt=BOOKS&source=gbs_api",
+    "canonicalVolumeLink": "https://books.google.com/books/about/New_Irish_Writing.html?hl=&id=yFAfAQAAIAAJ"
+   },
+   "saleInfo": {
+    "country": "DE",
+    "saleability": "NOT_FOR_SALE",
+    "isEbook": false
+   },
+   "accessInfo": {
+    "country": "DE",
+    "viewability": "NO_PAGES",
+    "embeddable": false,
+    "publicDomain": false,
+    "textToSpeechPermission": "ALLOWED",
+    "epub": {
+     "isAvailable": false
+    },
+    "pdf": {
+     "isAvailable": false
+    },
+    "webReaderLink": "http://play.google.com/books/reader?id=yFAfAQAAIAAJ&hl=&as_pt=BOOKS&source=gbs_api",
+    "accessViewStatus": "NONE",
+    "quoteSharingAllowed": false
+   },
+   "searchInfo": {
+    "textSnippet": "... <b>William Trevor Stories</b> Robert E. Rhodes Prior to the 1986 collection <b>The News from Ireland</b> and <b>Other Stories</b> , <b>William Trevor</b> had published five collections of short <b>stories</b> . The first collection ( 1967 ) contained a single Irish <b>story</b>&nbsp;..."
+   }
+  }
+ ]
+}

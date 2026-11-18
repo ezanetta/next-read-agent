@@ -44,7 +44,7 @@ from book_agent.baseline import BaselineResult, run_baseline
 from book_agent.config import Settings, get_settings
 from book_agent.domain.acceptance import Problem, blocking_problems
 from book_agent.domain.models import Profile
-from book_agent.domain.recommendations import Check, Filters, Unknown, ValidationResult
+from book_agent.domain.recommendations import Check, Filters, Lookup, Unknown, ValidationResult
 from book_agent.domain.requests import FilterName, ResolvedRequest
 from book_agent.llm.base import LLMClient
 from book_agent.llm.calls import LLMCall
@@ -409,7 +409,8 @@ def _recommendations(validation: ValidationResult) -> list[str]:
         lines.append(f"{number}. {rec.title} by {rec.author}")
         lines.append(f"   Reason: {rec.reason}")
         if match is not None:
-            lines.append(f"   Matched: {match.title} | {match.link}")
+            via = " (found by the fallback lookup)" if item.found_by is Lookup.FALLBACK else ""
+            lines.append(f"   Matched: {match.title} | {match.link}{via}")
             pages = match.pages or "unknown"
             lines.append(f"   Pages: {pages} | Language: {match.language or 'unknown'}")
         checks = {

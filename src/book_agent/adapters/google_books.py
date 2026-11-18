@@ -29,6 +29,25 @@ _YEAR_PATTERN = re.compile(r"^(\d{4})")
 _AMPERSAND = re.compile(r"\s*&\s*")
 
 
+_TITLE_CORE_END = re.compile(r"[:&(;\[]")
+_PLAIN_WORD = re.compile(r"^\w+$")
+
+
+def fielded_query(title: str, author: str) -> str:
+    """`intitle:"<core of the title>" inauthor:<surname>` for Google Books.
+
+    The core is the title before the first ":", "&", "(", ";" or "[": a phrase search for
+    "The News from Ireland and Other Stories" missed the edition titled "... & Other
+    Stories", while "The News from Ireland" found it first (F-007). The surname is the
+    author's last word, quoted unless it is a plain word.
+    """
+    core = _TITLE_CORE_END.split(title, maxsplit=1)[0].replace('"', "").strip() or title
+    words = author.split()
+    surname = words[-1] if words else author
+    author_term = surname if _PLAIN_WORD.match(surname) else f'"{surname}"'
+    return f'intitle:"{" ".join(core.split())}" inauthor:{author_term}'
+
+
 def clean_query(query: str) -> str:
     """The query as Google Books ranks it best: "&" spelled "and".
 
@@ -69,6 +88,13 @@ class GoogleBooksSearch:
         # langRestrict is not reliable: drop books tagged with another language.
         # Unknown languages pass through; that policy belongs to the domain validator.
         return [b for b in books if language is None or b.language in (None, language)]
+
+    async def find(self, title: str, author: str, *, max_results: int = 10) -> list[CatalogBook]:
+        """Fielded search: the core of the title as a phrase, and the author's surname.
+
+        Used by the validator when a free-text search finds no matching edition (D-019).
+        """
+        return await self.search(fielded_query(title, author), max_results=max_results)
 
     async def get_details(self, volume_id: str) -> CatalogBook | None:
         if not volume_id.strip():

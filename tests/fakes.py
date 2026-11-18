@@ -34,6 +34,7 @@ class FakeBookSearch:
         self.books = list(books or [])
         self.searches: list[tuple[str, str | None, int]] = []
         self.detail_lookups: list[str] = []
+        self.finds: list[tuple[str, str]] = []
 
     async def search(
         self, query: str, *, language: str | None = None, max_results: int = 10
@@ -45,6 +46,18 @@ class FakeBookSearch:
             for b in self.books
             if words <= _words(" ".join([b.title, *b.authors]))
             and (language is None or b.language in (None, language))
+        ]
+        return matches[:max_results]
+
+    async def find(self, title: str, author: str, *, max_results: int = 10) -> list[CatalogBook]:
+        """Every word of the title and the author's last name must appear in the book."""
+        self.finds.append((title, author))
+        surname = author.split()[-1] if author.split() else author
+        title_words, author_words = _words(title), _words(surname)
+        matches = [
+            b
+            for b in self.books
+            if title_words <= _words(b.title) and author_words <= _words(" ".join(b.authors))
         ]
         return matches[:max_results]
 

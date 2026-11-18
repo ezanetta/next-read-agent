@@ -16,6 +16,7 @@ from book_agent.domain.recommendations import (
     Check,
     CheckedRecommendation,
     Filters,
+    Lookup,
     MatchEvidence,
     Recommendation,
     Rule,
@@ -58,6 +59,7 @@ class _Resolution:
     match: CatalogBook | None  # the best edition for the filters
     lookup_error: str | None = None
     editions: tuple[CatalogBook, ...] = ()  # every edition matching title and author
+    found_by: Lookup | None = None
 
 
 @dataclass(frozen=True)
@@ -119,7 +121,9 @@ async def _resolve(rec: Recommendation, filters: Filters, books: BookSearch) -> 
 
     Searches with the language filter first; if no edition matches title and author,
     searches again without it, so a book that exists only in another language is
-    reported as a language failure rather than as not found.
+    reported as a language failure rather than as not found. If the free-text search
+    still finds no match, a stricter title + author lookup gets one try before the book
+    is reported as not found: search ranking alone must not reject a real book (D-019).
     """
     query = f"{rec.title} {rec.author}"
     try:
@@ -131,13 +135,19 @@ async def _resolve(rec: Recommendation, filters: Filters, books: BookSearch) -> 
             )
         if not matches:
             matches = _matching(rec, await books.search(query, max_results=_SEARCH_RESULTS))
+        found_by = Lookup.SEARCH
+        if not matches:
+            matches = _matching(
+                rec, await books.find(rec.title, rec.author, max_results=_SEARCH_RESULTS)
+            )
+            found_by = Lookup.FALLBACK
     except BookSearchError as e:
         return _Resolution(match=None, lookup_error=str(e))
     if not matches:
         return _Resolution(match=None)
     # Best edition: fewest failed filters, then fewest unknowns; ties keep search order.
     best = min(matches, key=lambda c: _filter_score(c, filters))
-    return _Resolution(match=best, editions=tuple(matches))
+    return _Resolution(match=best, editions=tuple(matches), found_by=found_by)
 
 
 def _matching(rec: Recommendation, candidates: list[CatalogBook]) -> list[CatalogBook]:
@@ -252,6 +262,7 @@ def _check_one(
     item = CheckedRecommendation(
         recommendation=rec,
         match=match,
+        found_by=resolution.found_by,
         library_match=library_match,
         library_evidence=library.evidence,
         cited_titles=cited,
