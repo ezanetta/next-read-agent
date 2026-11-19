@@ -142,6 +142,7 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Choice:** Once, when one turn is left: the user message that closes the next-to-last turn ends with "This is your last turn. Call submit_recommendations now with your 3 best books: there are no turns left for searching." It goes after the tool results (or after the reminder, when the turn had no tool call), as a text part of the same message. It applies to every prompt version, and the trace marks it.
 - **Reason:** One message at the moment it matters is cheaper and harder to ignore than a counter on every turn. The same message avoids two user messages in a row, which providers handle differently, and keeps tool results before text, which Claude requires. The notice is loop behavior, not prompt wording to compare, so it isn't versioned; runs after this change include it for agent_v1 too, which matters when comparing them with the first agent runs.
 - **Not done:** forcing a submit-only tool choice on the last turn. `LLMClient` has no tool-choice option yet; worth adding if the notice proves not enough.
+- **Revised by D-028 (2026-11-19):** the notice now goes out with 2 turns left, and the last turn forces `submit_recommendations`.
 
 ## D-019 · A title + author lookup before reporting a book as not found (2026-11-18)
 
@@ -159,6 +160,7 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Send the last-turn notice with 2 turns left (costs every run a turn, and a model that ignores it fails the same way); one repair turn only when a submission on the last turn is rejected.
 - **Choice:** One repair turn. `MAX_ITERATIONS = 6` regular turns, `REPAIR_TURNS = 1`, effective cap `MAX_TURNS = 7`. The repair turn is granted only when a submission on the last regular turn is rejected; the rejection feedback then ends with a repair notice (keep the accepted books, replace the rejected ones, submit now). A rejection on an earlier turn adds nothing, since a turn is left. A rejection or a search in the repair turn ends the run. A catalog outage still stops the run at once (D-014). Results, errors and the trace record whether the repair turn was used.
 - **Reason:** Every rejection gets one chance to be fixed, at a bounded cost (at most one extra request), without taking a turn away from runs that never need it. Recording its use lets evals see how often runs depend on it.
+- **Revised by D-028 (2026-11-19):** the repair turn forces `submit_recommendations`, so a search can no longer use it up.
 
 ## D-021 · Evals: run once, score many times (2026-11-18)
 
@@ -215,3 +217,18 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Choice:** The Google Books adapter retries every request once, after 0.5 s plus up to 0.25 s of random jitter, on a 5xx answer or a network error (timeout, connection failure). 4xx answers, 429 included, are not retried. A second failure is reported as before.
 - **Why this differs from the LLM adapter:** the "no retries in the adapter" rule was for the LLM: a Gemini request costs quota and tokens, a retry can repeat work, and rate limits need policy (the eval's `PacedLLM` waits `retry_after` once and stops on the daily quota, D-021). Google Books requests are read-only, idempotent and free beyond the daily quota, so one quick retry is safe and cheap. The jitter keeps parallel validation lookups from retrying in step. Open Library keeps no retries: a failed work-key lookup only falls back to the same-work judge, it never stops a run (D-013).
 - **Reason:** Retrying where the error happens fixes it for every caller (validation, the agent's search tool, the UI later) instead of each one handling it.
+
+## D-028 · Force submit on the last turn and the repair turn; notice with 2 turns left (2026-11-19)
+
+- **Context:** F-012: all 4 `iterations_exhausted` runs were late submissions. The model searched one book per turn, submitted on the last turn, and the repair turn wasn't enough: one run ignored the last-turn notice and never submitted; another searched during the repair turn, which ends the run.
+- **Options:**
+  - Keep the last-turn notice (D-018): the evidence shows it's ignored.
+  - Notice with 2 turns left: rejected in D-020 because it costs every run a turn and a model that ignores it fails the same way. That reason assumed late submission was rare; F-012 shows it is what fails runs.
+  - Force the tool through the API: the next step D-018 recorded.
+- **Choice:** Both.
+  - `LLMClient.complete` takes an optional `ToolChoice` (forced call to one of the named tools; None lets the model choose). Gemini maps it to function calling mode ANY with `allowed_function_names`; Claude's `tool_choice` maps as `{"type": "tool", "name": ...}` for one tool, `{"type": "any"}` for all, and a subset is sent as only those tools.
+  - The last regular turn and the repair turn force `submit_recommendations`. If a model returns another tool call anyway, the loop doesn't run it and answers with an error result.
+  - The notice goes out with 2 turns left: "Call submit_recommendations now ... if a book is rejected, you can still fix it on your last turn."
+  - The trace records the notice (`submit_notice`) and the forced tool (`forced_tool`).
+- **Reason:** A forced call removes the failure mode the notice couldn't: the turn that must submit can't be spent searching. The earlier notice gives a rejected submission a regular turn to be fixed before the forced one.
+- **Comparability:** this changes the loop, and D-027 changed the Google Books adapter that both systems use, so new runs go in a fresh results directory, per D-021.

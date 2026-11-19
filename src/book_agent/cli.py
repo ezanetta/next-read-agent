@@ -303,15 +303,18 @@ def format_trace(turns: list[TurnTrace]) -> list[str]:
     """One heading line per turn, then one line per tool call: arguments -> outcome."""
     lines = ["Trace:"]
     for turn in turns:
-        heading = f"Turn {turn.iteration} ({turn.stop_reason.value}, {turn.output_tokens} out)"
+        forced = f", forced {turn.forced_tool}" if turn.forced_tool else ""
+        heading = (
+            f"Turn {turn.iteration} ({turn.stop_reason.value}, {turn.output_tokens} out{forced})"
+        )
         lines.append(f"{heading}: {turn.note}" if turn.note else heading)
         if turn.text.strip():
             lines.append(f'  text: "{_shorten(one_line(turn.text), 120)}"')
         for tool in turn.tools:
             error = "[error] " if tool.is_error else ""
             lines.append(f"  {tool.name} {_arguments(tool)} -> {error}{tool.outcome}")
-        if turn.last_turn_notice:
-            lines.append("  (last-turn notice sent)")
+        if turn.submit_notice:
+            lines.append("  (submit-now notice sent)")
         if turn.repair_turn_granted:
             lines.append("  (repair turn granted)")
     return lines

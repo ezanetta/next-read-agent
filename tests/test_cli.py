@@ -369,7 +369,7 @@ def test_verbose_is_an_agent_option_only() -> None:
         main(["baseline", "--verbose"])
 
 
-async def test_agent_verbose_trace_marks_the_last_turn_notice() -> None:
+async def test_agent_verbose_trace_marks_the_notice_and_the_forced_turn() -> None:
     search = ToolCallPart(id="s", name="search_books", arguments={"query": "foundation"})
     script = [tool_call_response(search) for _ in range(MAX_ITERATIONS - 1)]
     output, _ = await agent_command(
@@ -379,7 +379,8 @@ async def test_agent_verbose_trace_marks_the_last_turn_notice() -> None:
         books=catalog(),
         verbose=True,
     )
-    assert output.count("  (last-turn notice sent)") == 1
+    assert output.count("  (submit-now notice sent)") == 1
+    assert f"Turn {MAX_ITERATIONS} (tool_use, 100 out, forced submit_recommendations)" in output
 
 
 def test_agent_prompt_option_accepts_the_registered_versions(tmp_path: Path) -> None:
