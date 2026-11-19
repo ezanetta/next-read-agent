@@ -28,6 +28,10 @@ SEARCH_QUERY = "The News from Ireland and Other Stories William Trevor"
 FALLBACK_QUERY = 'intitle:"The News from Ireland" inauthor:Trevor'
 
 
+async def _no_sleep(seconds: float) -> None:
+    """Retries in tests don't wait."""
+
+
 def recorded(name: str) -> httpx.Response:
     return httpx.Response(200, json=json.loads((FIXTURES / name).read_text(encoding="utf-8")))
 
@@ -35,7 +39,7 @@ def recorded(name: str) -> httpx.Response:
 @pytest.fixture
 async def books() -> AsyncIterator[GoogleBooksSearch]:
     async with httpx.AsyncClient() as client:
-        yield GoogleBooksSearch(client)
+        yield GoogleBooksSearch(client, sleep=_no_sleep)
 
 
 async def test_fallback_rescues_a_book_the_search_ranked_out(

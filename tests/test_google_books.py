@@ -7,12 +7,22 @@ import httpx
 import pytest
 import respx
 
-from book_agent.adapters.google_books import BASE_URL, GoogleBooksSearch, fielded_query
+from book_agent.adapters.google_books import (
+    BASE_URL,
+    RETRY_JITTER_S,
+    GoogleBooksSearch,
+    fielded_query,
+    retry_jitter,
+)
 from book_agent.domain.models import CatalogBook
 from book_agent.ports import BookSearch, BookSearchError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "google_books"
 VOLUMES_URL = f"{BASE_URL}/volumes"
+
+
+async def no_sleep(seconds: float) -> None:
+    """Retries in tests don't wait."""
 
 
 def load(name: str) -> object:
@@ -27,7 +37,7 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
 
 @pytest.fixture
 def books(client: httpx.AsyncClient) -> GoogleBooksSearch:
-    return GoogleBooksSearch(client)
+    return GoogleBooksSearch(client, sleep=no_sleep)
 
 
 @pytest.fixture
@@ -285,12 +295,14 @@ async def test_malformed_response_raises(
 async def test_errors_never_leak_the_api_key(
     client: httpx.AsyncClient, respx_mock: respx.MockRouter
 ) -> None:
-    books = GoogleBooksSearch(client, api_key="super-secret-key")
+    books = GoogleBooksSearch(client, api_key="super-secret-key", sleep=no_sleep)
     respx_mock.get(VOLUMES_URL).mock(
         side_effect=[
-            httpx.Response(429, json=load("error_429.json")),
+            httpx.Response(429, json=load("error_429.json")),  # not retried
             httpx.ReadTimeout("slow"),
+            httpx.ReadTimeout("still slow"),  # the retry
             httpx.ConnectError("down"),
+            httpx.ConnectError("still down"),  # the retry
         ]
     )
     for _ in range(3):
@@ -350,3 +362,95 @@ async def test_find_sends_the_fielded_query(
     params = search_route.calls.last.request.url.params
     assert params["q"] == 'intitle:"The News from Ireland" inauthor:Trevor'
     assert params["maxResults"] == "5"
+
+
+# --- Retry once on 5xx and network errors (D-027) -----------------------------------------
+
+
+class Sleeps:
+    def __init__(self) -> None:
+        self.waits: list[float] = []
+
+    async def __call__(self, seconds: float) -> None:
+        self.waits.append(seconds)
+
+
+def retrying(client: httpx.AsyncClient, sleeps: Sleeps) -> GoogleBooksSearch:
+    return GoogleBooksSearch(client, retry_delay_s=0.5, jitter=lambda: 0.1, sleep=sleeps)
+
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+async def test_a_5xx_is_retried_once_after_a_pause(
+    client: httpx.AsyncClient, respx_mock: respx.MockRouter, status: int
+) -> None:
+    sleeps = Sleeps()
+    route = respx_mock.get(VOLUMES_URL).mock(
+        side_effect=[
+            httpx.Response(status, json={"error": {"message": "Service temporarily unavailable."}}),
+            httpx.Response(200, json=load("search_results.json")),
+        ]
+    )
+    results = await retrying(client, sleeps).search("dune")
+    assert len(results) == 3
+    assert route.call_count == 2
+    assert sleeps.waits == [0.6]  # delay plus jitter
+
+
+@pytest.mark.parametrize("error", [httpx.ReadTimeout("slow"), httpx.ConnectError("down")])
+async def test_a_network_error_is_retried_once(
+    client: httpx.AsyncClient, respx_mock: respx.MockRouter, error: Exception
+) -> None:
+    sleeps = Sleeps()
+    route = respx_mock.get(VOLUMES_URL).mock(
+        side_effect=[error, httpx.Response(200, json=load("search_results.json"))]
+    )
+    assert len(await retrying(client, sleeps).search("dune")) == 3
+    assert route.call_count == 2 and len(sleeps.waits) == 1
+
+
+async def test_a_second_5xx_is_reported(
+    client: httpx.AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    unavailable = {"error": {"message": "Service temporarily unavailable."}}
+    route = respx_mock.get(VOLUMES_URL).mock(
+        side_effect=[httpx.Response(503, json=unavailable), httpx.Response(503, json=unavailable)]
+    )
+    with pytest.raises(BookSearchError, match="HTTP 503: Service temporarily unavailable"):
+        await retrying(client, Sleeps()).search("dune")
+    assert route.call_count == 2  # one retry, not more
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 429])
+async def test_4xx_answers_are_not_retried(
+    client: httpx.AsyncClient, respx_mock: respx.MockRouter, status: int
+) -> None:
+    sleeps = Sleeps()
+    route = respx_mock.get(f"{VOLUMES_URL}/abc").mock(
+        return_value=httpx.Response(status, json={"error": {"message": "no"}})
+    )
+    books = retrying(client, sleeps)
+    if status == 404:
+        assert await books.get_details("abc") is None
+    else:
+        with pytest.raises(BookSearchError):
+            await books.get_details("abc")
+    assert route.call_count == 1 and sleeps.waits == []
+
+
+async def test_details_and_find_are_retried_too(
+    client: httpx.AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    detail = respx_mock.get(f"{VOLUMES_URL}/abc").mock(
+        side_effect=[httpx.Response(503), httpx.Response(200, json=load("volume_details.json"))]
+    )
+    search = respx_mock.get(VOLUMES_URL).mock(
+        side_effect=[httpx.Response(502), httpx.Response(200, json=load("search_results.json"))]
+    )
+    books = retrying(client, Sleeps())
+    assert await books.get_details("abc") is not None
+    assert await books.find("Dune", "Frank Herbert")
+    assert detail.call_count == 2 and search.call_count == 2
+
+
+def test_jitter_stays_small() -> None:
+    assert all(0 <= retry_jitter() <= RETRY_JITTER_S for _ in range(100))
