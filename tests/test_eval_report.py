@@ -198,3 +198,36 @@ def test_report_command_reads_records_and_writes_markdown(
     assert (
         (tmp_path / "set_v1" / "report.md").read_text(encoding="utf-8").startswith("# Eval report")
     )
+
+
+def test_per_case_outcomes_break_failures_down() -> None:
+    records = [
+        ACCEPTED,
+        record("a", run_index=2, final_validation=validation([Rule.MAX_PAGES])),
+        record(
+            "a",
+            run_index=3,
+            error_kind="catalog_unavailable",
+            final_validation=validation(unknowns=[Rule.NOT_FOUND]),
+        ),
+        EXHAUSTED,
+        record("a", config=BASELINE, error_kind="unparseable"),
+    ]
+    report = build_report("set_v1", records)
+    assert report.per_case_outcomes["a"][AGENT.id] == {
+        "accepted": 1,
+        "rejected": 1,
+        "catalog_unavailable": 1,
+    }
+    assert report.per_case_outcomes["c"][AGENT.id] == {"iterations_exhausted": 1}
+
+    markdown = render_markdown(report)
+    assert "## Per case outcomes" in markdown
+    header = (
+        "| Case | Configuration | accepted | rejected | catalog_unavailable "
+        "| iterations_exhausted | unparseable |"
+    )
+    assert header in markdown
+    assert f"| a | {AGENT.id} | 1 | 1 | 1 | 0 | 0 |" in markdown
+    assert f"| a | {BASELINE.id} | 0 | 0 | 0 | 0 | 1 |" in markdown
+    assert f"| c | {AGENT.id} | 0 | 0 | 0 | 1 | 0 |" in markdown

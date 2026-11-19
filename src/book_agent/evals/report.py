@@ -97,6 +97,10 @@ class Report:
     configs: list[ConfigStats]
     # case id -> config id -> (accepted, runs)
     per_case: dict[str, dict[str, tuple[int, int]]]
+    # case id -> config id -> outcome ("accepted", "rejected", or a failure kind) -> runs
+    per_case_outcomes: dict[str, dict[str, Counter[str]]] = field(
+        default_factory=dict[str, dict[str, Counter[str]]]
+    )
 
 
 def build_report(
@@ -115,7 +119,17 @@ def build_report(
                 runs + 1,
             )
     configs = [config_stats(cid, group, policy) for cid, group in sorted(by_config.items())]
-    return Report(case_set=case_set, configs=configs, per_case=dict(sorted(per_case.items())))
+    per_case_outcomes: dict[str, dict[str, Counter[str]]] = {}
+    for config_id, group in by_config.items():
+        for record in group:
+            cases = per_case_outcomes.setdefault(record.case_id, {})
+            cases.setdefault(config_id, Counter())[outcome(record, policy)] += 1
+    return Report(
+        case_set=case_set,
+        configs=configs,
+        per_case=dict(sorted(per_case.items())),
+        per_case_outcomes=dict(sorted(per_case_outcomes.items())),
+    )
 
 
 def config_stats(config_id: str, records: list[EvalRecord], policy: Policy) -> ConfigStats:
@@ -186,6 +200,8 @@ def render_markdown(report: Report) -> str:
         lines += [f"- Warning: {w}" for w in stats.warnings]
     lines += ["", "## Per case (accepted / runs)", ""]
     lines += _case_table(report)
+    lines += ["", "## Per case outcomes", ""]
+    lines += _case_outcome_table(report)
     return "\n".join(lines) + "\n"
 
 
@@ -248,6 +264,19 @@ def _case_table(report: Report) -> list[str]:
             f"{cells[c][0]}/{cells[c][1]}" if c in cells else NOT_APPLICABLE for c in config_ids
         ]
         rows.append(_row([case_id, *values]))
+    return rows
+
+
+def _case_outcome_table(report: Report) -> list[str]:
+    """One row per case and configuration, one column per outcome seen in the report:
+    accepted, rejected, then each failure kind, so failures show without the records."""
+    seen = {o for cases in report.per_case_outcomes.values() for c in cases.values() for o in c}
+    first = [o for o in (ACCEPTED, REJECTED) if o in seen]
+    columns = first + sorted(seen - set(first))
+    rows = [_row(["Case", "Configuration", *columns]), _row(["---"] * (len(columns) + 2))]
+    for case_id, cases in report.per_case_outcomes.items():
+        for config_id, counts in sorted(cases.items()):
+            rows.append(_row([case_id, config_id, *(str(counts[o]) for o in columns)]))
     return rows
 
 
