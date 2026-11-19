@@ -151,6 +151,33 @@ class ToolSpec(BaseModel, frozen=True):
 # --- Responses --------------------------------------------------------------
 
 
+class ToolChoice(BaseModel, frozen=True):
+    """Makes a request call one of the named tools: no text-only answer, no other tool.
+
+    Passing None instead lets the model choose (text, or any declared tool). Every name
+    must be one of the request's tools; adapters raise ValueError otherwise.
+
+    Provider mapping:
+    - Gemini: function calling mode ANY with allowed_function_names = names.
+    - Claude: one name -> tool_choice {"type": "tool", "name": name}; every declared tool
+      -> {"type": "any"}; a subset of several -> send only those tools, with
+      {"type": "any"} (Claude has no "one of these" option).
+    """
+
+    names: tuple[str, ...] = Field(min_length=1)
+
+    @classmethod
+    def required(cls, *names: str) -> Self:
+        return cls(names=names)
+
+    def check_against(self, tools: Sequence["ToolSpec"]) -> None:
+        """Raise ValueError if a name isn't among the request's tools."""
+        declared = {t.name for t in tools}
+        unknown = [n for n in self.names if n not in declared]
+        if unknown:
+            raise ValueError(f"tool_choice names undeclared tools: {', '.join(unknown)}")
+
+
 class StopReason(StrEnum):
     END_TURN = "end_turn"
     TOOL_USE = "tool_use"
@@ -189,10 +216,12 @@ class LLMClient(Protocol):
         tools: Sequence[ToolSpec] = (),
         max_tokens: int,
         temperature: float | None = None,
+        tool_choice: ToolChoice | None = None,
     ) -> LLMResponse:
         """Send one request and return the assistant's next message.
 
-        `temperature=None` uses the provider's default.
+        `temperature=None` uses the provider's default. `tool_choice` forces a call to
+        one of the named tools; None lets the model choose.
         Raises LLMRateLimitError, LLMRefusalError or LLMError on failure.
         """
         ...

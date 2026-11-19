@@ -13,7 +13,14 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable, Sequence
 
-from book_agent.llm.base import LLMClient, LLMRateLimitError, LLMResponse, Message, ToolSpec
+from book_agent.llm.base import (
+    LLMClient,
+    LLMRateLimitError,
+    LLMResponse,
+    Message,
+    ToolChoice,
+    ToolSpec,
+)
 
 DEFAULT_MAX_RPM = 15  # gemini-3.5-flash-lite free tier
 DEFAULT_RETRY_WAIT_S = 60.0  # when a rate limit suggests no retry_after
@@ -54,6 +61,7 @@ class PacedLLM:
         tools: Sequence[ToolSpec] = (),
         max_tokens: int,
         temperature: float | None = None,
+        tool_choice: ToolChoice | None = None,
     ) -> LLMResponse:
         async def send() -> LLMResponse:
             await self._wait_for_slot()
@@ -63,6 +71,7 @@ class PacedLLM:
                 tools=tools,
                 max_tokens=max_tokens,
                 temperature=temperature,
+                tool_choice=tool_choice,
             )
 
         try:

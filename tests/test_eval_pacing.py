@@ -1,7 +1,14 @@
 import pytest
 
 from book_agent.evals.pacing import DEFAULT_RETRY_WAIT_S, PacedLLM, QuotaExhausted
-from book_agent.llm.base import LLMClient, LLMError, LLMRateLimitError, LLMResponse, Message
+from book_agent.llm.base import (
+    LLMClient,
+    LLMError,
+    LLMRateLimitError,
+    LLMResponse,
+    Message,
+    ToolChoice,
+)
 from tests.fakes import FakeLLM, text_response
 
 
@@ -107,3 +114,11 @@ async def test_other_errors_pass_through_untouched() -> None:
 def test_max_rpm_must_be_positive() -> None:
     with pytest.raises(ValueError, match="max_rpm"):
         PacedLLM(FakeLLM([]), max_rpm=0)
+
+
+async def test_tool_choice_is_passed_through() -> None:
+    clock = FakeClock()
+    llm, inner = paced([text_response("ok")], clock)
+    choice = ToolChoice.required("submit_recommendations")
+    await llm.complete(system="s", messages=[Message.user("hi")], max_tokens=10, tool_choice=choice)
+    assert inner.requests[0].tool_choice == choice

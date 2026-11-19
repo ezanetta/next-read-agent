@@ -17,6 +17,7 @@ from book_agent.llm.base import (
     StopReason,
     TextPart,
     ToolCallPart,
+    ToolChoice,
     ToolResultPart,
     ToolSpec,
 )
@@ -582,3 +583,35 @@ async def test_errors_never_contain_the_api_key() -> None:
         with pytest.raises(LLMError) as error:
             await client.complete(system="s", messages=[Message.user("hi")], max_tokens=10)
         assert API_KEY not in str(error.value)
+
+
+# --- Tool choice --------------------------------------------------------------------------
+
+SUBMIT = ToolSpec.from_model("submit_recommendations", "Submit the answer.", SearchArgs)
+
+
+def test_tool_choice_maps_to_mode_any_with_allowed_names() -> None:
+    config = to_gemini_config(
+        system="s", tools=[SEARCH, SUBMIT], max_tokens=10, temperature=None, thinking_level=None,
+        tool_choice=ToolChoice.required("submit_recommendations"),
+    )  # fmt: skip
+    assert config.tool_config is not None
+    calling = config.tool_config.function_calling_config
+    assert calling is not None
+    assert calling.mode == types.FunctionCallingConfigMode.ANY
+    assert calling.allowed_function_names == ["submit_recommendations"]
+
+
+def test_without_tool_choice_the_model_chooses() -> None:
+    config = to_gemini_config(
+        system="s", tools=[SEARCH], max_tokens=10, temperature=None, thinking_level=None
+    )
+    assert config.tool_config is None
+
+
+def test_tool_choice_must_name_declared_tools() -> None:
+    with pytest.raises(ValueError, match="undeclared tools: fly_to_moon"):
+        to_gemini_config(
+            system="s", tools=[SEARCH], max_tokens=10, temperature=None, thinking_level=None,
+            tool_choice=ToolChoice.required("fly_to_moon"),
+        )  # fmt: skip

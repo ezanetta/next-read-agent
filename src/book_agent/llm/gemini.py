@@ -26,6 +26,7 @@ from book_agent.llm.base import (
     StopReason,
     TextPart,
     ToolCallPart,
+    ToolChoice,
     ToolResultPart,
     ToolSpec,
     Usage,
@@ -83,6 +84,7 @@ class GeminiClient:
         tools: Sequence[ToolSpec] = (),
         max_tokens: int,
         temperature: float | None = None,
+        tool_choice: ToolChoice | None = None,
     ) -> LLMResponse:
         contents = to_gemini_contents(messages)
         config = to_gemini_config(
@@ -91,6 +93,7 @@ class GeminiClient:
             max_tokens=max_tokens,
             temperature=temperature,
             thinking_level=self._thinking_level,
+            tool_choice=tool_choice,
         )
         try:
             # The SDK's `contents` union mentions types from optional deps (e.g. PIL).
@@ -162,7 +165,11 @@ def to_gemini_config(
     max_tokens: int,
     temperature: float | None,
     thinking_level: GeminiThinkingLevel | None,
+    tool_choice: ToolChoice | None = None,
 ) -> types.GenerateContentConfig:
+    """Raises ValueError if tool_choice names a tool that isn't declared."""
+    if tool_choice is not None:
+        tool_choice.check_against(tools)
     declarations = [
         types.FunctionDeclaration(
             name=t.name, description=t.description, parameters_json_schema=t.parameters
@@ -172,6 +179,17 @@ def to_gemini_config(
     return types.GenerateContentConfig(
         system_instruction=system or None,
         tools=[types.Tool(function_declarations=declarations)] if declarations else None,
+        # ANY with allowed names: the model must call one of them (ToolChoice).
+        tool_config=(
+            types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode=types.FunctionCallingConfigMode.ANY,
+                    allowed_function_names=list(tool_choice.names),
+                )
+            )
+            if tool_choice is not None
+            else None
+        ),
         max_output_tokens=max_tokens,
         temperature=temperature,
         thinking_config=(

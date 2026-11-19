@@ -14,6 +14,7 @@ from book_agent.llm.base import (
     StopReason,
     TextPart,
     ToolCallPart,
+    ToolChoice,
     ToolResultPart,
     ToolSpec,
     Usage,
@@ -275,3 +276,16 @@ def test_text_skips_empty_parts_that_only_carry_metadata() -> None:
         TextPart(text="Answer."), TextPart(text="", metadata={"gemini.thought_signature": "x"})
     )
     assert message.text == "Answer."
+
+
+def test_tool_choice_needs_at_least_one_name() -> None:
+    with pytest.raises(ValidationError):
+        ToolChoice(names=())
+    assert ToolChoice.required("a", "b").names == ("a", "b")
+
+
+def test_tool_choice_checks_names_against_the_tools() -> None:
+    spec = ToolSpec(name="submit_recommendations", description="d", parameters={"type": "object"})
+    ToolChoice.required("submit_recommendations").check_against([spec])
+    with pytest.raises(ValueError, match="undeclared tools: search_books"):
+        ToolChoice.required("search_books").check_against([spec])
