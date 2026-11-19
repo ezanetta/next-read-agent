@@ -165,3 +165,18 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - The 4 `catalog_unavailable` runs and the two hard cases need investigating before reading more into the numbers.
 - **Fix:** None yet; investigation follows.
 - **How it was verified:** The report above, from the stored records.
+
+## F-012 · The 8 agent failures in F-011: transient 503s and late submission (2026-11-19)
+
+- **What happened:** Investigation of the 8 failed `agent_v3` runs in F-011, from the stored records only, then 3 live Google Books requests for one lookup.
+- **Cause 1, transient Google Books 503s (4 `catalog_unavailable` runs):** each run lost exactly one validation lookup to HTTP 503 "Service temporarily unavailable": no 429, no timeout. The agent's own searches hit two more. That's 6 failures in at least 370 Google Books requests during the agent's 20 minutes, about 1.6%, spread over 17 minutes rather than one outage. A run makes about 10 Google Books requests, the adapter never retried, and one failed validation lookup stops a run (D-014): a 1.6% request error rate became 10% of runs.
+- **Cause 2, late submission (4 `iterations_exhausted` runs):** the model searched one book per turn, got the last-turn notice, submitted on turn 6, and then the one repair turn wasn't enough:
+  - history-nonfiction run 1: the repair replaced a `not_found` book with one of 355 pages against a 300 limit, never checked.
+  - history-nonfiction run 2: never submitted; it ignored the last-turn notice and kept searching.
+  - history-nonfiction run 3: turn 6 submitted two hallucinated titles (caught as `not_found`); in the repair turn it searched instead of submitting, which ends the run.
+  - kafka-filters run 1: the judge rejected a book on the to-read list in Spanish; the repair swapped in *The Metamorphosis*, already read (F-001), which it had searched on turn 2.
+- **A likely false `not_found`:** history-nonfiction run 1's *Sobre la Brevedad de la Vida* (Séneca). Live check: both validator lookups returned 5 Séneca editions each, all matching on author, none on title. The exact title exists only inside combined volumes joined by " - " or ". " ("Sobre la Brevedad de la Vida - Sobre la Felicidad"), which D-001's variants don't split, and the standalone editions use other Spanish translations of the Latin title ("De la brevedad de la vida"). Not a retrieval miss this time: the matcher rejects real editions. A third request (the model's own query) got a 503 itself.
+- **Baseline, for context:** kafka-filters recommended the reader's own short books in 2 of 3 runs, each justified by citing itself (F-001 and F-004 together); history-nonfiction failed on hallucinated titles.
+- **Quality the rules don't see:** the "history" picks included *Meditaciones* and Séneca (philosophy), and all three history runs began by searching a novel.
+- **How it was detected:** The report's per-case outcomes, the records' rejections and turn traces, and live Google Books requests for the Séneca lookup.
+- **Fix:** Retry Google Books requests once on 5xx and network errors (D-027). Force `submit_recommendations` on the last turn and the repair turn, and move the notice to 2 turns left (D-028). The Séneca title matching: pending a decision.
