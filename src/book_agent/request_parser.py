@@ -6,12 +6,15 @@ interpret_request never raises: problems end up in Interpretation.error.
 """
 
 from time import perf_counter
+from typing import Literal
 
 from pydantic import BaseModel
 
 from book_agent.domain.recommendations import Filters
 from book_agent.domain.requests import (
     MAX_REQUEST_CHARS,
+    ConflictingFilters,
+    ExtractedRequest,
     ParsedRequest,
     ResolvedRequest,
     merge_filters,
@@ -32,10 +35,17 @@ DEFAULT_PARSER_PROMPT = request_parser_v3.PROMPT  # D-026: min_pages (v1 also ha
 DEFAULT_MAX_TOKENS = 512  # room for a little thinking on top of a tiny JSON answer
 
 
+InterpretationError = Literal["rejected", "llm_error", "unparseable", "contradiction"]
+"""rejected: empty or too long, before any call. contradiction: the text's own bounds
+conflict (a minimum above the maximum), detected in code (D-026)."""
+
+
 class Interpretation(BaseModel, frozen=True):
     prompt_id: str
     parsed: ParsedRequest | None = None
+    extracted: ExtractedRequest | None = None  # what the model said, also on contradiction
     error: str | None = None
+    error_kind: InterpretationError | None = None
     call: LLMCall | None = None  # None when the request was rejected before calling
     raw_text: str | None = None
 
@@ -57,11 +67,14 @@ async def interpret_request(
     prompt_id = prompt.prompt_id
     request = text.strip()
     if not request:
-        return Interpretation(prompt_id=prompt_id, error="the request is empty")
+        return Interpretation(
+            prompt_id=prompt_id, error="the request is empty", error_kind="rejected"
+        )
     if len(request) > MAX_REQUEST_CHARS:
         return Interpretation(
             prompt_id=prompt_id,
             error=f"the request is {len(request)} characters; the limit is {MAX_REQUEST_CHARS}",
+            error_kind="rejected",
         )
 
     started = perf_counter()
@@ -74,7 +87,9 @@ async def interpret_request(
         )
     except LLMError as e:
         failed = LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
-        return Interpretation(prompt_id=prompt_id, error=f"LLM call failed: {e}", call=failed)
+        return Interpretation(
+            prompt_id=prompt_id, error=f"LLM call failed: {e}", error_kind="llm_error", call=failed
+        )
 
     call = LLMCall(
         name=CALL_NAME,
@@ -84,29 +99,53 @@ async def interpret_request(
     )
     reply = response.message.text
     try:
-        parsed = parse_interpretation(reply)
+        extracted = extract_interpretation(reply)
     except ReplyParseError as e:
-        return Interpretation(prompt_id=prompt_id, error=str(e), call=call, raw_text=reply)
-    return Interpretation(prompt_id=prompt_id, parsed=parsed, call=call, raw_text=reply)
+        return Interpretation(
+            prompt_id=prompt_id, error=str(e), error_kind="unparseable", call=call, raw_text=reply
+        )
+    try:
+        parsed = extracted.to_parsed()
+    except ConflictingFilters as e:
+        return Interpretation(
+            prompt_id=prompt_id,
+            extracted=extracted,
+            error=str(e),
+            error_kind="contradiction",
+            call=call,
+            raw_text=reply,
+        )
+    return Interpretation(
+        prompt_id=prompt_id, parsed=parsed, extracted=extracted, call=call, raw_text=reply
+    )
 
 
-def parse_interpretation(text: str) -> ParsedRequest:
-    """Read the interpreter's JSON reply. Raises ReplyParseError with a specific reason.
+def extract_interpretation(text: str) -> ExtractedRequest:
+    """Read the interpreter's JSON reply literally. Raises ReplyParseError with a reason.
 
     Tolerates code fences, a literal newline inside a string, an upper-case or regional
     language code ("EN", "en-US"), and a blank preference; rejects anything that isn't an
-    ISO 639-1 code ("english").
+    ISO 639-1 code ("english"). Does not compare the bounds: see ExtractedRequest.
     """
     # strict=False: a literal newline inside the preference string is harmless (F-010).
     # Only here: the baseline's parsing, and so its measured behavior, stays strict.
     reply = parse_model(_Reply, extract_json(text, strict=False))
-    language = primary_language(reply.language) if reply.language else None
-    filters = parse_model(
-        Filters,
-        {"language": language, "max_pages": reply.max_pages, "min_pages": reply.min_pages},
-    )
     preference = reply.preference.strip() if reply.preference else None
-    return ParsedRequest(preference=preference or None, filters=filters)
+    return parse_model(
+        ExtractedRequest,
+        {
+            "preference": preference or None,
+            "language": primary_language(reply.language) if reply.language else None,
+            "max_pages": reply.max_pages,
+            "min_pages": reply.min_pages,
+        },
+    )
+
+
+def parse_interpretation(text: str) -> ParsedRequest:
+    """extract_interpretation, then the filters. Raises ReplyParseError, or
+    ConflictingFilters when the text's own bounds conflict."""
+    return extract_interpretation(text).to_parsed()
 
 
 class RequestResolution(BaseModel, frozen=True):
@@ -115,6 +154,8 @@ class RequestResolution(BaseModel, frozen=True):
     request: ResolvedRequest | None  # None when it can't be acted on: stop the run (D-007)
     interpretation: Interpretation | None  # None when there was no request text
     error: str | None = None  # why request is None
+    # "contradiction": conflicting bounds, in the text or between text and flags (D-026).
+    error_kind: Literal["interpretation", "contradiction"] | None = None
 
 
 async def resolve_request(text: str | None, flags: Filters, *, llm: LLMClient) -> RequestResolution:
@@ -131,18 +172,27 @@ async def resolve_request(text: str | None, flags: Filters, *, llm: LLMClient) -
 
     interpretation = await interpret_request(request, llm=llm)
     if interpretation.parsed is None:
+        if interpretation.error_kind == "contradiction":
+            return RequestResolution(
+                request=None,
+                interpretation=interpretation,
+                error=f"The request contradicts itself: {interpretation.error}",
+                error_kind="contradiction",
+            )
         return RequestResolution(
             request=None,
             interpretation=interpretation,
             error=f"Could not interpret the request: {interpretation.error}",
+            error_kind="interpretation",
         )
     try:
         filters, sources = merge_filters(interpretation.parsed.filters, flags)
-    except ValueError as e:  # e.g. a minimum in the text above a maximum given as a flag
+    except ConflictingFilters as e:  # a minimum in the text above a maximum given as a flag
         return RequestResolution(
             request=None,
             interpretation=interpretation,
             error=f"The request contradicts the flags: {e}",
+            error_kind="contradiction",
         )
     resolved = ResolvedRequest(
         text=request,

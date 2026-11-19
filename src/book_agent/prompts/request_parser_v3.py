@@ -4,8 +4,8 @@ Changes from request_parser_v2, all about minimums:
 - An explicit lower bound becomes min_pages ("más de 600", "at least 300"); "between 200
   and 400" gives both bounds. Bounds are inclusive, like max_pages (D-006).
 - Vague or approximate lengths ("long", "largo", "around 700") stay in the preference.
-- A minimum above the maximum is a contradiction: both are left out and the text stays
-  in the preference.
+- Bounds are extracted literally, even when they conflict: comparing them is code's job,
+  and a minimum above the maximum fails the interpretation as a contradiction (D-026).
 The preference rule is v2's: text leaves it only when it became a filter. v2's known
 limitation (sometimes repeating a filter in the preference, F-010) is not addressed here.
 
@@ -41,14 +41,12 @@ gives 400. Words without a number ("short", "corto") and approximate numbers ("a
 600", "at least 600", "600 or more" and "más de 600" all give 600. "between 200 and 400" \
 gives 200. Words without a number ("long", "largo") and approximate numbers ("around 700") \
 are NOT limits: use null.
-- If min_pages would be larger than max_pages, the request contradicts itself: use null \
-for both and keep that text in the preference.
 - preference: everything the reader asked for, in their own words and language. Remove \
 text from it ONLY when that text became the language, max_pages or min_pages value. \
 Anything that sounds like a filter but could not become one stays in the preference, word \
 for word: several acceptable languages, an approximate length ("around 700 pages"), a \
-length without a number ("long"), contradictory page limits. Never drop a constraint just \
-because it is not a filter. null only if nothing is left.
+length without a number ("long"). Never drop a constraint just because it is not a \
+filter. null only if nothing is left.
 
 Examples:
 <request>a cozy fantasy under 350 pages in English</request>
@@ -66,11 +64,7 @@ Examples:
 
 <request>a long epic, around 900 pages</request>
 {"preference": "a long epic, around 900 pages", "language": null, "max_pages": null, \
-"min_pages": null}
-
-<request>una novela corta de más de 700 páginas y menos de 250</request>
-{"preference": "una novela corta de más de 700 páginas y menos de 250", "language": null, \
-"max_pages": null, "min_pages": null}"""
+"min_pages": null}"""
 
 
 def build_user_prompt(text: str) -> str:

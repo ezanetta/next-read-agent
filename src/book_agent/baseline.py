@@ -28,7 +28,7 @@ CALL_NAME = "recommend"
 DEFAULT_MAX_TOKENS = 2048
 
 
-BaselineFailure = Literal["interpretation", "llm_error", "unparseable"]
+BaselineFailure = Literal["interpretation", "contradiction", "llm_error", "unparseable"]
 
 
 class RecommendationParseError(ReplyParseError):
@@ -93,7 +93,7 @@ async def run_baseline(
             update={
                 "raw_text": interpretation.raw_text,
                 "error": resolution.error,
-                "error_kind": "interpretation",
+                "error_kind": resolution.error_kind or "interpretation",
             }
         )
     resolved = resolution.request

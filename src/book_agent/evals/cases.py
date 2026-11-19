@@ -36,13 +36,25 @@ class ParserCase(BaseModel, frozen=True):
     language: str | None = Field(default=None, pattern=r"^[a-z]{2}$")
     max_pages: int | None = Field(default=None, gt=0)
     min_pages: int | None = Field(default=None, gt=0)  # labeled from request_parser_v2 on
+    # The interpretation must fail as a contradiction (a minimum above the maximum), with
+    # the labeled fields as the literally extracted values (D-026).
+    expect_contradiction: bool = False
     # Terms that must survive in the preference, ignoring case and accents.
     preference_contains: list[str] = []
 
     @model_validator(mode="after")
-    def _terms_need_a_preference(self) -> Self:
+    def _consistent(self) -> Self:
         if self.preference_contains and not self.has_preference:
             raise ValueError(f"{self.id}: preference_contains needs has_preference")
+        conflict = (
+            self.min_pages is not None
+            and self.max_pages is not None
+            and self.min_pages > self.max_pages
+        )
+        if conflict != self.expect_contradiction:
+            raise ValueError(
+                f"{self.id}: min_pages above max_pages if and only if expect_contradiction"
+            )
         return self
 
 

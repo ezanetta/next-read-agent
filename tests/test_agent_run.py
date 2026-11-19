@@ -93,3 +93,16 @@ async def test_the_prompt_version_can_be_chosen() -> None:
 def test_registry_has_every_version_and_v3_is_the_default() -> None:
     assert sorted(AGENT_PROMPTS) == ["agent_v1", "agent_v2", "agent_v3"]
     assert DEFAULT_AGENT_PROMPT is agent_v3.PROMPT
+
+
+async def test_a_contradiction_stops_before_the_agent_with_its_kind() -> None:
+    reply = json.dumps(
+        {"preference": "a saga", "language": None, "max_pages": None, "min_pages": 500}
+    )
+    llm = FakeLLM([text_response(reply)])
+    run = await run_agent_pipeline(
+        PROFILE, Filters(max_pages=300), request="x", llm=llm, books=catalog()
+    )
+    assert run.request_error_kind == "contradiction"
+    assert run.error is not None and run.error.startswith("The request contradicts the flags")
+    assert len(llm.requests) == 1

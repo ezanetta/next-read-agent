@@ -207,7 +207,7 @@ async def _run_case(
     if run.failure is not None:
         error_kind: str | None = run.failure.value
     else:
-        error_kind = "interpretation" if run.error is not None else None
+        error_kind = run.request_error_kind if run.error is not None else None
     return {
         "feedback_prompt_id": run.feedback_prompt_id,
         "request_prompt_id": run.request_prompt_id,

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from book_agent.config import get_settings
 from book_agent.evals import __main__ as evals_cli
@@ -20,7 +21,7 @@ from book_agent.evals.parser_eval import (
     scores,
 )
 from book_agent.llm.base import LLMResponse
-from book_agent.prompts import request_parser_v2
+from book_agent.prompts import request_parser_v2, request_parser_v3
 from tests.fakes import FakeLLM, text_response
 
 SANDERSON = ParserCase(
@@ -170,3 +171,86 @@ def test_min_pages_is_scored_as_its_own_field() -> None:
         over_600, ParserOutcome(case_id="x", preference="un libro de más de 600 páginas")
     )
     assert (missed.min_pages_ok, missed.preference_ok) == (False, False)
+
+
+MIN_ABOVE_MAX = ParserCase(
+    id="min-above-max",
+    request="a novel of more than 500 pages but under 300 pages",
+    has_preference=True,
+    max_pages=300,
+    min_pages=500,
+    expect_contradiction=True,
+    preference_contains=["novel"],
+)
+
+
+def contradiction(min_pages: int, max_pages: int) -> ParserOutcome:
+    return ParserOutcome(
+        case_id="min-above-max",
+        preference="a novel",
+        min_pages=min_pages,
+        max_pages=max_pages,
+        error=f"min_pages {min_pages} (from text) is above max_pages {max_pages} (from text)",
+        error_kind="contradiction",
+    )
+
+
+def test_an_expected_contradiction_with_the_literal_bounds_passes() -> None:
+    result = score(MIN_ABOVE_MAX, contradiction(500, 300))
+    assert result.contradiction_ok and result.passed
+
+
+def test_a_contradiction_with_other_bounds_fails() -> None:
+    result = score(MIN_ABOVE_MAX, contradiction(600, 300))
+    assert result.contradiction_ok and not result.min_pages_ok and not result.passed
+
+
+def test_a_missed_contradiction_fails() -> None:
+    # The model dropped the bounds instead of extracting them: no contradiction raised.
+    missed = ParserOutcome(case_id="x", preference="a novel of more than 500 pages but under 300")
+    result = score(MIN_ABOVE_MAX, missed)
+    assert not result.contradiction_ok and not result.passed
+
+
+def test_an_unexpected_contradiction_fails_a_normal_case() -> None:
+    result = score(SANDERSON, contradiction(500, 300))
+    assert not result.contradiction_ok and not result.passed
+
+
+def test_report_lists_contradiction_mismatches(tmp_path: Path) -> None:
+    loaded = load_parser_cases("p_v1", write_cases(tmp_path, [MIN_ABOVE_MAX]))
+    records = new_records(loaded, "request_parser_v3", "m", None, None)
+    records.outcomes.append(ParserOutcome(case_id="min-above-max", preference="a novel"))
+    report = render_parser_report(records, scores(loaded, records))
+    assert "| contradiction outcome | 0/1 |" in report
+    assert "- min-above-max: expected a contradiction, got error None" in report
+
+
+@pytest.mark.parametrize(
+    ("min_pages", "max_pages", "expect"),
+    [(500, 300, False), (300, 500, True)],
+)
+def test_labels_need_expect_contradiction_exactly_when_min_is_above_max(
+    min_pages: int, max_pages: int, expect: bool
+) -> None:
+    with pytest.raises(ValidationError, match="if and only if expect_contradiction"):
+        ParserCase(
+            id="x", request="r", has_preference=False,
+            min_pages=min_pages, max_pages=max_pages, expect_contradiction=expect,
+        )  # fmt: skip
+
+
+async def test_the_runner_records_a_contradiction_with_its_extracted_bounds(tmp_path: Path) -> None:
+    loaded = load_parser_cases("p_v1", write_cases(tmp_path, [MIN_ABOVE_MAX]))
+    path = records_path(tmp_path / "r", "p_v1", "request_parser_v3", "m", None)
+    records = new_records(loaded, "request_parser_v3", "m", None, None)
+    reply = json.dumps(
+        {"preference": "a novel", "language": None, "max_pages": 300, "min_pages": 500}
+    )
+    await run_parser_eval(
+        [MIN_ABOVE_MAX], records, path, llm=FakeLLM([text_response(reply)]),
+        prompt=request_parser_v3.PROMPT,
+    )  # fmt: skip
+    [outcome] = records.outcomes
+    assert (outcome.error_kind, outcome.min_pages, outcome.max_pages) == ("contradiction", 500, 300)
+    assert score(MIN_ABOVE_MAX, outcome).passed

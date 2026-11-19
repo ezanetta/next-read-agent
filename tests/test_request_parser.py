@@ -7,6 +7,7 @@ import pytest
 from book_agent.domain.recommendations import Filters
 from book_agent.domain.requests import (
     MAX_REQUEST_CHARS,
+    ConflictingFilters,
     FilterSource,
     ParsedRequest,
     ResolvedRequest,
@@ -19,6 +20,7 @@ from book_agent.prompts.user_content import request_block
 from book_agent.request_parser import (
     DEFAULT_PARSER_PROMPT,
     PARSER_PROMPTS,
+    extract_interpretation,
     interpret_request,
     parse_interpretation,
     resolve_request,
@@ -319,10 +321,61 @@ def test_min_pages_is_read_from_the_reply() -> None:
     )
 
 
-def test_a_reply_with_contradicting_bounds_is_rejected() -> None:
+def test_a_reply_with_contradicting_bounds_is_a_conflict_not_a_parse_error() -> None:
     reply = json.dumps({"preference": "x", "language": None, "max_pages": 300, "min_pages": 500})
-    with pytest.raises(ReplyParseError, match="min_pages 500 is above max_pages 300"):
+    with pytest.raises(
+        ConflictingFilters,
+        match=r"min_pages 500 \(from text\) is above max_pages 300 \(from text\)",
+    ):
         parse_interpretation(reply)
+    # The literal extraction still succeeds: comparing the bounds is a separate step.
+    assert extract_interpretation(reply).min_pages == 500
+
+
+async def test_contradicting_bounds_in_the_text_fail_the_interpretation_as_contradiction() -> None:
+    reply = json.dumps(
+        {"preference": "a novel", "language": None, "max_pages": 300, "min_pages": 500}
+    )
+    result = await interpret_request(
+        "a novel of more than 500 pages but under 300", llm=FakeLLM([text_response(reply)])
+    )
+    assert result.parsed is None
+    assert result.error_kind == "contradiction"
+    assert result.error == "min_pages 500 (from text) is above max_pages 300 (from text)"
+    assert result.extracted is not None
+    assert (result.extracted.min_pages, result.extracted.max_pages) == (500, 300)
+
+
+async def test_both_contradictions_resolve_to_the_same_kind() -> None:
+    inside = json.dumps(
+        {"preference": "a novel", "language": None, "max_pages": 300, "min_pages": 500}
+    )
+    resolution = await resolve_request("x", Filters(), llm=FakeLLM([text_response(inside)]))
+    assert resolution.error_kind == "contradiction"
+    assert resolution.error == (
+        "The request contradicts itself: "
+        "min_pages 500 (from text) is above max_pages 300 (from text)"
+    )
+    against_flag = json.dumps(
+        {"preference": "a saga", "language": None, "max_pages": None, "min_pages": 500}
+    )
+    resolution = await resolve_request(
+        "x", Filters(max_pages=300), llm=FakeLLM([text_response(against_flag)])
+    )
+    assert resolution.error_kind == "contradiction"
+    assert resolution.error is not None and resolution.error.startswith(
+        "The request contradicts the flags"
+    )
+
+
+async def test_interpretation_errors_say_their_kind() -> None:
+    assert (await interpret_request("  ", llm=FakeLLM([]))).error_kind == "rejected"
+    failed = await interpret_request("x", llm=FakeLLM([LLMError("503")]))
+    assert failed.error_kind == "llm_error"
+    unreadable = await interpret_request("x", llm=FakeLLM([text_response("Sure!")]))
+    assert unreadable.error_kind == "unparseable"
+    resolution = await resolve_request("x", Filters(), llm=FakeLLM([text_response("Sure!")]))
+    assert resolution.error_kind == "interpretation"
 
 
 # --- request_parser_v3 (D-026) -----------------------------------------------------------
@@ -339,14 +392,11 @@ def test_v3_asks_for_min_pages_with_inclusive_lower_bounds() -> None:
     assert '("long", "largo") and approximate numbers ("around 700") are NOT limits' in system
 
 
-def test_v3_treats_a_minimum_above_the_maximum_as_a_contradiction() -> None:
-    assert "If min_pages would be larger than max_pages, the request contradicts itself" in (
-        request_parser_v3.SYSTEM
-    )
-    assert (
-        '{"preference": "una novela corta de más de 700 páginas y menos de 250", '
-        '"language": null, "max_pages": null, "min_pages": null}'
-    ) in request_parser_v3.SYSTEM
+def test_v3_has_no_contradiction_rule_comparing_bounds_is_code() -> None:
+    # The model extracts what the reader said; code detects min > max (D-026).
+    system = request_parser_v3.SYSTEM
+    assert "contradict" not in system
+    assert "larger than" not in system
 
 
 def test_v3_keeps_the_v2_preference_rule_and_language_rule() -> None:

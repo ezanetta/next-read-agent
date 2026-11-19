@@ -6,6 +6,8 @@ directly. run_agent_pipeline never raises for model, catalog or parsing problems
 up in AgentRun.error, so an eval run always gets one result per case.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 from book_agent.agent import AgentError, AgentFailure, TurnTrace, run_agent
@@ -43,7 +45,9 @@ class AgentRun(BaseModel, frozen=True):
     validation: ValidationResult | None = None  # of the accepted submission
     last_validation: ValidationResult | None = None  # on failure: the last one validated
     raw_text: str | None = None  # the interpreter's reply when it couldn't be parsed
-    failure: AgentFailure | None = None  # None for interpretation errors and successes
+    failure: AgentFailure | None = None  # None for request errors and successes
+    # Why the request couldn't be acted on: "interpretation" or "contradiction" (D-026).
+    request_error_kind: Literal["interpretation", "contradiction"] | None = None
     error: str | None = None
 
     @property
@@ -93,6 +97,7 @@ async def run_agent_pipeline(
             update={
                 "raw_text": interpretation.raw_text,
                 "error": resolution.error,
+                "request_error_kind": resolution.error_kind,
             }
         )
     resolved = resolution.request

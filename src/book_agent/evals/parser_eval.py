@@ -34,7 +34,13 @@ class ParserOutcome(BaseModel, frozen=True):
     max_pages: int | None = None
     min_pages: int | None = None
     error: str | None = None
+    error_kind: str | None = None  # e.g. "unparseable", "contradiction"
     raw_text: str | None = None
+
+    @property
+    def extracted(self) -> bool:
+        """The fields hold what the model said: on success, and on a contradiction."""
+        return self.error is None or self.error_kind == "contradiction"
 
 
 class ParserRecords(BaseModel):
@@ -57,15 +63,22 @@ class ParserScore(BaseModel, frozen=True):
     language_ok: bool
     max_pages_ok: bool
     min_pages_ok: bool
+    contradiction_ok: bool  # failed as a contradiction exactly when the label expects it
     dropped_terms: list[str]
 
     @property
     def filters_ok(self) -> bool:
-        return self.preference_ok and self.language_ok and self.max_pages_ok and self.min_pages_ok
+        return (
+            self.preference_ok
+            and self.language_ok
+            and self.max_pages_ok
+            and self.min_pages_ok
+            and self.contradiction_ok
+        )
 
     @property
     def passed(self) -> bool:
-        return self.outcome.error is None and self.filters_ok and not self.dropped_terms
+        return self.outcome.extracted and self.filters_ok and not self.dropped_terms
 
 
 def fold(text: str) -> str:
@@ -76,14 +89,15 @@ def fold(text: str) -> str:
 
 def score(case: ParserCase, outcome: ParserOutcome) -> ParserScore:
     preference = fold(outcome.preference or "")
+    extracted = outcome.extracted  # otherwise the fields are empty: every one fails
     return ParserScore(
         case=case,
         outcome=outcome,
-        preference_ok=outcome.error is None
-        and (outcome.preference is not None) == case.has_preference,
-        language_ok=outcome.error is None and outcome.language == case.language,
-        max_pages_ok=outcome.error is None and outcome.max_pages == case.max_pages,
-        min_pages_ok=outcome.error is None and outcome.min_pages == case.min_pages,
+        preference_ok=extracted and (outcome.preference is not None) == case.has_preference,
+        language_ok=extracted and outcome.language == case.language,
+        max_pages_ok=extracted and outcome.max_pages == case.max_pages,
+        min_pages_ok=extracted and outcome.min_pages == case.min_pages,
+        contradiction_ok=(outcome.error_kind == "contradiction") == case.expect_contradiction,
         dropped_terms=[t for t in case.preference_contains if fold(t) not in preference],
     )
 
@@ -128,15 +142,16 @@ async def run_parser_eval(
             interpretation = await interpret_request(case.request, llm=llm, prompt=prompt)
         except QuotaExhausted as e:
             return str(e)
-        parsed = interpretation.parsed
+        extracted = interpretation.extracted  # set on success and on a contradiction
         records.outcomes.append(
             ParserOutcome(
                 case_id=case.id,
-                preference=parsed.preference if parsed else None,
-                language=parsed.filters.language if parsed else None,
-                max_pages=parsed.filters.max_pages if parsed else None,
-                min_pages=parsed.filters.min_pages if parsed else None,
+                preference=extracted.preference if extracted else None,
+                language=extracted.language if extracted else None,
+                max_pages=extracted.max_pages if extracted else None,
+                min_pages=extracted.min_pages if extracted else None,
                 error=interpretation.error,
+                error_kind=interpretation.error_kind,
                 raw_text=interpretation.raw_text,
             )
         )
@@ -184,12 +199,13 @@ def render_parser_report(records: ParserRecords, results: list[ParserScore]) -> 
         f"| language | {sum(s.language_ok for s in results)}/{total} |",
         f"| max_pages | {sum(s.max_pages_ok for s in results)}/{total} |",
         f"| min_pages | {sum(s.min_pages_ok for s in results)}/{total} |",
+        f"| contradiction outcome | {sum(s.contradiction_ok for s in results)}/{total} |",
         f"| preference terms kept | {kept}/{len(with_terms)} cases |",
         f"| all fields | {sum(s.passed for s in results)}/{total} |",
         "",
     ]
-    errors = [s for s in results if s.outcome.error]
-    filter_mismatches = [s for s in results if not s.outcome.error and not s.filters_ok]
+    errors = [s for s in results if not s.outcome.extracted]
+    filter_mismatches = [s for s in results if s.outcome.extracted and not s.filters_ok]
     dropped = [s for s in results if s.dropped_terms]
     lines += ["## Errors", ""] + (
         [f"- {s.case.id}: {s.outcome.error} (raw: {s.outcome.raw_text!r})" for s in errors]
@@ -219,6 +235,9 @@ def _filter_lines(s: ParserScore) -> list[str]:
         lines.append(
             f"- {s.case.id}: language expected {s.case.language!r}, got {s.outcome.language!r}"
         )
+    if not s.contradiction_ok:
+        expected = "a contradiction" if s.case.expect_contradiction else "no contradiction"
+        lines.append(f"- {s.case.id}: expected {expected}, got error {s.outcome.error!r}")
     if not s.min_pages_ok:
         lines.append(
             f"- {s.case.id}: min_pages expected {s.case.min_pages!r}, got {s.outcome.min_pages!r}"

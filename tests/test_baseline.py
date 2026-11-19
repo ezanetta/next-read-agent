@@ -371,3 +371,17 @@ def test_baseline_parsing_stays_strict_about_control_characters() -> None:
     reply = '{"recommendations": [{"title": "A\nB", "author": "X", "reason": "Like Dune."}]}'
     with pytest.raises(RecommendationParseError, match="Invalid control character"):
         parse_recommendations(reply)
+
+
+async def test_a_contradiction_in_the_text_stops_with_its_own_kind() -> None:
+    reply = json.dumps(
+        {"preference": "a novel", "language": None, "max_pages": 300, "min_pages": 500}
+    )
+    llm = FakeLLM([text_response(reply)])  # no recommendation call scripted
+    result = await run_baseline(PROFILE, Filters(), request="x", llm=llm, books=catalog())
+    assert result.error_kind == "contradiction"
+    assert result.error == (
+        "The request contradicts itself: "
+        "min_pages 500 (from text) is above max_pages 300 (from text)"
+    )
+    assert len(llm.requests) == 1
