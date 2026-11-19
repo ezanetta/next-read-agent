@@ -67,3 +67,22 @@ def test_preference_terms_need_a_preference(tmp_path: Path) -> None:
     write(tmp_path, "p", {"version": "p", "cases": [bad]})
     with pytest.raises(ValueError, match="not a valid case set"):
         load_parser_cases("p", tmp_path)
+
+
+def test_request_parser_v2_labels_min_pages_and_the_contradiction() -> None:
+    cases = {c.id: c for c in load_parser_cases("request_parser_v2").cases.cases}
+    assert len(cases) == 27
+    assert (cases["over-600"].min_pages, cases["over-600"].has_preference) == (600, False)
+    between = cases["between-200-and-400"]
+    assert (between.min_pages, between.max_pages, between.preference_contains) == (
+        200,
+        400,
+        ["romance"],
+    )
+    conflict = cases["min-above-max"]
+    assert conflict.expect_contradiction
+    assert (conflict.min_pages, conflict.max_pages) == (500, 300)
+    assert {"at-least-300", "over-500-english", "something-long"} <= set(cases)
+    # The v1 requests are all still there, with the same text.
+    v1 = {c.id: c.request for c in load_parser_cases("request_parser_v1").cases.cases}
+    assert all(cases[i].request == request for i, request in v1.items())

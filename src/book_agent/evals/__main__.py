@@ -3,7 +3,7 @@
     uv run python -m book_agent.evals run --system baseline|agent [--prompt agent_v2]
         [--cases recommend_v1] [--runs 3] [--max-rpm 15] [--yes]
     uv run python -m book_agent.evals report [--cases recommend_v1]
-    uv run python -m book_agent.evals parser [--cases request_parser_v1]
+    uv run python -m book_agent.evals parser [--cases request_parser_v2]
         [--prompt request_parser_v2] [--yes]
 
 run prints the plan and an estimate of LLM requests, and starts only with --yes.
@@ -52,7 +52,7 @@ from book_agent.work_keys import DEFAULT_CACHE_PATH, load_cache
 
 DEFAULT_CSV = Path("data/goodreads_library_export.csv")
 DEFAULT_CASES = "recommend_v1"
-DEFAULT_PARSER_CASES = "request_parser_v1"
+DEFAULT_PARSER_CASES = "request_parser_v2"  # labels min_pages (D-026); v1 stays frozen
 DAILY_FREE_TIER = 500  # gemini-3.5-flash-lite requests per day
 EXIT_OK, EXIT_STOPPED, EXIT_ERROR = 0, 1, 2
 

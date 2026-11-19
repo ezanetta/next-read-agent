@@ -195,3 +195,15 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Negation terms in the labels ("nothing", "not"); a human reading; an LLM judge.
 - **Choice:** No negation terms: they're fragile across languages and phrasings. The parser report prints every interpreted preference, passing or not, so all of them can be read; the phase-2 judge will check that soft constraints, negations included, keep their meaning.
 - **Reason:** A wrong automated check is worse than an honest blind spot with a human in the loop until the judge exists.
+
+## D-026 · A min_pages filter, and one policy for contradictory bounds (2026-11-19)
+
+- **Context:** "más de 600 páginas" or "between 200 and 400" had nowhere to go: `Filters` had only a maximum, so minimums lived in the soft preference, where v1 even dropped them (F-009), and nothing checked them.
+- **Choice:**
+  - `Filters.min_pages`, inclusive like `max_pages` (D-006): "more than 600" gives 600, since page counts vary between editions far more than one page. It merges like the other filters (a flag overrides the text), the validator checks it on the resolved edition with the same edition choice and unknown handling as `max_pages` (rule `MIN_PAGES`), and the CLI takes `--min-pages`.
+  - `request_parser_v3` extracts explicit lower bounds; vague or approximate lengths ("long", "around 700") stay in the preference. It extracts bounds literally, even when they conflict.
+  - Prompt versions that state the minimum: `baseline_v2` (user prompt only) and `agent_v3` (its user prompt is `baseline_v2`'s). System prompts and tool descriptions don't change. These, and `request_parser_v3`, are the new defaults.
+- **Contradictory bounds: one policy, detected in code.** A minimum above the maximum fails the request with kind `contradiction` and an error naming the conflict and the source of each bound, whether both bounds come from the text ("more than 500 pages but under 300") or one from the text and one from a flag. The run stops before recommending; the UI will show it as a clarification question.
+- **Options considered for contradictions:** a prompt rule telling the model to drop both bounds and keep the text in the preference (rejected: it gave two policies for the same conflict, sent the recommender an impossible request with nothing validated, and asked the model to compare numbers); one policy in code (chosen).
+- **Reason:** The model's job is to extract what the reader said; comparing two numbers is code's job, and code does it the same way every time. A clear error is honest about a request that can't be met as stated.
+- **Evaluation:** parser case set `request_parser_v2` labels `min_pages`. An expected contradiction is labeled with `expect_contradiction: true` and the literal bounds (min 500, max 300), and scores as correct when the interpretation fails with kind `contradiction` and the extracted fields match the label.
