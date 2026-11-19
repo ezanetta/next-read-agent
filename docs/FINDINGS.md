@@ -145,3 +145,23 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - The request parser reads its reply with `json.loads(strict=False)`, the standard option for control characters inside strings; nothing else is repaired (D-010 amended). Only the parser: the baseline's parsing stays strict, so its measured behavior doesn't change. That case's record was removed for a rerun.
   - The repeated filter is a known limitation of v2, not a reason for v3.
 - **How it was verified:** A unit test with the exact raw reply; a test that the shared extractor and the baseline stay strict. The one case is to be rerun.
+
+## F-011 · First eval table: the agent accepts 79%, the baseline 13% (2026-11-19)
+
+- **What happened:** `recommend_v1`, 13 cases × 3 runs, `gemini-3.5-flash-lite`, `request_parser_v3`, current acceptance policy (D-014).
+
+  | Configuration | Accepted | Requests per run | Input tokens per run | Latency per run (mean / p95) |
+  |---|---|---|---|---|
+  | `baseline_v2` | 5/39 (13%) | 2.0 | – | 11 s |
+  | `agent_v3` | 31/39 (79%) | 6.5 | about 27,000 | 31 s / 65 s |
+
+  - **Baseline final violations:** not_found 27, already_read 25, cites_library 18, duplicate 2, on_to_read 2, max_pages 1; 2 runs unparseable.
+  - **Agent failures:** 4 `catalog_unavailable`, 4 `iterations_exhausted`. One search per turn in 20 of 39 runs; the repair turn was used 5 times; the fallback lookup rescued 2 books.
+  - **Hard cases:** `history-nonfiction` 0/3 in both systems; `kafka-filters` 1/3 for the agent.
+- **How it was detected:** `evals report` on the recorded runs.
+- **What it implies:**
+  - The agent's validate-and-repair loop is what makes recommendations acceptable: the baseline mostly recommends books it can't verify or the reader already has. The price is about 3× the requests and latency.
+  - One search per turn is common (about half the runs), as F-007 suggested.
+  - The 4 `catalog_unavailable` runs and the two hard cases need investigating before reading more into the numbers.
+- **Fix:** None yet; investigation follows.
+- **How it was verified:** The report above, from the stored records.
