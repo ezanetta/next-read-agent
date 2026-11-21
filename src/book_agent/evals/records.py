@@ -27,25 +27,41 @@ from book_agent.llm.calls import LLMCall
 SCHEMA_VERSION = 1
 RESULTS_DIR = Path("data/evals")
 
+HARNESS_VERSION = 2
+"""Part of the configuration identity (D-021): bump it whenever the agent loop, the
+validator, the tools or an adapter change in a way that affects results, so new runs go
+to a new folder instead of mixing with runs of the old code. Prompt changes don't need
+it: they have their own versions.
+
+1: round 1 (F-011), up to commit d8715a8.
+2: Google Books retries (D-027), forced submit and the notice at 2 turns left (D-028),
+   " - " subtitles and combined volumes in title matching (D-029)."""
+
 System = Literal["baseline", "agent"]
 
 _UNSAFE = re.compile(r"[^a-zA-Z0-9._-]+")
 
 
 class RunConfig(BaseModel, frozen=True):
-    """What is being compared. Git commit is recorded per run but is not part of it:
-    changes outside the prompt version start a fresh results directory (D-021)."""
+    """What is being compared: system, prompt version, model, thinking level and harness
+    version. Git commit is recorded per run but is not part of it (D-021)."""
 
     system: System
     prompt_id: str
     model: str
     thinking_level: str | None = None
+    harness: int = Field(default=1, ge=1)  # records from before the field are round 1
 
     @property
     def id(self) -> str:
-        """A folder-safe name, e.g. "agent-agent_v2-gemini-3.5-flash-lite-default"."""
+        """A folder-safe name, e.g. "agent-agent_v3-gemini-3.5-flash-lite-default-h2".
+
+        Round-1 records (harness 1) keep their original name, without the suffix, so
+        their folders stay where they are.
+        """
         parts = [self.system, self.prompt_id, self.model, self.thinking_level or "default"]
-        return "-".join(_UNSAFE.sub("_", p) for p in parts)
+        name = "-".join(_UNSAFE.sub("_", p) for p in parts)
+        return name if self.harness == 1 else f"{name}-h{self.harness}"
 
 
 class EvalRecord(BaseModel, frozen=True):

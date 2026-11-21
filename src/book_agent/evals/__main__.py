@@ -33,7 +33,13 @@ from book_agent.evals.parser_eval import (
     run_parser_eval,
     scores,
 )
-from book_agent.evals.records import RESULTS_DIR, RecordStore, RunConfig, System
+from book_agent.evals.records import (
+    HARNESS_VERSION,
+    RESULTS_DIR,
+    RecordStore,
+    RunConfig,
+    System,
+)
 from book_agent.evals.report import build_report, render_markdown
 from book_agent.evals.runner import (
     Plan,
@@ -204,6 +210,7 @@ def run_config(system: System, prompt_id: str, settings: Settings) -> RunConfig:
         prompt_id=prompt_id,
         model=settings.gemini_model,
         thinking_level=settings.gemini_thinking_level,
+        harness=HARNESS_VERSION,
     )
 
 

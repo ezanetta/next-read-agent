@@ -170,6 +170,7 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Reason:** A policy change or a new metric rescores old runs with no LLM calls; the judge can read the stored recommendations, reasons and resolved books later.
 - **Caveat:** For the agent, rescoring judges the final validation only; the run's path (rejections, resubmissions) followed the policy in force when it ran.
 - **Configuration identity:** system, prompt version, model and thinking level. The git commit is recorded per run, and the report warns about mixed commits, but **changes that affect results outside the prompt version (validator, loop, tools) should start a fresh results directory** rather than rely on that warning: those runs aren't comparable with older ones under the same configuration name.
+- **Amended (2026-11-21): a harness version in the identity.** Remembering to pass a fresh `--results` directory is error-prone, so the configuration identity now includes `HARNESS_VERSION` (in `evals/records.py`), a single constant bumped whenever the loop, the validator, the tools or an adapter change in a way that affects results. It appears in the folder name (`...-h2`), so new runs go to a new folder automatically and the report shows each harness version as its own configuration. Round 1 is harness 1: records written before the field existed load as version 1 and keep their original folder names. `--results` stays for manual use. Prompt changes don't need a bump: prompts have their own versions.
 
 ## D-022 · Several runs per case (2026-11-18)
 

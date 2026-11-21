@@ -1,9 +1,16 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from book_agent.evals.records import EvalRecord, RecordStore, RunConfig, profile_sha256
+from book_agent.evals.records import (
+    HARNESS_VERSION,
+    EvalRecord,
+    RecordStore,
+    RunConfig,
+    profile_sha256,
+)
 from tests.library_data import PROFILE
 
 AGENT = RunConfig(system="agent", prompt_id="agent_v2", model="gemini-3.5-flash-lite")
@@ -78,3 +85,26 @@ def test_profile_snapshot_is_kept_per_library(tmp_path: Path) -> None:
     other = store.save_profile("recommend_v1", smaller)
     assert other != sha
     assert len(list((tmp_path / "recommend_v1").glob("profile_*.json"))) == 2
+
+
+def test_harness_version_separates_folders_and_round_1_keeps_its_name() -> None:
+    round_1 = RunConfig(system="agent", prompt_id="agent_v3", model="m")
+    round_2 = round_1.model_copy(update={"harness": 2})
+    assert round_1.harness == 1  # records from before the field load as round 1
+    assert round_1.id == "agent-agent_v3-m-default"
+    assert round_2.id == "agent-agent_v3-m-default-h2"
+    assert round_1 != round_2  # different configurations in the report
+
+
+def test_the_current_harness_version_is_not_round_1() -> None:
+    assert HARNESS_VERSION >= 2
+
+
+def test_a_round_1_record_without_the_field_loads_as_harness_1(tmp_path: Path) -> None:
+    store = RecordStore(tmp_path)
+    path = store.save(record())
+    data = json.loads(path.read_text(encoding="utf-8"))
+    del data["config"]["harness"]  # as written before the field existed
+    path.write_text(json.dumps(data), encoding="utf-8")
+    [loaded] = store.load_all("recommend_v1")
+    assert loaded.config.harness == 1 and path.parent.name == loaded.config.id
