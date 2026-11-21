@@ -1,0 +1,62 @@
+{
+ "_note": "Reconstructed, not a raw recording: titles and authors exactly as the live Google Books check of 2026-11-19 returned them (F-012), trimmed to the fields the adapter reads; ids and links are placeholders.",
+ "kind": "books#volumes",
+ "totalItems": 5,
+ "items": [
+  {
+   "id": "senecaF1",
+   "volumeInfo": {
+    "title": "Sobre la Brevedad de la Vida - Sobre la Felicidad",
+    "authors": [
+     "Séneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaF1"
+   }
+  },
+  {
+   "id": "senecaF2",
+   "volumeInfo": {
+    "title": "Sobre la felicidad y la brevedad de la vida",
+    "authors": [
+     "Lucio Aeneo Séneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaF2"
+   }
+  },
+  {
+   "id": "senecaF3",
+   "volumeInfo": {
+    "title": "Sobre la vida feliz. Sobre la brevedad de la vida",
+    "authors": [
+     "Séneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaF3"
+   }
+  },
+  {
+   "id": "senecaF4",
+   "volumeInfo": {
+    "title": "Sobre la felicidad y la brevedad de la vida",
+    "authors": [
+     "Seneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaF4"
+   }
+  },
+  {
+   "id": "senecaF5",
+   "volumeInfo": {
+    "title": "Sobre la felicidad. Sobre la brevedad de la vida",
+    "authors": [
+     "Lucio Anneo Séneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaF5"
+   }
+  }
+ ]
+}

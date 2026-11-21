@@ -232,3 +232,17 @@ Significant design decisions: context, options considered, choice, and reason.
   - The trace records the notice (`submit_notice`) and the forced tool (`forced_tool`).
 - **Reason:** A forced call removes the failure mode the notice couldn't: the turn that must submit can't be spent searching. The earlier notice gives a rejected submission a regular turn to be fixed before the forced one.
 - **Comparability:** this changes the loop, and D-027 changed the Google Books adapter that both systems use, so new runs go in a fresh results directory, per D-021.
+
+## D-029 · Combined volumes and " - " subtitles count as editions; translations don't (2026-11-21)
+
+- **Context:** F-012: *Sobre la Brevedad de la Vida* (Séneca) was rejected as `not_found` although both validator lookups returned 10 Séneca editions. The exact title existed only inside combined volumes ("Sobre la Brevedad de la Vida - Sobre la Felicidad", "Sobre la felicidad. Sobre la brevedad de la vida"), and the standalone editions used other translations of the Latin title ("De la brevedad de la vida").
+- **Options:** (a) also split titles into main title and subtitle on " - "; (b) match a title against each part of a combined volume; (c) when the author matches but no title does, ask the same-work judge.
+- **Choice:** (a) and (b), not (c).
+  - (a) The main title / subtitle split happens at the first ":" or spaced " - ", but not at ". ", which would split "Mr. Mercedes".
+  - (b) A title matches a combined volume when it equals one of its parts, split on " - ", ". ", "; " or " / ". One-word parts shorter than 4 letters are dropped as abbreviations ("Mr", "Dr"), and a title needs at least two parts left to count as a volume.
+  - Not (c): existence must stay verified by catalog data. The same-work judge decides whether two existing books are the same work; it must not decide whether a book exists.
+- **Side effects, accepted:**
+  - A combined volume's page count is the whole volume's, so it can wrongly fail a `max_pages` filter (or pass a `min_pages` one) for a short work inside it. Edition choice still prefers an edition that meets the filters when there is one.
+  - On the library side, a read title inside a volume ("Ficciones; El Aleph" read) makes either title count as already read. That errs on the safe side: it can only reject a recommendation, never let a read book through.
+- **Known gap:** different translations of the same original title ("Sobre la brevedad de la vida" vs "De la brevedad de la vida") still don't match for existence; the book is reported `not_found` if only other translations are in the catalog.
+- **Verified:** a regression test with fixtures built from the live check's results (titles and authors as returned; see the fixtures README).
