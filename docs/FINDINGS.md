@@ -180,3 +180,29 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **Quality the rules don't see:** the "history" picks included *Meditaciones* and Séneca (philosophy), and all three history runs began by searching a novel.
 - **How it was detected:** The report's per-case outcomes, the records' rejections and turn traces, and live Google Books requests for the Séneca lookup.
 - **Fix:** Retry Google Books requests once on 5xx and network errors (D-027). Force `submit_recommendations` on the last turn and the repair turn, and move the notice to 2 turns left (D-028). The Séneca title matching: pending a decision.
+
+## F-013 · Round 2 (harness 2): the agent accepts 85%; run-to-run noise is about 2 or 3 runs in 39 (2026-11-21)
+
+- **What happened:** `recommend_v1`, 13 cases × 3 runs, same prompts as F-011 (`baseline_v2`, `agent_v3`, `request_parser_v3`), harness 2: Google Books retries (D-027), forced submit and the notice at 2 turns left (D-028), combined volumes in title matching (D-029).
+
+  | | Round 1 (F-011) | Round 2 |
+  |---|---|---|
+  | Agent accepted | 31/39 (79%) | 33/39 (85%) |
+  | Agent `catalog_unavailable` | 4 | 0 |
+  | Agent `iterations_exhausted` | 4 | 2 |
+  | Agent `llm_error` | 0 | 4 |
+  | Agent history-nonfiction | 0/3 | 3/3 |
+  | Agent repair turn used | 5 | 2 |
+  | Agent p95 latency | 65 s | 39.5 s |
+  | Agent one search per turn | 20 | 18 |
+  | Baseline accepted | 5/39 (13%) | 8/39 (21%) |
+  | Baseline final `not_found` | 27 | 18 |
+  | Baseline unparseable | 2 | 5 |
+
+- **How it was detected:** `evals report`, which shows harness 1 and harness 2 as separate configurations.
+- **What it implies:**
+  - The targeted fixes worked where they aimed: no more `catalog_unavailable` (retries), history-nonfiction fixed and fewer repair turns (forced submit), fewer `not_found` (matcher). One search per turn barely moved, as expected: nothing targeted it.
+  - **Run-to-run noise:** the baseline's prompts didn't change, yet its accept count moved 5 → 8 and its unparseable replies 2 → 5. Part of the `not_found` drop is the matcher fix, but the rest is noise. A difference of 2 or 3 runs out of 39 isn't conclusive on its own; only larger differences, or ones tied to a specific failure kind that a change targeted, are.
+  - A new failure kind, 4 `llm_error`, all in Spanish requests (argentine-novel 2, borges-stories-es 1, short-light-es 1), needs investigating before the agent's 85% is read as final.
+- **Fix:** None yet; investigation follows.
+- **How it was verified:** The report from the stored records of both rounds.
