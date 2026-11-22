@@ -159,6 +159,12 @@ CATALOG_DOWN = record(
         CATALOG_DOWN,
         # Older records: no error_status, the status is only in the error text.
         record("q", error_kind="llm_error", error=GEMINI_503, calls=[failed_call()]),
+        record(
+            "n",
+            error_kind="llm_error",
+            error="LLM call failed: Gemini request failed: ConnectTimeout (after 1 retry)",
+            calls=[LLMCall(name="agent", model=None, usage=None, latency_s=1, network_error=True)],
+        ),
         # A 5xx while interpreting the request counts too.
         record("r", error_kind="interpretation", error="x", calls=[failed_call(500)]),
     ],

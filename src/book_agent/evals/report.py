@@ -44,15 +44,16 @@ _SERVER_ERROR_TEXT = re.compile(r"API error 5\d\d\b")
 
 def infrastructure_failure(record: EvalRecord) -> bool:
     """A run stopped by a service, not by the system's choices: the catalog was
-    unavailable, or the last LLM call failed with a server error (5xx), whatever step
-    made it (agent turn, request interpretation, baseline reply) (D-032)."""
+    unavailable, or the last LLM call failed with a server error (5xx) or a network
+    error, whatever step made it (agent turn, request interpretation, baseline reply)
+    (D-032)."""
     if record.error_kind == CATALOG_UNAVAILABLE:
         return True
     if record.error_kind is None or not record.calls or record.calls[-1].model is not None:
         return False
     last = record.calls[-1]
-    if last.error_status is not None:
-        return last.server_error
+    if last.error_status is not None or last.network_error:
+        return last.outage
     return bool(_SERVER_ERROR_TEXT.search(record.error or ""))
 
 

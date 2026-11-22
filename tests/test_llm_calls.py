@@ -1,6 +1,6 @@
 from time import perf_counter
 
-from book_agent.llm.base import LLMError, LLMServerError
+from book_agent.llm.base import LLMError, LLMNetworkError, LLMServerError
 from book_agent.llm.calls import LLMCall
 from tests.fakes import text_response
 
@@ -18,9 +18,15 @@ def test_a_failed_server_error_call_keeps_status_and_retries() -> None:
     assert call.server_error
 
 
+def test_a_failed_network_call_is_an_outage_without_status() -> None:
+    call = LLMCall.failed("agent", LLMNetworkError("ConnectError", retries=1), perf_counter())
+    assert (call.retries, call.error_status, call.network_error) == (1, None, True)
+    assert call.outage and not call.server_error
+
+
 def test_other_failures_have_no_status() -> None:
     call = LLMCall.failed("agent", LLMError("bad request"), perf_counter())
-    assert (call.retries, call.error_status, call.server_error) == (0, None, False)
+    assert (call.retries, call.error_status, call.outage) == (0, None, False)
 
 
 def test_old_records_without_the_new_fields_still_load() -> None:

@@ -3,7 +3,14 @@ from pydantic import SecretStr
 
 from book_agent.config import Settings
 from book_agent.evals.pacing import QuotaExhausted
-from book_agent.llm.base import LLMError, LLMRateLimitError, LLMResponse, LLMServerError, Message
+from book_agent.llm.base import (
+    LLMError,
+    LLMNetworkError,
+    LLMRateLimitError,
+    LLMResponse,
+    LLMServerError,
+    Message,
+)
 from book_agent.llm.gemini import GeminiClient
 from book_agent.llm.retrying import RETRY_DELAY_S, RetryingLLM
 from book_agent.wiring import build_llm, build_provider
@@ -55,6 +62,19 @@ async def test_a_second_server_error_is_raised_and_marked_as_retried() -> None:
     assert error.value.status == 500 and error.value.retries == 1
     assert str(error.value) == "Gemini API error 500 (after 1 retry)"
     assert len(inner.requests) == 2
+
+
+async def test_a_network_error_is_retried_once() -> None:
+    llm, inner, sleeps = retrying([LLMNetworkError("ConnectTimeout"), text_response("ok")])
+    assert (await ask(llm)).retries == 1
+    assert len(inner.requests) == 2 and sleeps.waits == [RETRY_DELAY_S + 0.3]
+
+
+async def test_a_network_error_after_a_server_error_is_raised_as_itself() -> None:
+    llm, _, _ = retrying([UNAVAILABLE, LLMNetworkError("ConnectError")])
+    with pytest.raises(LLMNetworkError) as error:
+        await ask(llm)
+    assert error.value.retries == 1 and str(error.value) == "ConnectError (after 1 retry)"
 
 
 @pytest.mark.parametrize(

@@ -18,6 +18,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from book_agent.config import GeminiThinkingLevel
 from book_agent.llm.base import (
     LLMError,
+    LLMNetworkError,
     LLMRateLimitError,
     LLMRefusalError,
     LLMResponse,
@@ -104,6 +105,8 @@ class GeminiClient:
         except errors.APIError as e:
             raise to_llm_error(e) from e
         # google-genai 3.x talks HTTP through httpx2 (not httpx) and doesn't wrap its errors.
+        except httpx2.TransportError as e:  # timeouts and connection failures
+            raise LLMNetworkError(f"Gemini request failed: {type(e).__name__}") from e
         except httpx2.HTTPError as e:
             raise LLMError(f"Gemini request failed: {type(e).__name__}") from e
         return from_gemini_response(response, requested_model=self._model)

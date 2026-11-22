@@ -1,12 +1,13 @@
-"""One retry on provider server errors, as a decorator around any LLMClient (D-030).
+"""One retry on transient provider errors, as a decorator around any LLMClient (D-030).
 
 Provider adapters never retry (D-027): this wrapper is where the policy lives, and
-wiring applies it for every caller (CLI, evals, the API later). Only LLMServerError
-(HTTP 5xx) is retried, once, after a short pause with jitter. Rate limits keep their
-own handling (the eval's PacedLLM); other errors are not transient.
+wiring applies it for every caller (CLI, evals, the API later). Only LLMTransientError
+is retried: server errors (HTTP 5xx) and network errors (timeouts, connection
+failures), once, after a short pause with jitter. Rate limits keep their own handling
+(the eval's PacedLLM); other errors are not transient.
 
 A retried call is visible to callers: the response's `retries` is 1, or the final
-LLMServerError's `retries` is 1 when the retry failed too.
+error's `retries` is 1 when the retry failed too.
 """
 
 import asyncio
@@ -16,7 +17,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from book_agent.llm.base import (
     LLMClient,
     LLMResponse,
-    LLMServerError,
+    LLMTransientError,
     Message,
     ToolChoice,
     ToolSpec,
@@ -33,7 +34,7 @@ def retry_jitter() -> float:
 
 
 class RetryingLLM:
-    """LLMClient that resends a request once when the provider answers with a 5xx."""
+    """LLMClient that resends a request once after a server or network error."""
 
     def __init__(
         self,
@@ -70,12 +71,10 @@ class RetryingLLM:
 
         try:
             return await send()
-        except LLMServerError:
+        except LLMTransientError:
             await self._sleep(self._delay_s + self._jitter())
         try:
             response = await send()
-        except LLMServerError as e:
-            raise LLMServerError(
-                f"{e} (after 1 retry)", status=e.status, retries=e.retries + 1
-            ) from e
+        except LLMTransientError as e:
+            raise e.after_retry() from e
         return response.model_copy(update={"retries": response.retries + 1})

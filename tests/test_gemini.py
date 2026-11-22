@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from book_agent.llm.base import (
     LLMError,
+    LLMNetworkError,
     LLMRateLimitError,
     LLMRefusalError,
     LLMServerError,
@@ -572,12 +573,14 @@ async def test_complete_maps_server_errors_without_retrying() -> None:
     assert len(recorder.requests) == 1
 
 
-async def test_complete_maps_network_errors() -> None:
-    recorder = Recorder(httpx2.ConnectError("down"))
-    with pytest.raises(LLMError, match="request failed: ConnectError"):
+@pytest.mark.parametrize("failure", [httpx2.ConnectError("down"), httpx2.ReadTimeout("slow")])
+async def test_complete_maps_network_errors_without_retrying(failure: Exception) -> None:
+    recorder = Recorder(failure)
+    with pytest.raises(LLMNetworkError, match=f"request failed: {type(failure).__name__}"):
         await gemini_client(recorder).complete(
             system="s", messages=[Message.user("hi")], max_tokens=10
         )
+    assert len(recorder.requests) == 1
 
 
 async def test_errors_never_contain_the_api_key() -> None:

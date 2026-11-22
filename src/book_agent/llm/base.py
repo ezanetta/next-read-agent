@@ -39,13 +39,37 @@ class LLMRateLimitError(LLMError):
         self.daily = daily  # a daily quota: waiting minutes won't help
 
 
-class LLMServerError(LLMError):
-    """The provider failed on its side (HTTP 5xx): often transient, e.g. 503 high demand."""
+class LLMTransientError(LLMError):
+    """A failure that may not happen again: a server error or a network error.
+    A retrying client resends these (D-030); adapters never do."""
+
+    def __init__(self, message: str, *, retries: int = 0) -> None:
+        super().__init__(message)
+        self.retries = retries  # times a retrying client resent the request before giving up
+
+    def after_retry(self) -> "LLMTransientError":
+        """The same error, marked as having survived one more retry."""
+        return LLMTransientError(f"{self} (after 1 retry)", retries=self.retries + 1)
+
+
+class LLMServerError(LLMTransientError):
+    """The provider failed on its side (HTTP 5xx), e.g. 503 high demand."""
 
     def __init__(self, message: str, *, status: int, retries: int = 0) -> None:
-        super().__init__(message)
+        super().__init__(message, retries=retries)
         self.status = status  # the HTTP status code
-        self.retries = retries  # times a retrying client resent the request before giving up
+
+    def after_retry(self) -> "LLMServerError":
+        return LLMServerError(
+            f"{self} (after 1 retry)", status=self.status, retries=self.retries + 1
+        )
+
+
+class LLMNetworkError(LLMTransientError):
+    """The request never got an answer: a timeout or a connection failure."""
+
+    def after_retry(self) -> "LLMNetworkError":
+        return LLMNetworkError(f"{self} (after 1 retry)", retries=self.retries + 1)
 
 
 class LLMRefusalError(LLMError):
@@ -232,7 +256,8 @@ class LLMClient(Protocol):
 
         `temperature=None` uses the provider's default. `tool_choice` forces a call to
         one of the named tools; None lets the model choose.
-        Raises LLMRateLimitError, LLMServerError, LLMRefusalError or LLMError on failure.
+        Raises LLMRateLimitError, LLMServerError, LLMNetworkError, LLMRefusalError or
+        LLMError on failure.
         """
         ...
 

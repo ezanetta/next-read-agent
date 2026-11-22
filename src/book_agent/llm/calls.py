@@ -5,7 +5,14 @@ from typing import Self
 
 from pydantic import BaseModel, Field
 
-from book_agent.llm.base import LLMError, LLMResponse, LLMServerError, Usage
+from book_agent.llm.base import (
+    LLMError,
+    LLMNetworkError,
+    LLMResponse,
+    LLMServerError,
+    LLMTransientError,
+    Usage,
+)
 
 
 class LLMCall(BaseModel, frozen=True):
@@ -15,6 +22,7 @@ class LLMCall(BaseModel, frozen=True):
     latency_s: float
     retries: int = Field(default=0, ge=0)  # resent after a server error (D-030)
     error_status: int | None = None  # HTTP status of a failed call's server error
+    network_error: bool = False  # a failed call that never got an answer
 
     @classmethod
     def succeeded(cls, name: str, response: LLMResponse, started: float) -> Self:
@@ -29,19 +37,24 @@ class LLMCall(BaseModel, frozen=True):
 
     @classmethod
     def failed(cls, name: str, error: LLMError, started: float) -> Self:
-        server = error if isinstance(error, LLMServerError) else None
         return cls(
             name=name,
             model=None,
             usage=None,
             latency_s=perf_counter() - started,
-            retries=server.retries if server else 0,
-            error_status=server.status if server else None,
+            retries=error.retries if isinstance(error, LLMTransientError) else 0,
+            error_status=error.status if isinstance(error, LLMServerError) else None,
+            network_error=isinstance(error, LLMNetworkError),
         )
 
     @property
     def server_error(self) -> bool:
         return self.error_status is not None and 500 <= self.error_status <= 599
+
+    @property
+    def outage(self) -> bool:
+        """Failed on the provider's side or on the way there, not because of the request."""
+        return self.server_error or self.network_error
 
 
 def total_usage(calls: list[LLMCall]) -> Usage | None:
