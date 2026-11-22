@@ -42,6 +42,7 @@ from book_agent.llm.base import (
     StopReason,
     TextPart,
     ToolCallPart,
+    ToolChoice,
     ToolResultPart,
     ToolSpec,
     Usage,
@@ -65,12 +66,17 @@ MAX_TURNS = MAX_ITERATIONS + REPAIR_TURNS  # the effective cap on LLM requests (
 MAX_TOKENS_PER_TURN = 2048
 CALL_NAME = "agent"
 REMINDER = "Submit your answer by calling the submit_recommendations tool."
-LAST_TURN_NOTICE = (
-    "This is your last turn. Call submit_recommendations now with your "
-    f"{EXPECTED_RECOMMENDATIONS} best books: there are no turns left for searching."
+NOTICE_TURNS_LEFT = 2  # the submit-now notice goes out when this many turns are left
+SUBMIT_NOW_NOTICE = (
+    f"You have {NOTICE_TURNS_LEFT} turns left. Call submit_recommendations now with your "
+    f"{EXPECTED_RECOMMENDATIONS} best books: if a book is rejected, you can still fix it on "
+    "your last turn."
 )
-"""Sent with the message that closes the next-to-last turn, for every prompt version
-(D-018). Without it, a model searching one book per turn ran out of turns (F-005)."""
+"""Sent with the message that closes the turn before the last two, for every prompt
+version (D-018, revised by D-028): late submission left no turn to fix a rejection."""
+FORCED_SUBMIT = ToolChoice.required(SUBMIT_RECOMMENDATIONS)
+"""The tool choice on the last regular turn and the repair turn (D-028): the model must
+submit, so a search can't use up the turn (F-012)."""
 REPAIR_NOTICE = (
     "Your submission was rejected on your last turn. You get one extra turn to fix it: "
     "keep the accepted books, replace only the rejected ones, and call "
@@ -98,8 +104,10 @@ class TurnTrace(BaseModel, frozen=True):
     text: str  # what the model wrote besides tool calls; often empty
     tools: list[ToolTrace] = []
     note: str | None = None  # for turns without tool calls
-    last_turn_notice: bool = False  # the message closing this turn carried LAST_TURN_NOTICE
+    submit_notice: bool = False  # the message closing this turn carried SUBMIT_NOW_NOTICE
+    forced_tool: str | None = None  # the tool this turn's request forced, if any
     repair_turn_granted: bool = False  # ... and REPAIR_NOTICE: a repair turn follows
+    llm_retries: int = 0  # this turn's request was resent after a server error (D-030)
 
 
 class AgentResult(BaseModel, frozen=True):
@@ -196,8 +204,9 @@ class _RunState:
         response: LLMResponse,
         tools: list[ToolTrace],
         note: str | None = None,
-        last_turn_notice: bool = False,
+        submit_notice: bool = False,
         repair_turn_granted: bool = False,
+        forced: bool = False,
     ) -> None:
         self.turns.append(
             TurnTrace(
@@ -207,8 +216,10 @@ class _RunState:
                 text=response.message.text,
                 tools=list(tools),
                 note=note,
-                last_turn_notice=last_turn_notice,
+                submit_notice=submit_notice,
                 repair_turn_granted=repair_turn_granted,
+                forced_tool=SUBMIT_RECOMMENDATIONS if forced else None,
+                llm_retries=response.retries,
             )
         )
 
@@ -231,25 +242,36 @@ async def run_agent(
     iteration = 0
     while iteration < limit:
         iteration += 1
+        # The last regular turn and the repair turn must submit (D-028).
+        forced = iteration >= MAX_ITERATIONS
         try:
-            response = await _complete(llm, system, tools, messages, state.calls)
+            response = await _complete(
+                llm, system, tools, messages, state.calls, FORCED_SUBMIT if forced else None
+            )
         except LLMError as e:
             raise state.error(f"LLM call failed: {e}", AgentFailure.LLM_ERROR, iteration) from e
         messages.append(response.message)  # unchanged: thought signatures live here
 
         if not response.message.tool_calls:
             if response.stop_reason == StopReason.MAX_TOKENS:
-                state.record_turn(iteration, response, [], note="no tool call: token limit")
+                state.record_turn(
+                    iteration, response, [], note="no tool call: token limit", forced=forced
+                )
                 raise state.error(
                     "the model hit the token limit without calling a tool",
                     AgentFailure.TOKEN_LIMIT,
                     iteration,
                 )
-            notice = iteration == MAX_ITERATIONS - 1
+            notice = iteration == MAX_ITERATIONS - NOTICE_TURNS_LEFT
             state.record_turn(
-                iteration, response, [], note="no tool call: reminder sent", last_turn_notice=notice
+                iteration,
+                response,
+                [],
+                note="no tool call: reminder sent",
+                submit_notice=notice,
+                forced=forced,
             )
-            messages.append(_closing_message([TextPart(text=REMINDER)], last_turn=notice))
+            messages.append(_closing_message([TextPart(text=REMINDER)], submit_notice=notice))
             continue
 
         # A call cut off at MAX_TOKENS still runs: malformed arguments go back as an
@@ -258,6 +280,15 @@ async def run_agent(
         traces: list[ToolTrace] = []
         rejected_this_turn = False
         for call in response.message.tool_calls:
+            if forced and call.name not in FORCED_SUBMIT.names:
+                # The provider should prevent this; never run another tool on a forced turn.
+                content = (
+                    f"Only submit_recommendations can be called on this turn; {call.name} "
+                    "was not run."
+                )
+                results.append(error_result(call, content))
+                traces.append(_trace(call, "not run: this turn had to submit", is_error=True))
+                continue
             if call.name == SEARCH_BOOKS:
                 result, outcome = await _search(call, books)
                 results.append(result)
@@ -285,7 +316,7 @@ async def run_agent(
             if outage:  # the model can't fix an outage: stop instead of asking it to
                 outcome = f"catalog unavailable: {len(outage)} lookups failed"
                 traces.append(_trace(call, outcome, is_error=True))
-                state.record_turn(iteration, response, traces)
+                state.record_turn(iteration, response, traces, forced=forced)
                 raise state.error(
                     f"the book catalog could not be reached ({len(outage)} lookups "
                     f"failed, first: {outage[0].message})",
@@ -295,7 +326,7 @@ async def run_agent(
                 )
             if is_acceptable(validation):
                 traces.append(_trace(call, "accepted"))
-                state.record_turn(iteration, response, traces)
+                state.record_turn(iteration, response, traces, forced=forced)
                 return AgentResult(
                     recommendations=submitted,
                     validation=validation,
@@ -311,7 +342,7 @@ async def run_agent(
             results.append(error_result(call, feedback))
             traces.append(_trace(call, _rejection_outcome(validation), is_error=True))
 
-        notice = iteration == MAX_ITERATIONS - 1
+        notice = iteration == MAX_ITERATIONS - NOTICE_TURNS_LEFT
         # Only a rejection on the last regular turn earns the repair turn: earlier ones
         # still have a turn left, and a rejection in the repair turn ends the run.
         repair = rejected_this_turn and iteration == MAX_ITERATIONS
@@ -319,9 +350,14 @@ async def run_agent(
             limit = MAX_TURNS
             state.repair_turn_used = True
         state.record_turn(
-            iteration, response, traces, last_turn_notice=notice, repair_turn_granted=repair
+            iteration,
+            response,
+            traces,
+            submit_notice=notice,
+            repair_turn_granted=repair,
+            forced=forced,
         )
-        messages.append(_closing_message(results, last_turn=notice, repair=repair))
+        messages.append(_closing_message(results, submit_notice=notice, repair=repair))
 
     rejected = f" ({len(state.rejections)} submissions rejected)" if state.rejections else ""
     repair_turn = f" including {REPAIR_TURNS} repair turn" if state.repair_turn_used else ""
@@ -333,14 +369,17 @@ async def run_agent(
 
 
 def _closing_message(
-    parts: Sequence[ToolResultPart | TextPart], *, last_turn: bool = False, repair: bool = False
+    parts: Sequence[ToolResultPart | TextPart],
+    *,
+    submit_notice: bool = False,
+    repair: bool = False,
 ) -> Message:
-    """The user message that ends a turn, with the last-turn or repair notice when due.
+    """The user message that ends a turn, with the submit-now or repair notice when due.
 
     Notices go last, after any tool results, in the same message: two user messages in a
     row are avoided, and Claude requires tool results before text (D-018).
     """
-    notices = [LAST_TURN_NOTICE] if last_turn else []
+    notices = [SUBMIT_NOW_NOTICE] if submit_notice else []
     notices += [REPAIR_NOTICE] if repair else []
     return Message(role="user", parts=(*parts, *(TextPart(text=n) for n in notices)))
 
@@ -351,25 +390,21 @@ async def _complete(
     tools: Sequence[ToolSpec],
     messages: list[Message],
     calls: list[LLMCall],
+    tool_choice: ToolChoice | None = None,
 ) -> LLMResponse:
     started = perf_counter()
     try:
         response = await llm.complete(
-            system=system, messages=messages, tools=tools, max_tokens=MAX_TOKENS_PER_TURN
+            system=system,
+            messages=messages,
+            tools=tools,
+            max_tokens=MAX_TOKENS_PER_TURN,
+            tool_choice=tool_choice,
         )
-    except LLMError:
-        calls.append(
-            LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
-        )
+    except LLMError as e:
+        calls.append(LLMCall.failed(CALL_NAME, e, started))
         raise
-    calls.append(
-        LLMCall(
-            name=CALL_NAME,
-            model=response.model,
-            usage=response.usage,
-            latency_s=perf_counter() - started,
-        )
-    )
+    calls.append(LLMCall.succeeded(CALL_NAME, response, started))
     return response
 
 

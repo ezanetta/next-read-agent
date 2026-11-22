@@ -1,0 +1,29 @@
+{
+  "version": "request_parser_v1",
+  "description": "Labeled requests for the request interpreter. preference_contains lists terms that must survive in the preference (case-insensitive). Frozen once it has results: changes go in request_parser_v2.",
+  "cases": [
+    {"id": "short-light", "request": "algo corto y liviano", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["corto", "liviano"]},
+    {"id": "dystopia-filters", "request": "una distopía de menos de 400 páginas en inglés", "has_preference": true, "language": "en", "max_pages": 400, "preference_contains": ["distopía"]},
+    {"id": "like-east-of-eden", "request": "algo como East of Eden", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["East of Eden"]},
+    {"id": "fantasy-no-sanderson", "request": "A fantasy book around 700 pages with great magic system, but nothing from Brandon Sanderson", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["fantasy", "magic", "700", "Sanderson"]},
+    {"id": "borges-stories-es", "request": "Libros de cuentos similares a Jorge Luis Borges, en español", "has_preference": true, "language": "es", "max_pages": null, "preference_contains": ["cuentos", "Borges"]},
+    {"id": "more-claire-keegan", "request": "más libros de Claire Keegan", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["Keegan"]},
+    {"id": "scifi-not-space", "request": "A sci fi book that is not about space", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["space"]},
+    {"id": "argentine-novel", "request": "una novela argentina", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["argentina"]},
+    {"id": "history-nonfiction", "request": "no ficción sobre historia, menos de 300 páginas", "has_preference": true, "language": null, "max_pages": 300, "preference_contains": ["historia"]},
+    {"id": "litrpg", "request": "Give me some litRPG books", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["litRPG"]},
+    {"id": "short-light-es", "request": "algo corto y liviano en español", "has_preference": true, "language": "es", "max_pages": null, "preference_contains": ["corto", "liviano"]},
+    {"id": "japanese-novel", "request": "una novela japonesa", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["japonesa"]},
+    {"id": "something-short", "request": "something short", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["short"]},
+    {"id": "over-600", "request": "un libro de más de 600 páginas", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["600"]},
+    {"id": "under-300", "request": "a mystery under 300 pages", "has_preference": true, "language": null, "max_pages": 300, "preference_contains": ["mystery"]},
+    {"id": "at-most-300", "request": "a mystery of at most 300 pages", "has_preference": true, "language": null, "max_pages": 300, "preference_contains": ["mystery"]},
+    {"id": "thriller-french", "request": "a thriller in French", "has_preference": true, "language": "fr", "max_pages": null, "preference_contains": ["thriller"]},
+    {"id": "two-languages", "request": "un thriller, en inglés o en español", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["thriller", "inglés", "español"]},
+    {"id": "filters-only", "request": "books in English under 250 pages", "has_preference": false, "language": "en", "max_pages": 250, "preference_contains": []},
+    {"id": "language-only", "request": "en inglés", "has_preference": false, "language": "en", "max_pages": null, "preference_contains": []},
+    {"id": "translated-from-russian", "request": "una novela traducida del ruso", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["ruso"]},
+    {"id": "between-200-and-400", "request": "a romance between 200 and 400 pages", "has_preference": true, "language": null, "max_pages": 400, "preference_contains": ["romance", "200"]},
+    {"id": "cozy-no-christie", "request": "a cozy mystery, nothing by Agatha Christie", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["cozy", "Christie"]}
+  ]
+}

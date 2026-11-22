@@ -155,7 +155,11 @@ def _matching(rec: Recommendation, candidates: list[CatalogBook]) -> list[Catalo
 
 
 def _filter_score(book: CatalogBook, filters: Filters) -> tuple[int, int]:
-    checks = (_language_check(book, filters), _pages_check(book, filters))
+    checks = (
+        _language_check(book, filters),
+        _pages_check(book, filters),
+        _min_pages_check(book, filters),
+    )
     return (checks.count(Check.FAIL), checks.count(Check.UNKNOWN))
 
 
@@ -248,15 +252,34 @@ def _check_one(
             Unknown(rule=Rule.MAX_PAGES, index=index, message=f"{label}: page count unknown")
         )
 
-    cited = [b.title for b in profile.read_books if mentions_title(rec.reason, b.title)]
-    cites_library = Check.PASS if cited else Check.FAIL
-    if not cited:
+    min_pages = _min_pages_check(match, filters) if match else Check.SKIPPED
+    if min_pages is Check.FAIL and match:
         violations.append(
             Violation(
-                rule=Rule.CITES_LIBRARY,
+                rule=Rule.MIN_PAGES,
                 index=index,
-                message=f"{label}: the reason cites no book from the reader's history",
+                message=f"{label}: {match.pages} pages, min {filters.min_pages}",
             )
+        )
+    elif min_pages is Check.UNKNOWN:
+        unknowns.append(
+            Unknown(rule=Rule.MIN_PAGES, index=index, message=f"{label}: page count unknown")
+        )
+
+    mentioned = [b for b in profile.read_books if mentions_title(rec.reason, b.title)]
+    # Citing the recommended book itself is no evidence of taste (F-004): "since you loved
+    # The Pearl, read The Pearl". It is the same work by title, or the library book it
+    # collides with (a translation, found by work key or the judge).
+    cited = [b.title for b in mentioned if not _is_itself(rec, b, library_match)]
+    cites_library = Check.PASS if cited else Check.FAIL
+    if not cited:
+        why = (
+            "the reason cites only the recommended book itself"
+            if mentioned
+            else "the reason cites no book from the reader's history"
+        )
+        violations.append(
+            Violation(rule=Rule.CITES_LIBRARY, index=index, message=f"{label}: {why}")
         )
 
     item = CheckedRecommendation(
@@ -270,9 +293,15 @@ def _check_one(
         not_in_library=not_in_library,
         language=language,
         max_pages=pages,
+        min_pages=min_pages,
         cites_library=cites_library,
     )
     return item, violations, unknowns
+
+
+def _is_itself(rec: Recommendation, book: Book, library_match: Book | None) -> bool:
+    """Whether a library book is the recommended book itself, for citation purposes."""
+    return book == library_match or same_work(rec.title, [rec.author], book.title, [book.author])
 
 
 async def _check_library(
@@ -388,6 +417,14 @@ def _language_check(book: CatalogBook, filters: Filters) -> Check:
 def primary_language(code: str) -> str:
     """The primary subtag of a language code: "pt-BR" and "pt_br" -> "pt"."""
     return code.replace("_", "-").split("-", 1)[0].casefold()
+
+
+def _min_pages_check(book: CatalogBook, filters: Filters) -> Check:
+    if filters.min_pages is None:
+        return Check.SKIPPED
+    if book.pages is None:
+        return Check.UNKNOWN
+    return Check.PASS if book.pages >= filters.min_pages else Check.FAIL
 
 
 def _pages_check(book: CatalogBook, filters: Filters) -> Check:

@@ -11,12 +11,15 @@ from pydantic import BaseModel
 
 from book_agent.llm.base import (
     LLMError,
+    LLMNetworkError,
     LLMRateLimitError,
     LLMRefusalError,
+    LLMServerError,
     Message,
     StopReason,
     TextPart,
     ToolCallPart,
+    ToolChoice,
     ToolResultPart,
     ToolSpec,
 )
@@ -421,13 +424,35 @@ def test_no_candidates_raises() -> None:
 # --- Errors -----------------------------------------------------------------------
 
 
-def api_error_json(code: int, status: str, *details: dict[str, str]) -> dict[str, object]:
+def api_error_json(code: int, status: str, *details: dict[str, object]) -> dict[str, object]:
     return {"error": {"code": code, "message": "Something happened", "status": status,
                       "details": list(details)}}  # fmt: skip
 
 
-def retry_info(delay: str) -> dict[str, str]:
+def retry_info(delay: str) -> dict[str, object]:
     return {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": delay}
+
+
+def quota_failure(quota_id: str) -> dict[str, object]:
+    return {
+        "@type": "type.googleapis.com/google.rpc.QuotaFailure",
+        "violations": [{"quotaMetric": "generate_content_free_tier_requests", "quotaId": quota_id}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("quota_id", "daily"),
+    [
+        ("GenerateRequestsPerDayPerProjectPerModel-FreeTier", True),
+        ("GenerateRequestsPerMinutePerProjectPerModel-FreeTier", False),
+    ],
+)
+def test_429_says_whether_the_quota_is_daily(quota_id: str, daily: bool) -> None:
+    body = api_error_json(429, "RESOURCE_EXHAUSTED", quota_failure(quota_id), retry_info("9s"))
+    mapped = to_llm_error(errors.ClientError(429, body))
+    assert isinstance(mapped, LLMRateLimitError)
+    assert mapped.daily is daily
+    assert mapped.retry_after == 9.0
 
 
 @pytest.mark.parametrize(("delay", "seconds"), [("17s", 17.0), ("1.5s", 1.5)])
@@ -444,6 +469,7 @@ def test_429_without_retry_delay() -> None:
     mapped = to_llm_error(error)
     assert isinstance(mapped, LLMRateLimitError)
     assert mapped.retry_after is None
+    assert not mapped.daily  # unknown scope: treated as a short-term limit
 
 
 def test_402_resource_exhausted_is_not_a_rate_limit() -> None:
@@ -451,10 +477,17 @@ def test_402_resource_exhausted_is_not_a_rate_limit() -> None:
     assert type(mapped) is LLMError
 
 
-def test_server_error_maps_to_llm_error() -> None:
-    mapped = to_llm_error(errors.ServerError(500, api_error_json(500, "INTERNAL")))
+@pytest.mark.parametrize(("code", "status"), [(500, "INTERNAL"), (503, "UNAVAILABLE")])
+def test_server_errors_map_to_llm_server_error(code: int, status: str) -> None:
+    mapped = to_llm_error(errors.ServerError(code, api_error_json(code, status)))
+    assert isinstance(mapped, LLMServerError)
+    assert mapped.status == code and mapped.retries == 0
+    assert str(mapped) == f"Gemini API error {code} {status}: Something happened"
+
+
+def test_a_client_error_is_a_plain_llm_error() -> None:
+    mapped = to_llm_error(errors.ClientError(400, api_error_json(400, "INVALID_ARGUMENT")))
     assert type(mapped) is LLMError
-    assert str(mapped) == "Gemini API error 500 INTERNAL: Something happened"
 
 
 # --- complete(): the real SDK over a mock HTTP transport ---------------------------
@@ -540,12 +573,14 @@ async def test_complete_maps_server_errors_without_retrying() -> None:
     assert len(recorder.requests) == 1
 
 
-async def test_complete_maps_network_errors() -> None:
-    recorder = Recorder(httpx2.ConnectError("down"))
-    with pytest.raises(LLMError, match="request failed: ConnectError"):
+@pytest.mark.parametrize("failure", [httpx2.ConnectError("down"), httpx2.ReadTimeout("slow")])
+async def test_complete_maps_network_errors_without_retrying(failure: Exception) -> None:
+    recorder = Recorder(failure)
+    with pytest.raises(LLMNetworkError, match=f"request failed: {type(failure).__name__}"):
         await gemini_client(recorder).complete(
             system="s", messages=[Message.user("hi")], max_tokens=10
         )
+    assert len(recorder.requests) == 1
 
 
 async def test_errors_never_contain_the_api_key() -> None:
@@ -559,3 +594,35 @@ async def test_errors_never_contain_the_api_key() -> None:
         with pytest.raises(LLMError) as error:
             await client.complete(system="s", messages=[Message.user("hi")], max_tokens=10)
         assert API_KEY not in str(error.value)
+
+
+# --- Tool choice --------------------------------------------------------------------------
+
+SUBMIT = ToolSpec.from_model("submit_recommendations", "Submit the answer.", SearchArgs)
+
+
+def test_tool_choice_maps_to_mode_any_with_allowed_names() -> None:
+    config = to_gemini_config(
+        system="s", tools=[SEARCH, SUBMIT], max_tokens=10, temperature=None, thinking_level=None,
+        tool_choice=ToolChoice.required("submit_recommendations"),
+    )  # fmt: skip
+    assert config.tool_config is not None
+    calling = config.tool_config.function_calling_config
+    assert calling is not None
+    assert calling.mode == types.FunctionCallingConfigMode.ANY
+    assert calling.allowed_function_names == ["submit_recommendations"]
+
+
+def test_without_tool_choice_the_model_chooses() -> None:
+    config = to_gemini_config(
+        system="s", tools=[SEARCH], max_tokens=10, temperature=None, thinking_level=None
+    )
+    assert config.tool_config is None
+
+
+def test_tool_choice_must_name_declared_tools() -> None:
+    with pytest.raises(ValueError, match="undeclared tools: fly_to_moon"):
+        to_gemini_config(
+            system="s", tools=[SEARCH], max_tokens=10, temperature=None, thinking_level=None,
+            tool_choice=ToolChoice.required("fly_to_moon"),
+        )  # fmt: skip

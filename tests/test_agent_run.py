@@ -5,7 +5,7 @@ from book_agent.agent_run import AGENT_PROMPTS, DEFAULT_AGENT_PROMPT, run_agent_
 from book_agent.domain.recommendations import Filters, Recommendation
 from book_agent.domain.requests import FilterSource
 from book_agent.llm.base import LLMError, LLMResponse, ToolCallPart
-from book_agent.prompts import agent_v1, agent_v2, request_parser_v1
+from book_agent.prompts import agent_v1, agent_v3, request_parser_v3
 from tests.fakes import FakeLLM, text_response, tool_call_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
 
@@ -37,11 +37,11 @@ async def test_request_is_interpreted_then_the_agent_runs() -> None:
     assert run.request.sources == {"language": FilterSource.TEXT, "max_pages": FilterSource.FLAG}
     assert [c.name for c in run.calls] == ["interpret_request", CALL_NAME]
     assert (run.iterations, run.submissions) == (1, 1)
-    assert (run.prompt_id, run.request_prompt_id) == ("agent_v2", "request_parser_v1")
+    assert (run.prompt_id, run.request_prompt_id) == ("agent_v3", "request_parser_v3")
 
     agent_request = llm.requests[1]
-    assert agent_request.system == agent_v2.SYSTEM
-    assert agent_request.tools == tuple(agent_v2.TOOLS)
+    assert agent_request.system == agent_v3.SYSTEM
+    assert agent_request.tools == tuple(agent_v3.TOOLS)
     assert "<request>\na classic\n</request>" in agent_request.messages[0].text
     assert "at most 500 pages" in agent_request.messages[0].text
 
@@ -64,7 +64,7 @@ async def test_failed_interpretation_stops_before_the_agent() -> None:
     assert run.error == "Could not interpret the request: no JSON found in the reply"
     assert run.raw_text == "Sure, a classic!"
     assert len(llm.requests) == 1
-    assert llm.requests[0].system == request_parser_v1.SYSTEM
+    assert llm.requests[0].system == request_parser_v3.SYSTEM
 
 
 async def test_agent_failure_keeps_its_evidence() -> None:
@@ -90,6 +90,19 @@ async def test_the_prompt_version_can_be_chosen() -> None:
     assert llm.requests[0].tools == tuple(agent_v1.TOOLS)
 
 
-def test_registry_has_both_versions_and_v2_is_the_default() -> None:
-    assert sorted(AGENT_PROMPTS) == ["agent_v1", "agent_v2"]
-    assert DEFAULT_AGENT_PROMPT is agent_v2.PROMPT
+def test_registry_has_every_version_and_v3_is_the_default() -> None:
+    assert sorted(AGENT_PROMPTS) == ["agent_v1", "agent_v2", "agent_v3"]
+    assert DEFAULT_AGENT_PROMPT is agent_v3.PROMPT
+
+
+async def test_a_contradiction_stops_before_the_agent_with_its_kind() -> None:
+    reply = json.dumps(
+        {"preference": "a saga", "language": None, "max_pages": None, "min_pages": 500}
+    )
+    llm = FakeLLM([text_response(reply)])
+    run = await run_agent_pipeline(
+        PROFILE, Filters(max_pages=300), request="x", llm=llm, books=catalog()
+    )
+    assert run.request_error_kind == "contradiction"
+    assert run.error is not None and run.error.startswith("The request contradicts the flags")
+    assert len(llm.requests) == 1

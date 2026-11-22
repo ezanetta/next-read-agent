@@ -35,6 +35,17 @@ sequences.
 
 
 def build_user_prompt(profile: Profile, filters: Filters, preference: str | None = None) -> str:
+    return compose_user_prompt(profile, _constraints(filters), preference)
+
+
+def compose_user_prompt(
+    profile: Profile, constraints: list[str], preference: str | None = None
+) -> str:
+    """The reader's lists, their request and the constraint lines, in baseline_v1's form.
+
+    Shared by later versions that change only the constraint lines (baseline_v2), so the
+    rest of the prompt stays byte-for-byte the same and results stay comparable.
+    """
     liked = profile.liked_books
     less_liked = profile.not_so_liked_books
     rated = {id(b) for b in liked + less_liked}
@@ -56,7 +67,6 @@ def build_user_prompt(profile: Profile, filters: Filters, preference: str | None
     if preference:
         parts.append(f"My request, in my own words:\n{request_block(preference)}")
 
-    constraints = _constraints(filters)
     if constraints:
         parts.append("Constraints:\n" + "\n".join(f"- {c}" for c in constraints))
 

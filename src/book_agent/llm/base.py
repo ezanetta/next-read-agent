@@ -31,9 +31,45 @@ class LLMError(Exception):
 class LLMRateLimitError(LLMError):
     """The provider rejected the request for rate or quota reasons."""
 
-    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+    def __init__(
+        self, message: str, *, retry_after: float | None = None, daily: bool = False
+    ) -> None:
         super().__init__(message)
         self.retry_after = retry_after  # seconds, when the provider suggests one
+        self.daily = daily  # a daily quota: waiting minutes won't help
+
+
+class LLMTransientError(LLMError):
+    """A failure that may not happen again: a server error or a network error.
+    A retrying client resends these (D-030); adapters never do."""
+
+    def __init__(self, message: str, *, retries: int = 0) -> None:
+        super().__init__(message)
+        self.retries = retries  # times a retrying client resent the request before giving up
+
+    def after_retry(self) -> "LLMTransientError":
+        """The same error, marked as having survived one more retry."""
+        return LLMTransientError(f"{self} (after 1 retry)", retries=self.retries + 1)
+
+
+class LLMServerError(LLMTransientError):
+    """The provider failed on its side (HTTP 5xx), e.g. 503 high demand."""
+
+    def __init__(self, message: str, *, status: int, retries: int = 0) -> None:
+        super().__init__(message, retries=retries)
+        self.status = status  # the HTTP status code
+
+    def after_retry(self) -> "LLMServerError":
+        return LLMServerError(
+            f"{self} (after 1 retry)", status=self.status, retries=self.retries + 1
+        )
+
+
+class LLMNetworkError(LLMTransientError):
+    """The request never got an answer: a timeout or a connection failure."""
+
+    def after_retry(self) -> "LLMNetworkError":
+        return LLMNetworkError(f"{self} (after 1 retry)", retries=self.retries + 1)
 
 
 class LLMRefusalError(LLMError):
@@ -148,6 +184,33 @@ class ToolSpec(BaseModel, frozen=True):
 # --- Responses --------------------------------------------------------------
 
 
+class ToolChoice(BaseModel, frozen=True):
+    """Makes a request call one of the named tools: no text-only answer, no other tool.
+
+    Passing None instead lets the model choose (text, or any declared tool). Every name
+    must be one of the request's tools; adapters raise ValueError otherwise.
+
+    Provider mapping:
+    - Gemini: function calling mode ANY with allowed_function_names = names.
+    - Claude: one name -> tool_choice {"type": "tool", "name": name}; every declared tool
+      -> {"type": "any"}; a subset of several -> send only those tools, with
+      {"type": "any"} (Claude has no "one of these" option).
+    """
+
+    names: tuple[str, ...] = Field(min_length=1)
+
+    @classmethod
+    def required(cls, *names: str) -> Self:
+        return cls(names=names)
+
+    def check_against(self, tools: Sequence["ToolSpec"]) -> None:
+        """Raise ValueError if a name isn't among the request's tools."""
+        declared = {t.name for t in tools}
+        unknown = [n for n in self.names if n not in declared]
+        if unknown:
+            raise ValueError(f"tool_choice names undeclared tools: {', '.join(unknown)}")
+
+
 class StopReason(StrEnum):
     END_TURN = "end_turn"
     TOOL_USE = "tool_use"
@@ -164,6 +227,7 @@ class LLMResponse(BaseModel, frozen=True):
     stop_reason: StopReason
     usage: Usage
     model: str
+    retries: int = Field(default=0, ge=0)  # set by a retrying client; adapters leave it at 0
 
     @model_validator(mode="after")
     def _message_is_from_assistant(self) -> Self:
@@ -186,11 +250,14 @@ class LLMClient(Protocol):
         tools: Sequence[ToolSpec] = (),
         max_tokens: int,
         temperature: float | None = None,
+        tool_choice: ToolChoice | None = None,
     ) -> LLMResponse:
         """Send one request and return the assistant's next message.
 
-        `temperature=None` uses the provider's default.
-        Raises LLMRateLimitError, LLMRefusalError or LLMError on failure.
+        `temperature=None` uses the provider's default. `tool_choice` forces a call to
+        one of the named tools; None lets the model choose.
+        Raises LLMRateLimitError, LLMServerError, LLMNetworkError, LLMRefusalError or
+        LLMError on failure.
         """
         ...
 

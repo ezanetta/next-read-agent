@@ -8,6 +8,7 @@ from book_agent.domain.matching import (
     same_work,
     title_variants,
     titles_match,
+    volume_parts,
 )
 
 # --- Normalization rules -------------------------------------------------------
@@ -143,3 +144,54 @@ def test_same_work_needs_title_and_author() -> None:
 )
 def test_mentions_title(reason: str, title: str, cited: bool) -> None:
     assert mentions_title(reason, title) is cited
+
+
+# --- " - " subtitles and combined volumes (D-029) ----------------------------------------
+
+
+def test_a_spaced_dash_separates_a_subtitle() -> None:
+    variants = title_variants("Sobre la Brevedad de la Vida - Sobre la Felicidad")
+    assert variants.main == "sobre la brevedad de la vida"
+    assert variants.subtitle == "sobre la felicidad"
+    assert titles_match(
+        "Sobre la Brevedad de la Vida", "Sobre la Brevedad de la Vida - Sobre la Felicidad"
+    )
+
+
+def test_a_hyphen_inside_a_word_is_not_a_separator() -> None:
+    assert title_variants("Spider-Man: Homecoming").main == "spider man"
+    assert title_variants("Spider-Man").subtitle is None
+
+
+def test_a_period_is_not_a_subtitle_separator() -> None:
+    assert title_variants("Mr. Mercedes").subtitle is None
+
+
+def test_dash_series_titles_with_different_subtitles_still_differ() -> None:
+    assert not titles_match("Mistborn - The Final Empire", "Mistborn - The Well of Ascension")
+
+
+def test_a_part_of_a_combined_volume_matches_the_volume() -> None:
+    volume = "Sobre la felicidad. Sobre la brevedad de la vida"
+    assert volume_parts(volume) == ["sobre la felicidad", "sobre la brevedad de la vida"]
+    assert titles_match("Sobre la brevedad de la vida", volume)
+    assert titles_match(volume, "Sobre la brevedad de la vida")  # symmetric
+    assert titles_match("Ficciones", "Ficciones; El Aleph")
+    assert titles_match("El Aleph", "Ficciones / El Aleph")
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Mr. Mercedes",  # "Mr" is an abbreviation, so one part is left: not a volume
+        "Dune",
+        "The Lord of the Rings: The Fellowship of the Ring",  # ":" is a subtitle, not parts
+    ],
+)
+def test_titles_that_are_not_volumes(title: str) -> None:
+    assert volume_parts(title) == []
+
+
+def test_a_title_never_matches_a_volume_that_merely_shares_words() -> None:
+    assert not titles_match("La brevedad", "Sobre la felicidad. Sobre la brevedad de la vida")
+    assert not titles_match("Mercedes", "Mr. Mercedes")

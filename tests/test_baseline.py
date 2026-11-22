@@ -12,8 +12,8 @@ from book_agent.baseline import (
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, MatchEvidence, Recommendation, Rule
 from book_agent.domain.requests import FilterSource
-from book_agent.llm.base import LLMError, StopReason, Usage
-from book_agent.prompts import baseline_v1, request_parser_v1, same_work_v1
+from book_agent.llm.base import LLMError, LLMResponse, StopReason, Usage
+from book_agent.prompts import baseline_v1, baseline_v2, request_parser_v3, same_work_v1
 from tests.fakes import FakeLLM, text_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
 from tests.library_data import book as library_book
@@ -121,10 +121,10 @@ def test_prompt_states_filters_only_when_given() -> None:
 async def test_request_uses_the_versioned_prompt() -> None:
     result, llm = await run(reply(CLEAN_THREE))
     request = llm.requests[0]
-    assert request.system == baseline_v1.SYSTEM
-    assert request.messages[0].text == baseline_v1.build_user_prompt(PROFILE, Filters())
+    assert request.system == baseline_v2.SYSTEM
+    assert request.messages[0].text == baseline_v2.build_user_prompt(PROFILE, Filters())
     assert request.tools == ()
-    assert result.prompt_id == "baseline_v1"
+    assert result.prompt_id == "baseline_v2"
 
 
 # --- The whole flow -------------------------------------------------------------------
@@ -285,9 +285,9 @@ async def test_request_is_interpreted_then_used_for_recommending() -> None:
         reply(CLEAN_THREE),
     )
     interpret, recommend = llm.requests
-    assert interpret.system == request_parser_v1.SYSTEM
-    assert recommend.system == baseline_v1.SYSTEM
-    assert recommend.messages[0].text == baseline_v1.build_user_prompt(
+    assert interpret.system == request_parser_v3.SYSTEM
+    assert recommend.system == baseline_v2.SYSTEM
+    assert recommend.messages[0].text == baseline_v2.build_user_prompt(
         PROFILE, Filters(language="en", max_pages=600), "a dystopia"
     )
 
@@ -295,7 +295,7 @@ async def test_request_is_interpreted_then_used_for_recommending() -> None:
     assert result.request.preference == "a dystopia"
     assert result.request.filters == Filters(language="en", max_pages=600)
     assert result.request.sources == {"language": FilterSource.TEXT, "max_pages": FilterSource.TEXT}
-    assert result.request_prompt_id == "request_parser_v1"
+    assert result.request_prompt_id == "request_parser_v3"
     assert [c.name for c in result.calls] == ["interpret_request", "recommend"]
     assert result.total_usage == Usage(input_tokens=1700, output_tokens=150)
     assert result.passed
@@ -341,3 +341,47 @@ async def test_blank_request_counts_as_no_request() -> None:
     assert [c.name for c in result.calls] == ["recommend"]
     assert result.request_text is None and result.request_prompt_id is None
     assert result.passed
+
+
+@pytest.mark.parametrize(
+    ("script", "request_text", "kind"),
+    [
+        ([text_response("Sure!")], "a classic", "interpretation"),
+        ([LLMError("503")], None, "llm_error"),
+        ([text_response("not json at all")], None, "unparseable"),
+    ],
+)
+async def test_errors_say_their_kind(
+    script: list[LLMResponse | Exception], request_text: str | None, kind: str
+) -> None:
+    result = await run_baseline(
+        PROFILE, Filters(), request=request_text, llm=FakeLLM(script), books=catalog()
+    )
+    assert result.error is not None
+    assert result.error_kind == kind
+
+
+async def test_a_successful_run_has_no_error_kind() -> None:
+    result, _ = await run(reply(CLEAN_THREE))
+    assert result.error_kind is None
+
+
+def test_baseline_parsing_stays_strict_about_control_characters() -> None:
+    # F-010 relaxed only the request parser; the baseline's measured behavior is unchanged.
+    reply = '{"recommendations": [{"title": "A\nB", "author": "X", "reason": "Like Dune."}]}'
+    with pytest.raises(RecommendationParseError, match="Invalid control character"):
+        parse_recommendations(reply)
+
+
+async def test_a_contradiction_in_the_text_stops_with_its_own_kind() -> None:
+    reply = json.dumps(
+        {"preference": "a novel", "language": None, "max_pages": 300, "min_pages": 500}
+    )
+    llm = FakeLLM([text_response(reply)])  # no recommendation call scripted
+    result = await run_baseline(PROFILE, Filters(), request="x", llm=llm, books=catalog())
+    assert result.error_kind == "contradiction"
+    assert result.error == (
+        "The request contradicts itself: "
+        "min_pages 500 (from text) is above max_pages 300 (from text)"
+    )
+    assert len(llm.requests) == 1

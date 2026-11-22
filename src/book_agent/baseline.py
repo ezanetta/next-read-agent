@@ -8,7 +8,7 @@ parsing problems: they end up in result.error, so an eval run always gets one re
 """
 
 from time import perf_counter
-from typing import cast
+from typing import Literal, cast
 
 from pydantic import BaseModel
 
@@ -20,12 +20,15 @@ from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message, StopReason, Usage
 from book_agent.llm.calls import LLMCall, total_usage
 from book_agent.ports import BookSearch, WorkResolver
-from book_agent.prompts import baseline_v1
+from book_agent.prompts import baseline_v2 as baseline_prompt  # D-026: states min_pages
 from book_agent.request_parser import resolve_request
 from book_agent.same_work_judge import LLMSameWorkJudge
 
 CALL_NAME = "recommend"
 DEFAULT_MAX_TOKENS = 2048
+
+
+BaselineFailure = Literal["interpretation", "contradiction", "llm_error", "unparseable"]
 
 
 class RecommendationParseError(ReplyParseError):
@@ -45,6 +48,7 @@ class BaselineResult(BaseModel, frozen=True):
     parsed: RecommendationList | None = None
     validation: ValidationResult | None = None
     error: str | None = None  # interpretation failure, LLM failure or unparseable reply
+    error_kind: BaselineFailure | None = None
 
     @property
     def passed(self) -> bool:
@@ -72,7 +76,7 @@ async def run_baseline(
     stops the run before the recommendation call, so typed constraints are never dropped.
     With `works`, equal work keys settle the same-work question before the LLM judge.
     """
-    result = BaselineResult(prompt_id=baseline_v1.PROMPT_ID)
+    result = BaselineResult(prompt_id=baseline_prompt.PROMPT_ID)
     resolution = await resolve_request(request, flags, llm=llm)
     interpretation = resolution.interpretation
     if interpretation is not None:
@@ -84,11 +88,12 @@ async def run_baseline(
             }
         )
     if resolution.request is None:
-        assert interpretation is not None  # only a failed interpretation gives no request
+        assert interpretation is not None  # only text that can't be acted on gives no request
         return result.model_copy(
             update={
                 "raw_text": interpretation.raw_text,
-                "error": f"Could not interpret the request: {interpretation.error}",
+                "error": resolution.error,
+                "error_kind": resolution.error_kind or "interpretation",
             }
         )
     resolved = resolution.request
@@ -98,23 +103,24 @@ async def run_baseline(
     started = perf_counter()
     try:
         response = await llm.complete(
-            system=baseline_v1.SYSTEM,
-            messages=[Message.user(baseline_v1.build_user_prompt(profile, filters, preference))],
+            system=baseline_prompt.SYSTEM,
+            messages=[
+                Message.user(baseline_prompt.build_user_prompt(profile, filters, preference))
+            ],
             max_tokens=max_tokens,
             temperature=temperature,
         )
     except LLMError as e:
-        failed = LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
+        failed = LLMCall.failed(CALL_NAME, e, started)
         return result.model_copy(
-            update={"calls": [*result.calls, failed], "error": f"LLM call failed: {e}"}
+            update={
+                "calls": [*result.calls, failed],
+                "error": f"LLM call failed: {e}",
+                "error_kind": "llm_error",
+            }
         )
 
-    call = LLMCall(
-        name=CALL_NAME,
-        model=response.model,
-        usage=response.usage,
-        latency_s=perf_counter() - started,
-    )
+    call = LLMCall.succeeded(CALL_NAME, response, started)
     reply = response.message.text
     result = result.model_copy(update={"calls": [*result.calls, call], "raw_text": reply})
 
@@ -124,7 +130,9 @@ async def run_baseline(
         reason = str(e)
         if response.stop_reason is StopReason.MAX_TOKENS:
             reason += " (the reply was cut off at max_tokens)"
-        return result.model_copy(update={"error": f"Unparseable reply: {reason}"})
+        return result.model_copy(
+            update={"error": f"Unparseable reply: {reason}", "error_kind": "unparseable"}
+        )
 
     started = perf_counter()
     judge = LLMSameWorkJudge(llm)

@@ -1,0 +1,33 @@
+{
+  "version": "request_parser_v2",
+  "description": "Labeled requests for the request interpreter, with min_pages (D-026). The request_parser_v1 cases with labels updated for min_pages, plus four new cases. preference_contains lists terms that must survive in the preference (ignoring case and accents). Frozen once it has results: changes go in request_parser_v3.",
+  "cases": [
+    {"id": "short-light", "request": "algo corto y liviano", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["corto", "liviano"], "min_pages": null},
+    {"id": "dystopia-filters", "request": "una distopía de menos de 400 páginas en inglés", "has_preference": true, "language": "en", "max_pages": 400, "preference_contains": ["distopía"], "min_pages": null},
+    {"id": "like-east-of-eden", "request": "algo como East of Eden", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["East of Eden"], "min_pages": null},
+    {"id": "fantasy-no-sanderson", "request": "A fantasy book around 700 pages with great magic system, but nothing from Brandon Sanderson", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["fantasy", "magic", "700", "Sanderson"], "min_pages": null},
+    {"id": "borges-stories-es", "request": "Libros de cuentos similares a Jorge Luis Borges, en español", "has_preference": true, "language": "es", "max_pages": null, "preference_contains": ["cuentos", "Borges"], "min_pages": null},
+    {"id": "more-claire-keegan", "request": "más libros de Claire Keegan", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["Keegan"], "min_pages": null},
+    {"id": "scifi-not-space", "request": "A sci fi book that is not about space", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["space"], "min_pages": null},
+    {"id": "argentine-novel", "request": "una novela argentina", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["argentina"], "min_pages": null},
+    {"id": "history-nonfiction", "request": "no ficción sobre historia, menos de 300 páginas", "has_preference": true, "language": null, "max_pages": 300, "preference_contains": ["historia"], "min_pages": null},
+    {"id": "litrpg", "request": "Give me some litRPG books", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["litRPG"], "min_pages": null},
+    {"id": "short-light-es", "request": "algo corto y liviano en español", "has_preference": true, "language": "es", "max_pages": null, "preference_contains": ["corto", "liviano"], "min_pages": null},
+    {"id": "japanese-novel", "request": "una novela japonesa", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["japonesa"], "min_pages": null},
+    {"id": "something-short", "request": "something short", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["short"], "min_pages": null},
+    {"id": "over-600", "request": "un libro de más de 600 páginas", "has_preference": false, "language": null, "max_pages": null, "preference_contains": [], "min_pages": 600},
+    {"id": "under-300", "request": "a mystery under 300 pages", "has_preference": true, "language": null, "max_pages": 300, "preference_contains": ["mystery"], "min_pages": null},
+    {"id": "at-most-300", "request": "a mystery of at most 300 pages", "has_preference": true, "language": null, "max_pages": 300, "preference_contains": ["mystery"], "min_pages": null},
+    {"id": "thriller-french", "request": "a thriller in French", "has_preference": true, "language": "fr", "max_pages": null, "preference_contains": ["thriller"], "min_pages": null},
+    {"id": "two-languages", "request": "un thriller, en inglés o en español", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["thriller", "inglés", "español"], "min_pages": null},
+    {"id": "filters-only", "request": "books in English under 250 pages", "has_preference": false, "language": "en", "max_pages": 250, "preference_contains": [], "min_pages": null},
+    {"id": "language-only", "request": "en inglés", "has_preference": false, "language": "en", "max_pages": null, "preference_contains": [], "min_pages": null},
+    {"id": "translated-from-russian", "request": "una novela traducida del ruso", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["ruso"], "min_pages": null},
+    {"id": "between-200-and-400", "request": "a romance between 200 and 400 pages", "has_preference": true, "language": null, "max_pages": 400, "preference_contains": ["romance"], "min_pages": 200},
+    {"id": "cozy-no-christie", "request": "a cozy mystery, nothing by Agatha Christie", "has_preference": true, "language": null, "max_pages": null, "preference_contains": ["cozy", "Christie"], "min_pages": null},
+    {"id": "at-least-300", "request": "at least 300 pages", "has_preference": false, "language": null, "max_pages": null, "min_pages": 300, "preference_contains": []},
+    {"id": "over-500-english", "request": "más de 500 páginas en inglés", "has_preference": false, "language": "en", "max_pages": null, "min_pages": 500, "preference_contains": []},
+    {"id": "min-above-max", "request": "a novel of more than 500 pages but under 300 pages", "has_preference": true, "language": null, "max_pages": 300, "min_pages": 500, "expect_contradiction": true, "preference_contains": ["novel"]},
+    {"id": "something-long", "request": "something long", "has_preference": true, "language": null, "max_pages": null, "min_pages": null, "preference_contains": ["long"]}
+  ]
+}

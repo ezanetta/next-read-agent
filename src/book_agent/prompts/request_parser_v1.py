@@ -1,8 +1,10 @@
 """request_parser_v1: turn a reader's free-text request into a preference and hard filters.
 
-Frozen once used by evals: changes go in request_parser_v2.
+Frozen: changes go in request_parser_v2. Known flaw (F-009): it drops soft constraints
+it can't turn into filters, such as two acceptable languages or a minimum page count.
 """
 
+from book_agent.prompts.parser_prompt import ParserPrompt
 from book_agent.prompts.user_content import request_block
 
 PROMPT_ID = "request_parser_v1"
@@ -42,3 +44,6 @@ Examples:
 
 def build_user_prompt(text: str) -> str:
     return request_block(text)
+
+
+PROMPT = ParserPrompt(prompt_id=PROMPT_ID, system=SYSTEM, build_user_prompt=build_user_prompt)

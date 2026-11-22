@@ -18,14 +18,17 @@ from pydantic import BaseModel, JsonValue, ValidationError
 from book_agent.config import GeminiThinkingLevel
 from book_agent.llm.base import (
     LLMError,
+    LLMNetworkError,
     LLMRateLimitError,
     LLMRefusalError,
     LLMResponse,
+    LLMServerError,
     Message,
     ProviderMetadata,
     StopReason,
     TextPart,
     ToolCallPart,
+    ToolChoice,
     ToolResultPart,
     ToolSpec,
     Usage,
@@ -83,6 +86,7 @@ class GeminiClient:
         tools: Sequence[ToolSpec] = (),
         max_tokens: int,
         temperature: float | None = None,
+        tool_choice: ToolChoice | None = None,
     ) -> LLMResponse:
         contents = to_gemini_contents(messages)
         config = to_gemini_config(
@@ -91,6 +95,7 @@ class GeminiClient:
             max_tokens=max_tokens,
             temperature=temperature,
             thinking_level=self._thinking_level,
+            tool_choice=tool_choice,
         )
         try:
             # The SDK's `contents` union mentions types from optional deps (e.g. PIL).
@@ -100,6 +105,8 @@ class GeminiClient:
         except errors.APIError as e:
             raise to_llm_error(e) from e
         # google-genai 3.x talks HTTP through httpx2 (not httpx) and doesn't wrap its errors.
+        except httpx2.TransportError as e:  # timeouts and connection failures
+            raise LLMNetworkError(f"Gemini request failed: {type(e).__name__}") from e
         except httpx2.HTTPError as e:
             raise LLMError(f"Gemini request failed: {type(e).__name__}") from e
         return from_gemini_response(response, requested_model=self._model)
@@ -162,7 +169,11 @@ def to_gemini_config(
     max_tokens: int,
     temperature: float | None,
     thinking_level: GeminiThinkingLevel | None,
+    tool_choice: ToolChoice | None = None,
 ) -> types.GenerateContentConfig:
+    """Raises ValueError if tool_choice names a tool that isn't declared."""
+    if tool_choice is not None:
+        tool_choice.check_against(tools)
     declarations = [
         types.FunctionDeclaration(
             name=t.name, description=t.description, parameters_json_schema=t.parameters
@@ -172,6 +183,17 @@ def to_gemini_config(
     return types.GenerateContentConfig(
         system_instruction=system or None,
         tools=[types.Tool(function_declarations=declarations)] if declarations else None,
+        # ANY with allowed names: the model must call one of them (ToolChoice).
+        tool_config=(
+            types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(
+                    mode=types.FunctionCallingConfigMode.ANY,
+                    allowed_function_names=list(tool_choice.names),
+                )
+            )
+            if tool_choice is not None
+            else None
+        ),
         max_output_tokens=max_tokens,
         temperature=temperature,
         thinking_config=(
@@ -284,13 +306,34 @@ class _ErrorBody(BaseModel):
 
 def to_llm_error(error: errors.APIError) -> LLMError:
     """Map an SDK error. Only HTTP 429 is a rate limit: 402 also says RESOURCE_EXHAUSTED
-    but means prepaid credit ran out, which waiting won't fix."""
+    but means prepaid credit ran out, which waiting won't fix. A 5xx is a server error;
+    retrying it is the caller's policy (D-030), not the adapter's."""
     message = f"Gemini API error {error.code} {error.status}: {error.message}"
     if error.code == 429:
         # APIError.details is untyped in the SDK: it holds the raw error JSON.
         details = cast(object, error.details)  # pyright: ignore[reportUnknownMemberType]
-        return LLMRateLimitError(message, retry_after=_retry_delay(details))
+        return LLMRateLimitError(
+            message, retry_after=_retry_delay(details), daily=_is_daily_quota(details)
+        )
+    if 500 <= error.code <= 599:
+        return LLMServerError(message, status=error.code)
     return LLMError(message)
+
+
+def _is_daily_quota(details: object) -> bool:
+    """Whether a google.rpc.QuotaFailure names a per-day quota, e.g. quotaId
+    "GenerateRequestsPerDayPerProjectPerModel-FreeTier"."""
+    try:
+        body = _ErrorBody.model_validate(details)
+    except ValidationError:
+        return False
+    for detail in body.error.details:
+        violations = detail.get("violations")
+        if str(detail.get("@type", "")).endswith("QuotaFailure") and isinstance(violations, list):
+            for violation in violations:
+                if isinstance(violation, dict) and "PerDay" in str(violation.get("quotaId", "")):
+                    return True
+    return False
 
 
 def _retry_delay(details: object) -> float | None:

@@ -1,0 +1,62 @@
+{
+ "_note": "Reconstructed, not a raw recording: titles and authors exactly as the live Google Books check of 2026-11-19 returned them (F-012), trimmed to the fields the adapter reads; ids and links are placeholders.",
+ "kind": "books#volumes",
+ "totalItems": 5,
+ "items": [
+  {
+   "id": "senecaS1",
+   "volumeInfo": {
+    "title": "De la Brevedad de la Vida",
+    "authors": [
+     "Séneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaS1"
+   }
+  },
+  {
+   "id": "senecaS2",
+   "volumeInfo": {
+    "title": "La brevedad de la vida",
+    "authors": [
+     "Lucio Anneo Séneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaS2"
+   }
+  },
+  {
+   "id": "senecaS3",
+   "volumeInfo": {
+    "title": "Sobre la brevedad de la vida, el ocio y la felicidad",
+    "authors": [
+     "Lucius Annaeus Seneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaS3"
+   }
+  },
+  {
+   "id": "senecaS4",
+   "volumeInfo": {
+    "title": "Sobre la Brevedad de la Vida - Sobre la Felicidad",
+    "authors": [
+     "Séneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaS4"
+   }
+  },
+  {
+   "id": "senecaS5",
+   "volumeInfo": {
+    "title": "De la brevedad de la vida",
+    "authors": [
+     "Lucius Annaeus Seneca"
+    ],
+    "language": "es",
+    "infoLink": "https://books.google.com/books?id=senecaS5"
+   }
+  }
+ ]
+}

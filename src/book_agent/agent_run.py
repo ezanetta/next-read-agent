@@ -6,6 +6,8 @@ directly. run_agent_pipeline never raises for model, catalog or parsing problems
 up in AgentRun.error, so an eval run always gets one result per case.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel
 
 from book_agent.agent import AgentError, AgentFailure, TurnTrace, run_agent
@@ -16,15 +18,15 @@ from book_agent.domain.validation import WorkMatching
 from book_agent.llm.base import LLMClient, Usage
 from book_agent.llm.calls import LLMCall, total_usage
 from book_agent.ports import BookSearch, WorkResolver
-from book_agent.prompts import agent_v1, agent_v2, submission_feedback_v1
+from book_agent.prompts import agent_v1, agent_v2, agent_v3, submission_feedback_v1
 from book_agent.prompts.agent_prompt import AgentPrompt
 from book_agent.request_parser import resolve_request
 from book_agent.same_work_judge import LLMSameWorkJudge
 
 AGENT_PROMPTS: dict[str, AgentPrompt] = {
-    prompt.prompt_id: prompt for prompt in (agent_v1.PROMPT, agent_v2.PROMPT)
+    prompt.prompt_id: prompt for prompt in (agent_v1.PROMPT, agent_v2.PROMPT, agent_v3.PROMPT)
 }
-DEFAULT_AGENT_PROMPT = agent_v2.PROMPT
+DEFAULT_AGENT_PROMPT = agent_v3.PROMPT  # D-026: its user prompt states min_pages
 
 
 class AgentRun(BaseModel, frozen=True):
@@ -43,7 +45,9 @@ class AgentRun(BaseModel, frozen=True):
     validation: ValidationResult | None = None  # of the accepted submission
     last_validation: ValidationResult | None = None  # on failure: the last one validated
     raw_text: str | None = None  # the interpreter's reply when it couldn't be parsed
-    failure: AgentFailure | None = None  # None for interpretation errors and successes
+    failure: AgentFailure | None = None  # None for request errors and successes
+    # Why the request couldn't be acted on: "interpretation" or "contradiction" (D-026).
+    request_error_kind: Literal["interpretation", "contradiction"] | None = None
     error: str | None = None
 
     @property
@@ -88,11 +92,12 @@ async def run_agent_pipeline(
             }
         )
     if resolution.request is None:
-        assert interpretation is not None  # only a failed interpretation gives no request
+        assert interpretation is not None  # only text that can't be acted on gives no request
         return run.model_copy(
             update={
                 "raw_text": interpretation.raw_text,
-                "error": f"Could not interpret the request: {interpretation.error}",
+                "error": resolution.error,
+                "request_error_kind": resolution.error_kind,
             }
         )
     resolved = resolution.request

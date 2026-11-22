@@ -58,8 +58,8 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 
 - **What happened:** In a real baseline run (F-001, Run 1), the model recommended *The Pearl* with a reason citing *The Pearl* as the book the reader liked. The book was already read and was caught as `ALREADY_READ`, but `cites_library` passed, because the reason does mention a read title.
 - **How it was detected:** Manual review of the CLI output.
-- **Fix:** Not yet. `cites_library` should not count a citation of the recommended work itself (same title variants, or the library book it collides with).
-- **How it was verified:** Not yet.
+- **Fix:** `cites_library` no longer counts a citation of the recommended work itself: the same work by title variants, or the library book it collides with (by ISBN, title, work key or the judge, so a translation counts as itself too). A reason that cites only the book itself fails with "the reason cites only the recommended book itself". `agent_v1` and `agent_v2` also ask for this in the prompt.
+- **How it was verified:** Unit tests: self-citation alone fails; self plus another read book counts the other; citing the translation it collides with fails; a reason with no read title keeps the original message.
 
 ## F-005 · The agent searched to confirm books it already had in mind, and ran out of turns (2026-11-17)
 
@@ -123,3 +123,99 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **What it implies:** Whether one book by the requested author, plus two similar authors, honors "more books by X" is a judgment call that hard rules can't make. Keep this request as an eval case for the LLM judge, with the trace's evidence that a second matching book was available.
 - **Fix:** None; eval case.
 - **How it was verified:** 1 real run.
+
+## F-009 · The request parser drops soft constraints it can't turn into filters (2026-11-18)
+
+- **What happened:** First run of the parser eval (`request_parser_v1`, 23 labeled requests, `gemini-3.5-flash-lite`). Filters were right in 23 of 23 cases, and all three negations ("nothing from Brandon Sanderson", "not about space", "nothing by Agatha Christie") were kept verbatim. Two soft constraints were dropped:
+  - "un thriller, en inglés o en español" became "un thriller": two acceptable languages can't be a filter (`Filters` holds one), so they vanished.
+  - "a romance between 200 and 400 pages" became "a romance": the minimum has no field, so it vanished along with the maximum that did become a filter.
+- **How it was detected:** The parser eval's "dropped preference terms" section, and reading every interpreted preference in the report.
+- **Cause:** One pattern: the parser strips anything that *looks* like a filter, even when it couldn't express it as one. The v1 prompt says to leave out "the parts used for language and max_pages", which the model reads as "anything about language or pages".
+- **Fix:** `request_parser_v2`: text may leave the preference only when it became a filter; anything that can't be expressed as one (several languages, a minimum, "around N") stays, in the reader's own words. v2 is the default for the baseline and the agent; v1 stays frozen.
+- **How it was verified:** Unit tests for the prompt rule. The parser eval is to be rerun with v2.
+
+## F-010 · request_parser_v2: equal score, cheaper errors (2026-11-18)
+
+- **What happened:** Parser eval with `request_parser_v2` (same 23 labels, `gemini-3.5-flash-lite`). Both F-009 cases were fixed ("en inglés o en español" and "between 200 and 400 pages" stayed in the preference), and all three negations were kept. Two new issues:
+  1. **Invalid JSON on a correct interpretation:** for "A sci fi book that is not about space", the model put a literal newline inside the preference string (`"A\n sci fi book that is not about space"`), which strict JSON parsing rejects.
+  2. **v2 sometimes repeats a filter in the preference:** "books in English under 250 pages" gave `max_pages` 250 and preference "books under 250 pages", so the label expecting no preference failed. The same happened in `at-most-300` and `history-nonfiction`, which still passed because their preference was expected anyway.
+- **How it was detected:** The parser eval's errors and mismatch sections, and reading every interpreted preference.
+- **Equal scores hid errors of different cost:** v1 and v2 both scored 21 of 23 fully correct, but v1's errors silently dropped constraints the reader asked for, while v2's mostly repeat a filter in the preference, which is harmless: the filter is still enforced, and the recommender reads a constraint twice. A single accuracy number would have called them equal. The eval's per-field breakdown and the printed preferences are what showed the difference.
+- **Fix:**
+  - The request parser reads its reply with `json.loads(strict=False)`, the standard option for control characters inside strings; nothing else is repaired (D-010 amended). Only the parser: the baseline's parsing stays strict, so its measured behavior doesn't change. That case's record was removed for a rerun.
+  - The repeated filter is a known limitation of v2, not a reason for v3.
+- **How it was verified:** A unit test with the exact raw reply; a test that the shared extractor and the baseline stay strict. The one case is to be rerun.
+
+## F-011 · First eval table: the agent accepts 79%, the baseline 13% (2026-11-19)
+
+- **What happened:** `recommend_v1`, 13 cases × 3 runs, `gemini-3.5-flash-lite`, `request_parser_v3`, current acceptance policy (D-014).
+
+  | Configuration | Accepted | Requests per run | Input tokens per run | Latency per run (mean / p95) |
+  |---|---|---|---|---|
+  | `baseline_v2` | 5/39 (13%) | 2.0 | – | 11 s |
+  | `agent_v3` | 31/39 (79%) | 6.5 | about 27,000 | 31 s / 65 s |
+
+  - **Baseline final violations:** not_found 27, already_read 25, cites_library 18, duplicate 2, on_to_read 2, max_pages 1; 2 runs unparseable.
+  - **Agent failures:** 4 `catalog_unavailable`, 4 `iterations_exhausted`. One search per turn in 20 of 39 runs; the repair turn was used 5 times; the fallback lookup rescued 2 books.
+  - **Hard cases:** `history-nonfiction` 0/3 in both systems; `kafka-filters` 1/3 for the agent.
+- **How it was detected:** `evals report` on the recorded runs.
+- **What it implies:**
+  - The agent's validate-and-repair loop is what makes recommendations acceptable: the baseline mostly recommends books it can't verify or the reader already has. The price is about 3× the requests and latency.
+  - One search per turn is common (about half the runs), as F-007 suggested.
+  - The 4 `catalog_unavailable` runs and the two hard cases need investigating before reading more into the numbers.
+- **Fix:** None yet; investigation follows.
+- **How it was verified:** The report above, from the stored records.
+
+## F-012 · The 8 agent failures in F-011: transient 503s and late submission (2026-11-19)
+
+- **What happened:** Investigation of the 8 failed `agent_v3` runs in F-011, from the stored records only, then 3 live Google Books requests for one lookup.
+- **Cause 1, transient Google Books 503s (4 `catalog_unavailable` runs):** each run lost exactly one validation lookup to HTTP 503 "Service temporarily unavailable": no 429, no timeout. The agent's own searches hit two more. That's 6 failures in at least 370 Google Books requests during the agent's 20 minutes, about 1.6%, spread over 17 minutes rather than one outage. A run makes about 10 Google Books requests, the adapter never retried, and one failed validation lookup stops a run (D-014): a 1.6% request error rate became 10% of runs.
+- **Cause 2, late submission (4 `iterations_exhausted` runs):** the model searched one book per turn, got the last-turn notice, submitted on turn 6, and then the one repair turn wasn't enough:
+  - history-nonfiction run 1: the repair replaced a `not_found` book with one of 355 pages against a 300 limit, never checked.
+  - history-nonfiction run 2: never submitted; it ignored the last-turn notice and kept searching.
+  - history-nonfiction run 3: turn 6 submitted two hallucinated titles (caught as `not_found`); in the repair turn it searched instead of submitting, which ends the run.
+  - kafka-filters run 1: the judge rejected a book on the to-read list in Spanish; the repair swapped in *The Metamorphosis*, already read (F-001), which it had searched on turn 2.
+- **A likely false `not_found`:** history-nonfiction run 1's *Sobre la Brevedad de la Vida* (Séneca). Live check: both validator lookups returned 5 Séneca editions each, all matching on author, none on title. The exact title exists only inside combined volumes joined by " - " or ". " ("Sobre la Brevedad de la Vida - Sobre la Felicidad"), which D-001's variants don't split, and the standalone editions use other Spanish translations of the Latin title ("De la brevedad de la vida"). Not a retrieval miss this time: the matcher rejects real editions. A third request (the model's own query) got a 503 itself.
+- **Baseline, for context:** kafka-filters recommended the reader's own short books in 2 of 3 runs, each justified by citing itself (F-001 and F-004 together); history-nonfiction failed on hallucinated titles.
+- **Quality the rules don't see:** the "history" picks included *Meditaciones* and Séneca (philosophy), and all three history runs began by searching a novel.
+- **How it was detected:** The report's per-case outcomes, the records' rejections and turn traces, and live Google Books requests for the Séneca lookup.
+- **Fix:** Retry Google Books requests once on 5xx and network errors (D-027). Force `submit_recommendations` on the last turn and the repair turn, and move the notice to 2 turns left (D-028). The Séneca title matching: pending a decision.
+
+## F-013 · Round 2 (harness 2): the agent accepts 85%; run-to-run noise is about 2 or 3 runs in 39 (2026-11-21)
+
+- **What happened:** `recommend_v1`, 13 cases × 3 runs, same prompts as F-011 (`baseline_v2`, `agent_v3`, `request_parser_v3`), harness 2: Google Books retries (D-027), forced submit and the notice at 2 turns left (D-028), combined volumes in title matching (D-029).
+
+  | | Round 1 (F-011) | Round 2 |
+  |---|---|---|
+  | Agent accepted | 31/39 (79%) | 33/39 (85%) |
+  | Agent `catalog_unavailable` | 4 | 0 |
+  | Agent `iterations_exhausted` | 4 | 2 |
+  | Agent `llm_error` | 0 | 4 |
+  | Agent history-nonfiction | 0/3 | 3/3 |
+  | Agent repair turn used | 5 | 2 |
+  | Agent p95 latency | 65 s | 39.5 s |
+  | Agent one search per turn | 20 | 18 |
+  | Baseline accepted | 5/39 (13%) | 8/39 (21%) |
+  | Baseline final `not_found` | 27 | 18 |
+  | Baseline unparseable | 2 | 5 |
+
+- **How it was detected:** `evals report`, which shows harness 1 and harness 2 as separate configurations.
+- **What it implies:**
+  - The targeted fixes worked where they aimed: no more `catalog_unavailable` (retries), history-nonfiction fixed and fewer repair turns (forced submit), fewer `not_found` (matcher). One search per turn barely moved, as expected: nothing targeted it.
+  - **Run-to-run noise:** the baseline's prompts didn't change, yet its accept count moved 5 → 8 and its unparseable replies 2 → 5. Part of the `not_found` drop is the matcher fix, but the rest is noise. A difference of 2 or 3 runs out of 39 isn't conclusive on its own; only larger differences, or ones tied to a specific failure kind that a change targeted, are.
+  - A new failure kind, 4 `llm_error`, all in Spanish requests (argentine-novel 2, borges-stories-es 1, short-light-es 1), needs investigating before the agent's 85% is read as final.
+- **Fix:** None yet; investigation follows.
+- **How it was verified:** The report from the stored records of both rounds.
+
+## F-014 · The 4 `llm_error` runs in F-013: transient Gemini 503s, clustered in time (2026-11-22)
+
+- **What happened:** All 4 `llm_error` runs of round 2 failed on one agent request with HTTP 503 UNAVAILABLE, "This model is currently experiencing high demand". borges-stories-es run 3 failed on turn 4, argentine-novel runs 1 and 2 on turn 6 (forced submit), and short-light-es run 3 on turn 1. None had submitted yet. The request parser (66 calls) and the same-work judge (31 calls) never failed.
+- **How it was detected:** The stored records only (errors, call lists, turn traces, start times), no live calls.
+- **Cause:** Gemini capacity, not our changes:
+  - The first 196 LLM requests (10:26–10:40 UTC) had no failures. All 4 fell between 10:40 and 10:49, 4 of 130 requests (3%).
+  - **Spanish is a coincidence of order:** runs went case by case, and the last part of the session was mostly Spanish cases (about 77% of the window's requests). The English cases in the same window (scifi-not-space, litrpg) didn't fail. With that share, all 4 random failures landing on Spanish requests has a chance of about 35%.
+  - **Forced turns:** 2 of 21 forced requests failed, against 2 of 169 unforced, but the two forced failures are argentine-novel's back-to-back runs within one minute, inside the cluster. A broken tool choice would fail every forced call with a 400, not a 503.
+  - Case-by-case order let one short outage hit the same case twice.
+- **Why it surfaced now:** Any Gemini error other than a 429 became an immediate `llm_error`: `PacedLLM` retries only rate limits and the adapter doesn't retry (D-027). Round 1 simply had no 503s. Without these 4 runs, round 2's agent would be 33/35.
+- **Fix:** One retry on LLM 5xx in a wrapper applied in wiring (D-030), interleaved run order in the eval runner (D-031), and an acceptance rate that excludes infrastructure failures in the report (D-032).
+- **How it was verified:** Error messages, call positions, turn traces and timestamps of all agent records in the round 2 folder.

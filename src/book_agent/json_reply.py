@@ -16,12 +16,15 @@ class ReplyParseError(ValueError):
     """The reply could not be read as the expected JSON. The message says why."""
 
 
-def extract_json(text: str) -> object:
+def extract_json(text: str, *, strict: bool = True) -> object:
     """Return the first JSON value found in `text`.
 
     Tries, in order: the content of a ``` fence, the whole text, and the outermost
     {...} block. Only candidates that start with { or [ are parsed, so plain prose
     reports "no JSON found" rather than a confusing syntax error.
+
+    `strict=False` is json.loads' standard option that allows control characters
+    (such as a literal newline) inside strings. It repairs nothing else (D-010).
     """
     candidates: list[str] = []
     fenced = _FENCED.search(text)
@@ -37,7 +40,7 @@ def extract_json(text: str) -> object:
         if not candidate.startswith(("{", "[")):
             continue
         try:
-            return cast(object, json.loads(candidate))
+            return cast(object, json.loads(candidate, strict=strict))
         except json.JSONDecodeError as e:
             error = f"invalid JSON ({e.msg} at line {e.lineno}, column {e.colno})"
     raise ReplyParseError(error)

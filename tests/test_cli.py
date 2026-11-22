@@ -50,7 +50,7 @@ async def command(
 async def test_report_for_a_clean_run() -> None:
     output, code = await command(reply(CLEAN_THREE), Filters(max_pages=600))
     assert code == EXIT_OK
-    assert output.startswith("Prompt baseline_v1\n")
+    assert output.startswith("Prompt baseline_v2\n")
     assert "Filters: max_pages=600 (from flag)" in output
     assert "Request:" not in output
     assert "1. Hyperion by Dan Simmons" in output
@@ -111,7 +111,7 @@ async def test_report_shows_what_was_understood_and_each_call() -> None:
         understood,
     )
     assert code == EXIT_OK
-    assert output.startswith("Prompt baseline_v1 | request parser request_parser_v1\n")
+    assert output.startswith("Prompt baseline_v2 | request parser request_parser_v3\n")
     assert 'Request: "una distopía de menos de 600 páginas en inglés"' in output
     assert "Preference: una distopía" in output
     assert "Filters: language=en (from text), max_pages=500 (from flag)" in output
@@ -263,7 +263,7 @@ async def test_agent_report_for_an_accepted_run_after_a_rejection() -> None:
 
     assert code == EXIT_OK
     lines = output.splitlines()
-    assert lines[0] == "Prompt agent_v2 | feedback submission_feedback_v1"
+    assert lines[0] == "Prompt agent_v3 | feedback submission_feedback_v1"
     assert "Iterations: 2 of 6 | Submissions: 2 (1 rejected)" in lines
     rejection = lines.index("Rejection 1:")
     assert lines[rejection + 1] == (
@@ -369,7 +369,7 @@ def test_verbose_is_an_agent_option_only() -> None:
         main(["baseline", "--verbose"])
 
 
-async def test_agent_verbose_trace_marks_the_last_turn_notice() -> None:
+async def test_agent_verbose_trace_marks_the_notice_and_the_forced_turn() -> None:
     search = ToolCallPart(id="s", name="search_books", arguments={"query": "foundation"})
     script = [tool_call_response(search) for _ in range(MAX_ITERATIONS - 1)]
     output, _ = await agent_command(
@@ -379,7 +379,17 @@ async def test_agent_verbose_trace_marks_the_last_turn_notice() -> None:
         books=catalog(),
         verbose=True,
     )
-    assert output.count("  (last-turn notice sent)") == 1
+    assert output.count("  (submit-now notice sent)") == 1
+    assert f"Turn {MAX_ITERATIONS} (tool_use, 100 out, forced submit_recommendations)" in output
+
+
+async def test_agent_verbose_report_marks_retried_requests() -> None:
+    retried = submission(CLEAN_THREE).model_copy(update={"retries": 1})
+    output, _ = await agent_command(
+        PROFILE, Filters(), llm=FakeLLM([retried]), books=catalog(), verbose=True
+    )
+    assert "Turn 1 (tool_use, 100 out, retried after a server error)" in output
+    assert "s | retried once" in output
 
 
 def test_agent_prompt_option_accepts_the_registered_versions(tmp_path: Path) -> None:
@@ -402,3 +412,17 @@ async def test_agent_verbose_trace_marks_the_repair_turn() -> None:
     assert code == EXIT_OK
     assert f"Iterations: {MAX_TURNS} of {MAX_ITERATIONS} + 1 repair turn |" in output
     assert output.count("  (repair turn granted)") == 1
+
+
+def test_min_pages_flag_is_accepted(tmp_path: Path) -> None:
+    # Fails on the missing CSV before any network call, after argparse accepted the flag.
+    argv = ["agent", "--min-pages", "300", "--max-pages", "500", "--csv", str(tmp_path / "x.csv")]
+    assert main(argv) == EXIT_ERROR
+
+
+def test_contradictory_page_flags_are_a_clean_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    argv = ["baseline", "--min-pages", "500", "--max-pages", "300", "--csv", str(tmp_path / "x")]
+    assert main(argv) == EXIT_ERROR
+    assert "min_pages 500 is above max_pages 300" in capsys.readouterr().out

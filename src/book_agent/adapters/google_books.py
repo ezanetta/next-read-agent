@@ -4,9 +4,12 @@ Used live only as an agent fallback tool and for the UI book search.
 Docs: https://developers.google.com/books/docs/v1/reference/volumes
 """
 
+import asyncio
 import contextlib
 import logging
+import random
 import re
+from collections.abc import Awaitable, Callable
 from html import unescape
 from html.parser import HTMLParser
 from http import HTTPStatus
@@ -58,17 +61,40 @@ def clean_query(query: str) -> str:
     return _AMPERSAND.sub(" and ", query).strip()
 
 
+RETRY_DELAY_S = 0.5  # pause before the one retry
+RETRY_JITTER_S = 0.25  # plus up to this much, so parallel requests don't retry in step
+
+
+def retry_jitter() -> float:
+    return random.uniform(0, RETRY_JITTER_S)
+
+
 class GoogleBooksSearch:
     """BookSearch backed by the Google Books API.
 
     The httpx client is injected so its lifetime, timeouts and transport are owned by
     the caller (and so tests can mock it). Without an API key the API still works,
     but at a much lower quota.
+
+    Every request is retried once after a short pause on a 5xx answer or a network
+    error (D-027): they're read-only, so a retry is safe, and transient 503s otherwise
+    stopped 10% of agent runs (F-012). 4xx answers, 429 included, are not retried.
     """
 
-    def __init__(self, client: httpx.AsyncClient, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        api_key: str | None = None,
+        *,
+        retry_delay_s: float = RETRY_DELAY_S,
+        jitter: Callable[[], float] = retry_jitter,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._client = client
         self._api_key = api_key
+        self._retry_delay_s = retry_delay_s
+        self._jitter = jitter
+        self._sleep = sleep
 
     async def search(
         self, query: str, *, language: str | None = None, max_results: int = 10
@@ -106,8 +132,16 @@ class GoogleBooksSearch:
         return _to_catalog_book(_parse(_Volume, response))
 
     async def _get(self, url: str, params: dict[str, str | int]) -> httpx.Response:
+        """GET with one retry on a 5xx answer or a network error (D-027)."""
         if self._api_key:
             params = params | {"key": self._api_key}
+        try:
+            response = await self._client.get(url, params=params)
+            if response.status_code < HTTPStatus.INTERNAL_SERVER_ERROR:
+                return response
+        except httpx.HTTPError:
+            pass
+        await self._sleep(self._retry_delay_s + self._jitter())
         # Error messages never include the URL: it carries the API key.
         try:
             return await self._client.get(url, params=params)

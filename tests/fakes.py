@@ -12,6 +12,7 @@ from book_agent.llm.base import (
     StopReason,
     TextPart,
     ToolCallPart,
+    ToolChoice,
     ToolSpec,
     Usage,
 )
@@ -114,6 +115,7 @@ class LLMRequest:
     tools: tuple[ToolSpec, ...]
     max_tokens: int
     temperature: float | None
+    tool_choice: ToolChoice | None = None
 
 
 class FakeLLM:
@@ -136,10 +138,11 @@ class FakeLLM:
         tools: Sequence[ToolSpec] = (),
         max_tokens: int,
         temperature: float | None = None,
+        tool_choice: ToolChoice | None = None,
     ) -> LLMResponse:
         # Snapshot as tuples: the caller will keep appending to its own list.
         self.requests.append(
-            LLMRequest(system, tuple(messages), tuple(tools), max_tokens, temperature)
+            LLMRequest(system, tuple(messages), tuple(tools), max_tokens, temperature, tool_choice)
         )
         if len(self.requests) > len(self._script):
             raise AssertionError(

@@ -11,11 +11,13 @@ import pytest
 
 from book_agent.agent import (
     CALL_NAME,
-    LAST_TURN_NOTICE,
+    FORCED_SUBMIT,
     MAX_ITERATIONS,
     MAX_TURNS,
+    NOTICE_TURNS_LEFT,
     REMINDER,
     REPAIR_NOTICE,
+    SUBMIT_NOW_NOTICE,
     AgentError,
     AgentFailure,
     AgentResult,
@@ -28,6 +30,7 @@ from book_agent.domain.works import SameWorkVerdict
 from book_agent.llm.base import (
     LLMError,
     LLMResponse,
+    LLMServerError,
     Message,
     StopReason,
     TextPart,
@@ -106,7 +109,10 @@ async def run(
 
 
 async def run_expecting_error(
-    script: Sequence[LLMResponse | Exception], **kwargs: Profile
+    script: Sequence[LLMResponse | Exception],
+    *,
+    profile: Profile = PROFILE,
+    books: BookSearch | None = None,
 ) -> tuple[AgentError, FakeLLM]:
     llm = FakeLLM(script)
     with pytest.raises(AgentError) as error:
@@ -115,8 +121,8 @@ async def run_expecting_error(
             user_prompt=USER_PROMPT,
             tools=TOOLS,
             llm=llm,
-            books=catalog(),
-            profile=kwargs.get("profile", PROFILE),
+            books=books or catalog(),
+            profile=profile,
             filters=NO_FILTERS,
         )
     return error.value, llm
@@ -392,6 +398,20 @@ async def test_llm_failure_raises_with_the_failed_call_recorded() -> None:
     assert error.iterations == 1 and len(llm.requests) == 1
 
 
+async def test_a_retried_failure_records_its_status_and_retry() -> None:
+    failure = LLMServerError("Gemini API error 503 (after 1 retry)", status=503, retries=1)
+    error, _ = await run_expecting_error([failure])
+    assert error.failure is AgentFailure.LLM_ERROR
+    assert [(c.retries, c.error_status) for c in error.calls] == [(1, 503)]
+
+
+async def test_a_retried_turn_is_marked_in_the_trace_and_the_call() -> None:
+    retried = submit(CLEAN_THREE).model_copy(update={"retries": 1})
+    result, _ = await run([retried])
+    assert [t.llm_retries for t in result.turns] == [1]
+    assert [c.retries for c in result.calls] == [1]
+
+
 # --- Trace -----------------------------------------------------------------------------
 
 
@@ -454,49 +474,74 @@ async def test_outage_turn_is_traced_before_stopping() -> None:
     assert turn.tools[0].is_error
 
 
-# --- Last-turn notice ------------------------------------------------------------------
+# --- Submit-now notice and forced turns (D-028) ------------------------------------------
+
+NOTICE_TURN = MAX_ITERATIONS - NOTICE_TURNS_LEFT  # the turn whose closing message carries it
 
 
 def text_parts(message: Message) -> list[str]:
     return [p.text for p in message.parts if isinstance(p, TextPart)]
 
 
-async def test_last_turn_notice_follows_the_tool_results_of_the_next_to_last_turn() -> None:
-    script = [tool_call_response(search(f"search-{i}")) for i in range(MAX_ITERATIONS - 1)]
+async def test_submit_notice_goes_out_with_two_turns_left() -> None:
+    script = [tool_call_response(search(f"search-{i}")) for i in range(NOTICE_TURN)]
     result, llm = await run([*script, submit()])
 
-    assert result.iterations == MAX_ITERATIONS  # the model submitted on its last turn
-    last_request = llm.requests[MAX_ITERATIONS - 1].messages
-    closing = last_request[-1]
+    assert result.iterations == NOTICE_TURN + 1  # submitted right after the notice
+    closing = llm.requests[NOTICE_TURN].messages[-1]
     assert closing.role == "user"
     assert isinstance(closing.parts[0], ToolResultPart)  # results first, notice last
-    assert text_parts(closing) == [LAST_TURN_NOTICE]
-    assert "submit_recommendations now" in LAST_TURN_NOTICE
-    # No earlier turn got the notice.
-    for request in llm.requests[: MAX_ITERATIONS - 1]:
-        assert all(LAST_TURN_NOTICE not in text_parts(m) for m in request.messages)
+    assert text_parts(closing) == [SUBMIT_NOW_NOTICE]
+    assert "you can still fix it on your last turn" in SUBMIT_NOW_NOTICE
+    for request in llm.requests[:NOTICE_TURN]:
+        assert all(SUBMIT_NOW_NOTICE not in text_parts(m) for m in request.messages)
 
 
-async def test_last_turn_notice_joins_the_reminder_after_a_text_reply() -> None:
-    script = [tool_call_response(search(f"search-{i}")) for i in range(MAX_ITERATIONS - 2)]
+async def test_submit_notice_joins_the_reminder_after_a_text_reply() -> None:
+    script = [tool_call_response(search(f"search-{i}")) for i in range(NOTICE_TURN - 1)]
     _, llm = await run([*script, text_response("Thinking..."), submit()])
 
-    closing = llm.requests[MAX_ITERATIONS - 1].messages[-1]
-    assert closing.role == "user"
-    assert text_parts(closing) == [REMINDER, LAST_TURN_NOTICE]  # one user message, not two
+    closing = llm.requests[NOTICE_TURN].messages[-1]
+    assert text_parts(closing) == [REMINDER, SUBMIT_NOW_NOTICE]  # one user message, not two
 
 
-async def test_notice_is_traced_on_the_next_to_last_turn_only() -> None:
-    script = [tool_call_response(search(f"search-{i}")) for i in range(MAX_ITERATIONS - 1)]
+async def test_notice_is_traced_on_its_turn_only() -> None:
+    script = [tool_call_response(search(f"search-{i}")) for i in range(NOTICE_TURN)]
     result, _ = await run([*script, submit()])
-    flags = [t.last_turn_notice for t in result.turns]
-    assert flags == [False] * (MAX_ITERATIONS - 2) + [True, False]
+    flags = [t.submit_notice for t in result.turns]
+    assert flags == [False] * (NOTICE_TURN - 1) + [True, False]
 
 
 async def test_runs_that_finish_early_never_get_the_notice() -> None:
     result, llm = await run([tool_call_response(search()), submit()])
     assert result.iterations == 2
-    assert all(LAST_TURN_NOTICE not in text_parts(m) for r in llm.requests for m in r.messages)
+    assert all(SUBMIT_NOW_NOTICE not in text_parts(m) for r in llm.requests for m in r.messages)
+
+
+async def test_only_the_last_regular_turn_forces_submit() -> None:
+    script = [tool_call_response(search(f"search-{i}")) for i in range(MAX_ITERATIONS - 1)]
+    result, llm = await run([*script, submit()])
+    choices = [r.tool_choice for r in llm.requests]
+    assert choices == [None] * (MAX_ITERATIONS - 1) + [FORCED_SUBMIT]
+    assert FORCED_SUBMIT.names == ("submit_recommendations",)
+    assert result.turns[-1].forced_tool == "submit_recommendations"
+    assert all(t.forced_tool is None for t in result.turns[:-1])
+
+
+async def test_a_forced_turn_never_runs_a_search() -> None:
+    # The provider should prevent it; if a search comes back anyway, it is not run.
+    books = catalog()
+    script = [tool_call_response(search(f"search-{i}")) for i in range(MAX_ITERATIONS)]
+    error, llm = await run_expecting_error(script, books=books)
+
+    assert len(books.searches) == MAX_ITERATIONS - 1  # the last turn's search never ran
+    last = error.turns[-1].tools[0]
+    assert (last.name, last.outcome, last.is_error) == (
+        "search_books",
+        "not run: this turn had to submit",
+        True,
+    )
+    assert llm.requests[-1].tool_choice == FORCED_SUBMIT
 
 
 # --- Repair turn (D-020) ------------------------------------------------------------------
@@ -572,3 +617,16 @@ async def test_a_catalog_outage_on_the_last_turn_still_stops_at_once() -> None:
 async def test_accepted_runs_without_repair_say_so() -> None:
     result, _ = await run([submit()])
     assert not result.repair_turn_used
+
+
+async def test_the_repair_turn_forces_submit_and_never_runs_a_search() -> None:
+    books = catalog()
+    script = [*searches(MAX_ITERATIONS - 1), submit(BAD_LIST), tool_call_response(search("x"))]
+    error, llm = await run_expecting_error(script, books=books)
+
+    assert error.repair_turn_used
+    assert llm.requests[MAX_TURNS - 1].tool_choice == FORCED_SUBMIT
+    assert error.turns[-1].forced_tool == "submit_recommendations"
+    assert error.turns[-1].tools[0].outcome == "not run: this turn had to submit"
+    # Only the regular turns' searches and the submission's validation lookups ran.
+    assert not any(query == "x" for query, _, _ in books.searches)

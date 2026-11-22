@@ -1,0 +1,97 @@
+{
+  "version": "recommend_v1",
+  "description": "End-to-end recommendation cases for the baseline and the agent. Frozen once it has results: changes go in recommend_v2.",
+  "cases": [
+    {
+      "id": "library-only",
+      "request": null,
+      "flags": {},
+      "category": "pure",
+      "note": "No request and no flags: pure recommendation from the library."
+    },
+    {
+      "id": "kafka-filters",
+      "request": null,
+      "flags": {"language": "en", "max_pages": 200},
+      "category": "hard-filters",
+      "note": "Kafka regression (F-001) and two hard filters from flags."
+    },
+    {
+      "id": "short-and-light",
+      "request": "algo corto y liviano",
+      "flags": {},
+      "category": "tone",
+      "note": "Tone preference with no number: no page filter may be invented."
+    },
+    {
+      "id": "dystopia-filters",
+      "request": "una distopía de menos de 400 páginas en inglés",
+      "flags": {},
+      "category": "genre-and-filters",
+      "note": "A genre plus two filters from the text."
+    },
+    {
+      "id": "like-east-of-eden",
+      "request": "algo como East of Eden",
+      "flags": {},
+      "category": "reference-book",
+      "note": "A read book used as a reference: it must never be recommended."
+    },
+    {
+      "id": "fantasy-no-sanderson",
+      "request": "A fantasy book around 700 pages with great magic system, but nothing from Brandon Sanderson",
+      "flags": {},
+      "category": "soft-constraints",
+      "note": "\"Around 700\" is not a hard filter; an author exclusion the validator can't check yet."
+    },
+    {
+      "id": "borges-stories-es",
+      "request": "Libros de cuentos similares a Jorge Luis Borges, en español",
+      "flags": {},
+      "category": "reference-author",
+      "note": "A read reference author, a format (short stories) and a Spanish language filter."
+    },
+    {
+      "id": "more-claire-keegan",
+      "request": "más libros de Claire Keegan",
+      "flags": {},
+      "category": "turn-budget",
+      "note": "Nearly impossible: few unread books by the author; tests the turn budget (F-007, F-008)."
+    },
+    {
+      "id": "scifi-not-space",
+      "request": "A sci fi book that is not about space",
+      "flags": {},
+      "category": "soft-negative",
+      "note": "A soft negative constraint."
+    },
+    {
+      "id": "argentine-novel",
+      "request": "una novela argentina",
+      "flags": {},
+      "category": "origin",
+      "note": "Origin, not language: no language filter."
+    },
+    {
+      "id": "history-nonfiction",
+      "request": "no ficción sobre historia, menos de 300 páginas",
+      "flags": {},
+      "category": "nonfiction-filter",
+      "note": "Non-fiction with a hard filter from the text."
+    },
+    {
+      "id": "litrpg",
+      "request": "Give me some litRPG books",
+      "flags": {},
+      "category": "niche",
+      "note": "A niche genre with thin catalog coverage and hallucination risk."
+    },
+    {
+      "id": "short-light-es",
+      "request": "algo corto y liviano en español",
+      "flags": {},
+      "category": "language-filter",
+      "note": "Spanish language filter; the baseline produced broken JSON and a hallucinated title here (F-002)."
+    }
+  ]
+}

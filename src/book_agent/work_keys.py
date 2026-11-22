@@ -6,7 +6,6 @@ new Goodreads export. Failed lookups are not cached, so the next run retries the
 """
 
 import asyncio
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
@@ -17,6 +16,7 @@ from pydantic import BaseModel, ValidationError
 
 from book_agent.domain.isbn import preferred_isbn13
 from book_agent.domain.models import Profile
+from book_agent.files import write_atomic
 from book_agent.ports import WorkLookupError, WorkResolver
 
 DEFAULT_CACHE_PATH = Path("data/work_keys.json")
@@ -55,10 +55,7 @@ def load_cache(path: Path) -> WorkKeyCache:
 
 def save_cache(cache: WorkKeyCache, path: Path) -> None:
     """Write the cache atomically: a crash mid-write never leaves a broken file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(cache.model_dump_json(indent=1) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    write_atomic(path, cache.model_dump_json(indent=1) + "\n")
 
 
 class CachedWorkResolver:
