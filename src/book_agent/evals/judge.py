@@ -19,6 +19,7 @@ from time import perf_counter
 from pydantic import BaseModel, Field
 
 from book_agent.domain.models import Book, Profile
+from book_agent.domain.recommendations import Filters
 from book_agent.evals.pacing import QuotaExhausted
 from book_agent.evals.records import EvalRecord, RecordStore
 from book_agent.files import write_atomic
@@ -174,9 +175,11 @@ def judge_input(record: EvalRecord, item_index: int, profile: Profile) -> JudgeI
     return JudgeInput(
         request=request.text if request else None,
         preference=request.preference if request else None,
+        filters=request.filters if request else Filters(),
         title=item.match.title,
         author=", ".join(item.match.authors) or item.recommendation.author,
         year=item.match.year,
+        pages=item.match.pages,
         categories=item.match.categories,
         description=item.match.description,
         reason=item.recommendation.reason,

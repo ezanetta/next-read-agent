@@ -1,3 +1,4 @@
+import dataclasses
 from collections import Counter
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -5,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from book_agent.domain.recommendations import Rule
+from book_agent.domain.recommendations import Filters, Rule
 from book_agent.evals.calibration import (
     HELD_OUT,
     TUNING,
@@ -20,6 +21,7 @@ from book_agent.evals.calibration import (
     eligible_items,
     label_session,
     render_calibration,
+    render_card,
 )
 from book_agent.evals.judge import (
     BookJudgment,
@@ -107,8 +109,9 @@ def ref(n: int) -> BookRef:
 
 def card(has_request: bool = True) -> JudgeInput:
     return JudgeInput(
-        request="a desert epic" if has_request else None, preference=None, title="Sand",
-        author="A", year=None, categories=[], description=None, reason="R", cited=[],
+        request="a desert epic" if has_request else None, preference=None,
+        filters=Filters(), title="Sand", author="A", year=None, pages=None, categories=[],
+        description=None, reason="R", cited=[],
     )  # fmt: skip
 
 
@@ -134,6 +137,19 @@ def test_labeling_asks_skips_quits_and_saves_after_each(tmp_path: Path) -> None:
     assert (third.ref, third.fits_request, third.reason_quality) == (ref(2), None, NO)
     assert third.note is None
     assert not any("agent" in line for line in shown)  # blind to the system
+
+
+def test_the_card_shows_pages_and_filters_like_the_judge_prompt() -> None:
+    item = JudgeInput(
+        request="algo corto", preference="algo corto", filters=Filters(language="es"),
+        title="Sand", author="A", year=2001, pages=None, categories=["Fiction"],
+        description="D", reason="R", cited=[],
+    )  # fmt: skip
+    text = render_card(1, 1, item)
+    assert "Filters checked by code: language: es" in text
+    assert "2001 | pages unknown | Fiction" in text
+    with_pages = render_card(1, 1, dataclasses.replace(item, pages=96))
+    assert "2001 | 96 pages | Fiction" in with_pages
 
 
 def test_agreement_counts_direction() -> None:

@@ -25,6 +25,7 @@ from tests.library_data import PROFILE
 AGENT = RunConfig(system="agent", prompt_id="agent_v3", model="m", harness=2)
 BASELINE = RunConfig(system="baseline", prompt_id="baseline_v2", model="m", harness=2)
 PROFILE_SHA = profile_sha256(PROFILE)
+NO_FILTERS = Filters()
 
 
 def checked(
@@ -32,6 +33,7 @@ def checked(
     *,
     matched: bool = True,
     description: str | None = "A desert planet and its politics.",
+    pages: int | None = 320,
     cited: Sequence[str] = ("Dune (Dune Chronicles, #1)",),
 ) -> CheckedRecommendation:
     match = (
@@ -40,6 +42,7 @@ def checked(
             title=title,
             authors=("Some Author",),
             year=1990,
+            pages=pages,
             categories=("Fiction",),
             description=description,
             link=HttpUrl("https://example.com/b"),
@@ -69,14 +72,11 @@ def stored(
     config: RunConfig = AGENT,
     run_index: int = 1,
     request: str | None = "a desert epic",
+    filters: Filters = NO_FILTERS,
     violations: Sequence[tuple[Rule, int]] = (),
     error_kind: str | None = None,
 ) -> EvalRecord:
-    resolved = (
-        ResolvedRequest(text=request, preference=request, filters=Filters(), sources={})
-        if request
-        else None
-    )
+    resolved = ResolvedRequest(text=request, preference=request, filters=filters, sources={})
     return EvalRecord(
         case_set="set_v1",
         cases_sha256="c" * 64,

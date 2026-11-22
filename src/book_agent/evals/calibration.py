@@ -33,7 +33,7 @@ from book_agent.evals.judge import (
 )
 from book_agent.evals.records import EvalRecord
 from book_agent.files import write_atomic
-from book_agent.prompts.judge_v1 import JudgeInput
+from book_agent.prompts.judge_v1 import JudgeInput, describe_filters
 
 Split = Literal["tuning", "held_out"]
 TUNING: Split = "tuning"
@@ -221,11 +221,12 @@ def render_card(number: int, total: int, item: JudgeInput) -> str:
         lines += [f"Request: {item.request}", f"Preference: {item.preference or '(none)'}"]
     else:
         lines += ["Request: (none: library only)"]
+    lines.append(f"Filters checked by code: {describe_filters(item.filters)}")
     lines += ["", f"{item.title} by {item.author}"]
     details = [str(item.year)] if item.year is not None else []
+    details.append(f"{item.pages} pages" if item.pages is not None else "pages unknown")
     details += [", ".join(item.categories)] if item.categories else []
-    if details:
-        lines.append(" | ".join(details))
+    lines.append(" | ".join(details))
     lines += ["", item.description or "(no description available)", ""]
     lines += [f"Reason: {item.reason}", ""]
     if item.cited:

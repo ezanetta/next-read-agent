@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from book_agent.domain.models import Profile
+from book_agent.domain.recommendations import Filters
 from book_agent.evals.judge import (
     BookRef,
     JudgeConfig,
@@ -29,6 +30,16 @@ RECORD = stored(
 )
 
 
+def test_the_merged_filters_and_a_missing_page_count_reach_the_input() -> None:
+    record = stored(
+        "flags", [checked("Short", pages=None)], request=None,
+        filters=Filters(language="en", max_pages=200),
+    )  # fmt: skip
+    item = judge_input(record, 0, PROFILE)
+    assert item.filters == Filters(language="en", max_pages=200)
+    assert item.pages is None and item.request is None
+
+
 def test_only_matched_books_are_judged() -> None:
     assert judgeable_items(RECORD) == [0, 2]
     assert judgeable_items(stored("x", [], error_kind="llm_error").model_copy(
@@ -38,7 +49,13 @@ def test_only_matched_books_are_judged() -> None:
 def test_the_input_comes_from_the_record_and_the_library() -> None:
     item = judge_input(RECORD, 2, PROFILE)
     assert (item.request, item.preference) == ("a desert epic", "a desert epic")
-    assert (item.title, item.author, item.year) == ("Sand Two", "Some Author", 1990)
+    assert (item.title, item.author, item.year, item.pages) == (
+        "Sand Two",
+        "Some Author",
+        1990,
+        320,
+    )
+    assert item.filters == Filters()
     assert item.reason == "Like Dune: Sand Two"
     [cited] = item.cited
     assert (cited.author, cited.rating, cited.shelf) == ("Frank Herbert", 5.0, "read")
