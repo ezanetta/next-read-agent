@@ -146,7 +146,14 @@ class RecordStore:
         overwrites the snapshot older records point to.
         """
         sha = profile_sha256(profile)
-        path = self.root / case_set / f"profile_{sha[:12]}.json"
+        path = self._profile_path(case_set, sha)
         if not path.exists():
             write_atomic(path, profile.model_dump_json(indent=1) + "\n")
         return sha
+
+    def load_profile(self, case_set: str, sha: str) -> Profile:
+        """The library snapshot a record points to (its profile_sha256)."""
+        return Profile.model_validate_json(self._profile_path(case_set, sha).read_bytes())
+
+    def _profile_path(self, case_set: str, sha: str) -> Path:
+        return self.root / case_set / f"profile_{sha[:12]}.json"
