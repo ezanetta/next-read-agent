@@ -21,6 +21,7 @@ from book_agent.evals import __main__ as evals_cli
 from book_agent.evals.records import EvalRecord, RecordStore, RunConfig
 from book_agent.evals.report import (
     build_report,
+    infrastructure_failure,
     outcome,
     p95,
     render_markdown,
@@ -140,6 +141,59 @@ def test_config_stats_aggregate_the_records() -> None:
     assert stats.warnings == []
 
 
+def failed_call(status: int | None = None) -> LLMCall:
+    return LLMCall(name="agent", model=None, usage=None, latency_s=1.0, error_status=status)
+
+
+GEMINI_503 = "LLM call failed: Gemini API error 503 UNAVAILABLE: high demand"
+OUTAGE = record("o", error_kind="llm_error", error=GEMINI_503, calls=[call(), failed_call(503)])
+CATALOG_DOWN = record(
+    "p", error_kind="catalog_unavailable", final_validation=validation(unknowns=[Rule.NOT_FOUND])
+)
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        OUTAGE,
+        CATALOG_DOWN,
+        # Older records: no error_status, the status is only in the error text.
+        record("q", error_kind="llm_error", error=GEMINI_503, calls=[failed_call()]),
+        # A 5xx while interpreting the request counts too.
+        record("r", error_kind="interpretation", error="x", calls=[failed_call(500)]),
+    ],
+)
+def test_infrastructure_failures(run: EvalRecord) -> None:
+    assert infrastructure_failure(run)
+
+
+@pytest.mark.parametrize(
+    "run",
+    [
+        ACCEPTED,
+        EXHAUSTED,
+        INTERPRETATION,
+        record("s", error_kind="llm_error", error="400 bad", calls=[failed_call(400)]),
+        record("t", error_kind="llm_error", error="refused: SAFETY", calls=[failed_call()]),
+        # The last call succeeded: the run failed for another reason.
+        record("u", error_kind="token_limit", error=GEMINI_503, calls=[call()]),
+    ],
+)
+def test_not_infrastructure_failures(run: EvalRecord) -> None:
+    assert not infrastructure_failure(run)
+
+
+def test_both_acceptance_rates_are_reported() -> None:
+    report = build_report("set_v1", [ACCEPTED, EXHAUSTED, OUTAGE, CATALOG_DOWN])
+    [stats] = report.configs
+    assert (stats.accepted, stats.runs, stats.infrastructure_failures) == (1, 4, 2)
+    assert stats.accept_rate == 0.25
+    assert stats.accept_rate_without_infrastructure == 0.5
+    markdown = render_markdown(report)
+    assert "| 4 | 1 (25%) | 1/2 (50%) |" in markdown
+    assert "- Infrastructure failures (left out of the second rate): 2" in markdown
+
+
 def test_rescoring_with_a_different_policy_needs_no_new_runs() -> None:
     records = [ACCEPTED, UNKNOWN_PAGES]
 
@@ -174,8 +228,8 @@ def test_markdown_has_both_tables_and_marks_agent_only_metrics() -> None:
     baseline = record("a", config=BASELINE, final_validation=validation())
     markdown = render_markdown(build_report("set_v1", [ACCEPTED, baseline]))
     assert "# Eval report: set_v1" in markdown
-    assert "| agent-agent_v2-m-default | 1 | 1 (100%) | 2.0 / 2 |" in markdown
-    assert "| baseline-baseline_v1-m-default | 1 | 1 (100%) | n/a |" in markdown
+    assert "| agent-agent_v2-m-default | 1 | 1 (100%) | 1/1 (100%) | 2.0 / 2 |" in markdown
+    assert "| baseline-baseline_v1-m-default | 1 | 1 (100%) | 1/1 (100%) | n/a |" in markdown
     assert "| a | 1/1 | 1/1 |" in markdown
     assert render_markdown(build_report("set_v1", [])).endswith("No records yet.")
 

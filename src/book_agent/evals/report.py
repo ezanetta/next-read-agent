@@ -4,9 +4,13 @@ The acceptance policy is applied here, at report time (D-021), so a policy chang
 rescores old runs for free. Caveat: for the agent, the run's path (rejections,
 resubmissions) followed the policy in force when it ran; rescoring judges its final
 validation only.
+
+Two acceptance rates sit side by side (D-032): over every run (the whole system), and
+over the runs no outage stopped (the system's own choices).
 """
 
 import math
+import re
 from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -31,6 +35,25 @@ def outcome(record: EvalRecord, policy: Policy = is_acceptable) -> str:
     if is_accepted(record, policy):
         return ACCEPTED
     return record.error_kind or REJECTED
+
+
+CATALOG_UNAVAILABLE = "catalog_unavailable"
+# Records from before LLMCall.error_status (D-030) only name the status in the error text.
+_SERVER_ERROR_TEXT = re.compile(r"API error 5\d\d\b")
+
+
+def infrastructure_failure(record: EvalRecord) -> bool:
+    """A run stopped by a service, not by the system's choices: the catalog was
+    unavailable, or the last LLM call failed with a server error (5xx), whatever step
+    made it (agent turn, request interpretation, baseline reply) (D-032)."""
+    if record.error_kind == CATALOG_UNAVAILABLE:
+        return True
+    if record.error_kind is None or not record.calls or record.calls[-1].model is not None:
+        return False
+    last = record.calls[-1]
+    if last.error_status is not None:
+        return last.server_error
+    return bool(_SERVER_ERROR_TEXT.search(record.error or ""))
 
 
 def used_fallback(record: EvalRecord) -> bool:
@@ -67,6 +90,7 @@ class ConfigStats:
     system: str
     runs: int
     accepted: int
+    infrastructure_failures: int  # not accepted, stopped by a service outage (D-032)
     outcomes: Counter[str]
     violations: Counter[str]  # by rule, on final validations
     unknowns: Counter[str]  # by rule, on final validations
@@ -88,7 +112,18 @@ class ConfigStats:
 
     @property
     def accept_rate(self) -> float:
+        """The whole system: every run counts."""
         return self.accepted / self.runs if self.runs else 0.0
+
+    @property
+    def runs_without_infrastructure_failures(self) -> int:
+        return self.runs - self.infrastructure_failures
+
+    @property
+    def accept_rate_without_infrastructure(self) -> float:
+        """The system's own choices: runs an outage stopped are left out."""
+        runs = self.runs_without_infrastructure_failures
+        return self.accepted / runs if runs else 0.0
 
 
 @dataclass
@@ -143,6 +178,9 @@ def config_stats(config_id: str, records: list[EvalRecord], policy: Policy) -> C
         system=records[0].config.system,
         runs=len(records),
         accepted=sum(is_accepted(r, policy) for r in records),
+        infrastructure_failures=sum(
+            not is_accepted(r, policy) and infrastructure_failure(r) for r in records
+        ),
         outcomes=Counter(outcome(r, policy) for r in records),
         violations=Counter(v.rule.value for f in finals for v in f.violations),
         unknowns=Counter(u.rule.value for f in finals for u in f.unknowns),
@@ -193,6 +231,10 @@ def render_markdown(report: Report) -> str:
     for stats in report.configs:
         lines += ["", f"### {stats.config_id}", ""]
         lines += [f"- Outcomes: {_counts(stats.outcomes)}"]
+        lines += [
+            f"- Infrastructure failures (left out of the second rate): "
+            f"{stats.infrastructure_failures}"
+        ]
         lines += [f"- Violations by rule (final): {_counts(stats.violations)}"]
         lines += [f"- Unknowns by rule (final): {_counts(stats.unknowns)}"]
         if stats.system == "agent":
@@ -211,6 +253,7 @@ _CONFIG_COLUMNS = [
     "Configuration",
     "Runs",
     "Accepted",
+    "Accepted, outages excluded",
     "Iterations (mean / max)",
     "Submissions",
     "One search per turn",
@@ -237,6 +280,8 @@ def _config_table(configs: list[ConfigStats]) -> list[str]:
                     s.config_id,
                     str(s.runs),
                     f"{s.accepted} ({s.accept_rate:.0%})",
+                    f"{s.accepted}/{s.runs_without_infrastructure_failures} "
+                    f"({s.accept_rate_without_infrastructure:.0%})",
                     agent_only(f"{s.mean_iterations:.1f} / {s.max_iterations}"),
                     f"{s.mean_submissions:.1f}",
                     agent_only(f"{s.one_search_per_turn} / {s.runs}"),

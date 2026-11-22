@@ -264,3 +264,10 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Keep case-by-case order; shuffle randomly; interleave by run index.
 - **Choice:** `plan_runs` orders by run index first, then case-file order. A resumed plan keeps the same order for what remains.
 - **Reason:** A time-clustered failure now lands on different cases instead of one case's runs, so per-case numbers aren't distorted and no case category looks to blame by position. Interleaving keeps the order deterministic and easy to read in the progress output, unlike a shuffle. It doesn't remove the outage: D-030 and the report's infrastructure-excluding rate (D-032) handle that.
+
+## D-032 · Two acceptance rates: every run, and runs no outage stopped (2026-11-22)
+
+- **Context:** F-012 and F-014: catalog 503s (round 1) and Gemini 503s (round 2) each cost the agent 4 runs. One acceptance rate mixed the agent's choices with service availability, so a bad hour for a provider looked like a worse agent.
+- **Options:** Keep one rate; drop infrastructure failures from the table; show both rates.
+- **Choice:** The report shows "Accepted" over every run (the whole system, as a user would see it) and "Accepted, outages excluded" over the runs no outage stopped (the agent's own choices). Each configuration's details give the number left out. An infrastructure failure is a run that wasn't accepted and either stopped with `catalog_unavailable` or whose last LLM call failed with a 5xx, at any step (agent turn, request interpretation, baseline reply). Records from before D-030 have no `error_status`, so for them the status is read from the error text ("API error 5xx").
+- **Reason:** Both questions matter and neither number answers the other. Keeping both visible stops a provider outage from hiding, or excusing, a change in the agent. 429s, refusals and 4xx stay counted against the system: they come from our requests or our quota, not from a service failing.
