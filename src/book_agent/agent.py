@@ -107,6 +107,7 @@ class TurnTrace(BaseModel, frozen=True):
     submit_notice: bool = False  # the message closing this turn carried SUBMIT_NOW_NOTICE
     forced_tool: str | None = None  # the tool this turn's request forced, if any
     repair_turn_granted: bool = False  # ... and REPAIR_NOTICE: a repair turn follows
+    llm_retries: int = 0  # this turn's request was resent after a server error (D-030)
 
 
 class AgentResult(BaseModel, frozen=True):
@@ -218,6 +219,7 @@ class _RunState:
                 submit_notice=submit_notice,
                 repair_turn_granted=repair_turn_granted,
                 forced_tool=SUBMIT_RECOMMENDATIONS if forced else None,
+                llm_retries=response.retries,
             )
         )
 
@@ -399,19 +401,10 @@ async def _complete(
             max_tokens=MAX_TOKENS_PER_TURN,
             tool_choice=tool_choice,
         )
-    except LLMError:
-        calls.append(
-            LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
-        )
+    except LLMError as e:
+        calls.append(LLMCall.failed(CALL_NAME, e, started))
         raise
-    calls.append(
-        LLMCall(
-            name=CALL_NAME,
-            model=response.model,
-            usage=response.usage,
-            latency_s=perf_counter() - started,
-        )
-    )
+    calls.append(LLMCall.succeeded(CALL_NAME, response, started))
     return response
 
 

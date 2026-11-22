@@ -17,6 +17,7 @@ from book_agent.config import Settings
 from book_agent.domain.models import Profile
 from book_agent.llm.base import LLMClient
 from book_agent.llm.gemini import GeminiClient
+from book_agent.llm.retrying import RetryingLLM
 from book_agent.ports import BookSearch, WorkResolver
 from book_agent.work_keys import CachedWorkResolver, WorkKeyCache, coverage, save_cache
 
@@ -24,7 +25,19 @@ OPEN_LIBRARY_TIMEOUT_S = 10
 
 
 def build_llm(settings: Settings) -> LLMClient:
-    """The LLM client selected by LLM_PROVIDER. Raises ValueError for unsupported providers."""
+    """The LLM client every caller uses: the provider adapter with one retry on server
+    errors (D-030). Raises ValueError for unsupported providers."""
+    return with_retries(build_provider(settings))
+
+
+def with_retries(llm: LLMClient) -> LLMClient:
+    """Wrap a client in the server-error retry. Callers that add their own wrapper (the
+    eval's pacing) put it inside, so the retry is paced too."""
+    return RetryingLLM(llm)
+
+
+def build_provider(settings: Settings) -> LLMClient:
+    """The bare adapter selected by LLM_PROVIDER, with no retries (D-027)."""
     if settings.llm_provider == "gemini":
         client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
         return GeminiClient(

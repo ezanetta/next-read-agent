@@ -39,6 +39,15 @@ class LLMRateLimitError(LLMError):
         self.daily = daily  # a daily quota: waiting minutes won't help
 
 
+class LLMServerError(LLMError):
+    """The provider failed on its side (HTTP 5xx): often transient, e.g. 503 high demand."""
+
+    def __init__(self, message: str, *, status: int, retries: int = 0) -> None:
+        super().__init__(message)
+        self.status = status  # the HTTP status code
+        self.retries = retries  # times a retrying client resent the request before giving up
+
+
 class LLMRefusalError(LLMError):
     """The provider refused or blocked the response (Claude refusal, Gemini SAFETY, ...)."""
 
@@ -194,6 +203,7 @@ class LLMResponse(BaseModel, frozen=True):
     stop_reason: StopReason
     usage: Usage
     model: str
+    retries: int = Field(default=0, ge=0)  # set by a retrying client; adapters leave it at 0
 
     @model_validator(mode="after")
     def _message_is_from_assistant(self) -> Self:
@@ -222,7 +232,7 @@ class LLMClient(Protocol):
 
         `temperature=None` uses the provider's default. `tool_choice` forces a call to
         one of the named tools; None lets the model choose.
-        Raises LLMRateLimitError, LLMRefusalError or LLMError on failure.
+        Raises LLMRateLimitError, LLMServerError, LLMRefusalError or LLMError on failure.
         """
         ...
 

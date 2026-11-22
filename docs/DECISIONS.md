@@ -218,6 +218,7 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Choice:** The Google Books adapter retries every request once, after 0.5 s plus up to 0.25 s of random jitter, on a 5xx answer or a network error (timeout, connection failure). 4xx answers, 429 included, are not retried. A second failure is reported as before.
 - **Why this differs from the LLM adapter:** the "no retries in the adapter" rule was for the LLM: a Gemini request costs quota and tokens, a retry can repeat work, and rate limits need policy (the eval's `PacedLLM` waits `retry_after` once and stops on the daily quota, D-021). Google Books requests are read-only, idempotent and free beyond the daily quota, so one quick retry is safe and cheap. The jitter keeps parallel validation lookups from retrying in step. Open Library keeps no retries: a failed work-key lookup only falls back to the same-work judge, it never stops a run (D-013).
 - **Reason:** Retrying where the error happens fixes it for every caller (validation, the agent's search tool, the UI later) instead of each one handling it.
+- **Revision (2026-11-22, D-030):** LLM requests now retry once on server errors too, but in a wrapper applied in wiring, not in the adapter.
 
 ## D-028 · Force submit on the last turn and the repair turn; notice with 2 turns left (2026-11-19)
 
@@ -247,3 +248,12 @@ Significant design decisions: context, options considered, choice, and reason.
   - On the library side, a read title inside a volume ("Ficciones; El Aleph" read) makes either title count as already read. That errs on the safe side: it can only reject a recommendation, never let a read book through.
 - **Known gap:** different translations of the same original title ("Sobre la brevedad de la vida" vs "De la brevedad de la vida") still don't match for existence; the book is reported `not_found` if only other translations are in the catalog.
 - **Verified:** a regression test with fixtures built from the live check's results (titles and authors as returned; see the fixtures README).
+
+## D-030 · One retry on LLM server errors, in a wrapper applied in wiring (2026-11-22)
+
+- **Context:** F-014: 4 agent runs in round 2 failed on a single Gemini 503 "high demand". Only 429s had any handling (`PacedLLM`, evals only), so every other LLM error ended the run at once, and the CLI had no handling at all.
+- **Options:** Retry in the Gemini adapter; retry 503s inside `PacedLLM` (evals only); a separate retrying `LLMClient` wrapper applied in wiring.
+- **Choice:** `RetryingLLM` (`llm/retrying.py`), a decorator around any `LLMClient`. On `LLMServerError` (HTTP 5xx) it waits 2 s plus up to 1 s of jitter and resends once. A second failure raises `LLMServerError` with `retries=1` and "(after 1 retry)" in the message. 429s, other 4xx and network errors are not retried here. `wiring.build_llm` applies it for every caller (CLI, evals, the API later). The eval CLI puts pacing inside it (`with_retries(PacedLLM(build_provider(...)))`), so a retry waits for a pacing slot and counts as a request.
+- **Visible retries:** the adapter maps 5xx to `LLMServerError(status)`. A retried response carries `LLMResponse.retries=1`. `LLMCall` records `retries` and, for a failed call, `error_status`, so eval records and `--verbose` show which calls were resent, and the report can tell an outage from other LLM errors (D-032). `TurnTrace.llm_retries` marks the agent turn.
+- **Why not in the adapter:** D-027's rule stands. The adapter stays a translation of one request, and retry policy differs per provider and caller. As a wrapper, it is written once for Gemini and Claude and tested with a fake.
+- **Why longer than Google Books' 0.5 s:** a "high demand" 503 is load shedding, and an immediate retry would likely hit the same overload. A retry can resend a request that already cost tokens, so it is limited to one.

@@ -13,6 +13,7 @@ from book_agent.llm.base import (
     LLMError,
     LLMRateLimitError,
     LLMRefusalError,
+    LLMServerError,
     Message,
     StopReason,
     TextPart,
@@ -475,10 +476,17 @@ def test_402_resource_exhausted_is_not_a_rate_limit() -> None:
     assert type(mapped) is LLMError
 
 
-def test_server_error_maps_to_llm_error() -> None:
-    mapped = to_llm_error(errors.ServerError(500, api_error_json(500, "INTERNAL")))
+@pytest.mark.parametrize(("code", "status"), [(500, "INTERNAL"), (503, "UNAVAILABLE")])
+def test_server_errors_map_to_llm_server_error(code: int, status: str) -> None:
+    mapped = to_llm_error(errors.ServerError(code, api_error_json(code, status)))
+    assert isinstance(mapped, LLMServerError)
+    assert mapped.status == code and mapped.retries == 0
+    assert str(mapped) == f"Gemini API error {code} {status}: Something happened"
+
+
+def test_a_client_error_is_a_plain_llm_error() -> None:
+    mapped = to_llm_error(errors.ClientError(400, api_error_json(400, "INVALID_ARGUMENT")))
     assert type(mapped) is LLMError
-    assert str(mapped) == "Gemini API error 500 INTERNAL: Something happened"
 
 
 # --- complete(): the real SDK over a mock HTTP transport ---------------------------

@@ -86,17 +86,12 @@ async def interpret_request(
             temperature=0.0,  # extraction should give the same answer every time
         )
     except LLMError as e:
-        failed = LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
+        failed = LLMCall.failed(CALL_NAME, e, started)
         return Interpretation(
             prompt_id=prompt_id, error=f"LLM call failed: {e}", error_kind="llm_error", call=failed
         )
 
-    call = LLMCall(
-        name=CALL_NAME,
-        model=response.model,
-        usage=response.usage,
-        latency_s=perf_counter() - started,
-    )
+    call = LLMCall.succeeded(CALL_NAME, response, started)
     reply = response.message.text
     try:
         extracted = extract_interpretation(reply)

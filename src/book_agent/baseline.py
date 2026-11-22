@@ -111,7 +111,7 @@ async def run_baseline(
             temperature=temperature,
         )
     except LLMError as e:
-        failed = LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
+        failed = LLMCall.failed(CALL_NAME, e, started)
         return result.model_copy(
             update={
                 "calls": [*result.calls, failed],
@@ -120,12 +120,7 @@ async def run_baseline(
             }
         )
 
-    call = LLMCall(
-        name=CALL_NAME,
-        model=response.model,
-        usage=response.usage,
-        latency_s=perf_counter() - started,
-    )
+    call = LLMCall.succeeded(CALL_NAME, response, started)
     reply = response.message.text
     result = result.model_copy(update={"calls": [*result.calls, call], "raw_text": reply})
 

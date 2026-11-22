@@ -53,7 +53,7 @@ from book_agent.evals.runner import (
 )
 from book_agent.files import write_atomic
 from book_agent.request_parser import DEFAULT_PARSER_PROMPT, PARSER_PROMPTS
-from book_agent.wiring import build_llm, catalog_services
+from book_agent.wiring import build_provider, catalog_services, with_retries
 from book_agent.work_keys import DEFAULT_CACHE_PATH, load_cache
 
 DEFAULT_CSV = Path("data/goodreads_library_export.csv")
@@ -99,7 +99,8 @@ def _run_command(args: argparse.Namespace) -> int:
         print("Add --yes to start.")
         return EXIT_OK
 
-    llm = PacedLLM(build_llm(settings), max_rpm=args.max_rpm)
+    paced = PacedLLM(build_provider(settings), max_rpm=args.max_rpm)
+    llm = with_retries(paced)  # retries go through pacing and are counted
 
     async def execute() -> RunSummary:
         async with catalog_services(settings, profile, cache, args.cache) as services:
@@ -116,7 +117,7 @@ def _run_command(args: argparse.Namespace) -> int:
                 works=services.works,
                 store=store,
                 git=git_state(),
-                requests_sent=lambda: llm.requests,
+                requests_sent=lambda: paced.requests,
                 progress=_print_progress,
             )
 
@@ -180,7 +181,7 @@ def _parser_command(args: argparse.Namespace) -> int:
         )
     stopped: str | None = None
     if to_run:
-        llm = PacedLLM(build_llm(settings), max_rpm=args.max_rpm)
+        llm = with_retries(PacedLLM(build_provider(settings), max_rpm=args.max_rpm))
         stopped = asyncio.run(
             run_parser_eval(
                 to_run, records, path, llm=llm, prompt=prompt, progress=_print_parser_progress

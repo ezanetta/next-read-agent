@@ -304,8 +304,10 @@ def format_trace(turns: list[TurnTrace]) -> list[str]:
     lines = ["Trace:"]
     for turn in turns:
         forced = f", forced {turn.forced_tool}" if turn.forced_tool else ""
+        retried = ", retried after a server error" if turn.llm_retries else ""
         heading = (
-            f"Turn {turn.iteration} ({turn.stop_reason.value}, {turn.output_tokens} out{forced})"
+            f"Turn {turn.iteration} ({turn.stop_reason.value}, {turn.output_tokens} out"
+            f"{forced}{retried})"
         )
         lines.append(f"{heading}: {turn.note}" if turn.note else heading)
         if turn.text.strip():
@@ -363,7 +365,8 @@ def _calls(calls: list[LLMCall]) -> list[str]:
             else "no usage"
         )
         model = call.model or "failed"
-        lines.append(f"- {call.name}: {model} | {tokens} | {call.latency_s:.2f}s")
+        retried = " | retried once" if call.retries else ""
+        lines.append(f"- {call.name}: {model} | {tokens} | {call.latency_s:.2f}s{retried}")
     return lines
 
 

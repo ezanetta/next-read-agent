@@ -51,19 +51,10 @@ class LLMSameWorkJudge:
                 temperature=0.0,  # the same pair should get the same answer every time
             )
         except LLMError as e:
-            self.calls.append(
-                LLMCall(name=CALL_NAME, model=None, usage=None, latency_s=perf_counter() - started)
-            )
+            self.calls.append(LLMCall.failed(CALL_NAME, e, started))
             return SameWorkVerdict(error=f"LLM call failed: {e}")
 
-        self.calls.append(
-            LLMCall(
-                name=CALL_NAME,
-                model=response.model,
-                usage=response.usage,
-                latency_s=perf_counter() - started,
-            )
-        )
+        self.calls.append(LLMCall.succeeded(CALL_NAME, response, started))
         try:
             return parse_verdict(response.message.text, len(candidates))
         except ReplyParseError as e:

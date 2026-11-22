@@ -1,8 +1,11 @@
 """A record of one LLM call, for reporting tokens and latency per step of a run."""
 
-from pydantic import BaseModel
+from time import perf_counter
+from typing import Self
 
-from book_agent.llm.base import Usage
+from pydantic import BaseModel, Field
+
+from book_agent.llm.base import LLMError, LLMResponse, LLMServerError, Usage
 
 
 class LLMCall(BaseModel, frozen=True):
@@ -10,6 +13,35 @@ class LLMCall(BaseModel, frozen=True):
     model: str | None  # None when the call failed before a response
     usage: Usage | None
     latency_s: float
+    retries: int = Field(default=0, ge=0)  # resent after a server error (D-030)
+    error_status: int | None = None  # HTTP status of a failed call's server error
+
+    @classmethod
+    def succeeded(cls, name: str, response: LLMResponse, started: float) -> Self:
+        """A call that got `response`; `started` is its perf_counter() start."""
+        return cls(
+            name=name,
+            model=response.model,
+            usage=response.usage,
+            latency_s=perf_counter() - started,
+            retries=response.retries,
+        )
+
+    @classmethod
+    def failed(cls, name: str, error: LLMError, started: float) -> Self:
+        server = error if isinstance(error, LLMServerError) else None
+        return cls(
+            name=name,
+            model=None,
+            usage=None,
+            latency_s=perf_counter() - started,
+            retries=server.retries if server else 0,
+            error_status=server.status if server else None,
+        )
+
+    @property
+    def server_error(self) -> bool:
+        return self.error_status is not None and 500 <= self.error_status <= 599
 
 
 def total_usage(calls: list[LLMCall]) -> Usage | None:

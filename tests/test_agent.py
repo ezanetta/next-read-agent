@@ -30,6 +30,7 @@ from book_agent.domain.works import SameWorkVerdict
 from book_agent.llm.base import (
     LLMError,
     LLMResponse,
+    LLMServerError,
     Message,
     StopReason,
     TextPart,
@@ -395,6 +396,20 @@ async def test_llm_failure_raises_with_the_failed_call_recorded() -> None:
     assert str(error) == "LLM call failed: Gemini API error 503 UNAVAILABLE"
     assert [(c.name, c.model, c.usage) for c in error.calls] == [(CALL_NAME, None, None)]
     assert error.iterations == 1 and len(llm.requests) == 1
+
+
+async def test_a_retried_failure_records_its_status_and_retry() -> None:
+    failure = LLMServerError("Gemini API error 503 (after 1 retry)", status=503, retries=1)
+    error, _ = await run_expecting_error([failure])
+    assert error.failure is AgentFailure.LLM_ERROR
+    assert [(c.retries, c.error_status) for c in error.calls] == [(1, 503)]
+
+
+async def test_a_retried_turn_is_marked_in_the_trace_and_the_call() -> None:
+    retried = submit(CLEAN_THREE).model_copy(update={"retries": 1})
+    result, _ = await run([retried])
+    assert [t.llm_retries for t in result.turns] == [1]
+    assert [c.retries for c in result.calls] == [1]
 
 
 # --- Trace -----------------------------------------------------------------------------

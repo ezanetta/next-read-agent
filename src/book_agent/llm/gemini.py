@@ -21,6 +21,7 @@ from book_agent.llm.base import (
     LLMRateLimitError,
     LLMRefusalError,
     LLMResponse,
+    LLMServerError,
     Message,
     ProviderMetadata,
     StopReason,
@@ -302,7 +303,8 @@ class _ErrorBody(BaseModel):
 
 def to_llm_error(error: errors.APIError) -> LLMError:
     """Map an SDK error. Only HTTP 429 is a rate limit: 402 also says RESOURCE_EXHAUSTED
-    but means prepaid credit ran out, which waiting won't fix."""
+    but means prepaid credit ran out, which waiting won't fix. A 5xx is a server error;
+    retrying it is the caller's policy (D-030), not the adapter's."""
     message = f"Gemini API error {error.code} {error.status}: {error.message}"
     if error.code == 429:
         # APIError.details is untyped in the SDK: it holds the raw error JSON.
@@ -310,6 +312,8 @@ def to_llm_error(error: errors.APIError) -> LLMError:
         return LLMRateLimitError(
             message, retry_after=_retry_delay(details), daily=_is_daily_quota(details)
         )
+    if 500 <= error.code <= 599:
+        return LLMServerError(message, status=error.code)
     return LLMError(message)
 
 

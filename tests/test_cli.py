@@ -383,6 +383,15 @@ async def test_agent_verbose_trace_marks_the_notice_and_the_forced_turn() -> Non
     assert f"Turn {MAX_ITERATIONS} (tool_use, 100 out, forced submit_recommendations)" in output
 
 
+async def test_agent_verbose_report_marks_retried_requests() -> None:
+    retried = submission(CLEAN_THREE).model_copy(update={"retries": 1})
+    output, _ = await agent_command(
+        PROFILE, Filters(), llm=FakeLLM([retried]), books=catalog(), verbose=True
+    )
+    assert "Turn 1 (tool_use, 100 out, retried after a server error)" in output
+    assert "s | retried once" in output
+
+
 def test_agent_prompt_option_accepts_the_registered_versions(tmp_path: Path) -> None:
     csv = str(tmp_path / "x.csv")  # fails on the missing CSV, after argparse
     assert main(["agent", "--prompt", "agent_v1", "--csv", csv]) == EXIT_ERROR
