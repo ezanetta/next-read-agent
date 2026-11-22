@@ -132,6 +132,19 @@ async def test_resume_skips_recorded_runs(tmp_path: Path) -> None:
     ]
 
 
+def test_runs_are_interleaved_across_cases(tmp_path: Path) -> None:
+    loaded = load_recommend_cases("set_v1", write_cases(tmp_path, CASES))
+    plan = plan_runs(loaded, BASELINE, 3, RecordStore(tmp_path / "results"))
+    assert [(p.case.id, p.run_index) for p in plan.to_run] == [
+        ("library-only", 1),
+        ("a-classic", 1),
+        ("library-only", 2),
+        ("a-classic", 2),
+        ("library-only", 3),
+        ("a-classic", 3),
+    ]
+
+
 async def test_a_quota_stop_keeps_finished_runs(tmp_path: Path) -> None:
     store, summary = await run(
         tmp_path, BASELINE, [reply(CLEAN_THREE), QuotaExhausted("daily quota exhausted: 429")]

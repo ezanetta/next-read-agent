@@ -86,7 +86,9 @@ def git_state() -> GitState:
 def plan_runs(
     loaded: LoadedCases[RecommendCaseSet], config: RunConfig, runs: int, store: RecordStore
 ) -> Plan:
-    """Every (case, run index) pair not yet recorded for this configuration.
+    """Every (case, run index) pair not yet recorded for this configuration, interleaved:
+    run 1 of every case, then run 2, and so on, so a short outage spreads across cases
+    instead of hitting one case's runs back to back (D-031).
 
     Raises ValueError if the case file changed after results exist (D-023).
     """
@@ -99,8 +101,8 @@ def plan_runs(
         )
     to_run: list[PlannedRun] = []
     recorded = 0
-    for case in loaded.cases.cases:
-        for run_index in range(1, runs + 1):
+    for run_index in range(1, runs + 1):
+        for case in loaded.cases.cases:
             if store.exists(case_set, config, case.id, run_index):
                 recorded += 1
             else:

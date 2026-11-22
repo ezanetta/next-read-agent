@@ -257,3 +257,10 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Visible retries:** the adapter maps 5xx to `LLMServerError(status)`. A retried response carries `LLMResponse.retries=1`. `LLMCall` records `retries` and, for a failed call, `error_status`, so eval records and `--verbose` show which calls were resent, and the report can tell an outage from other LLM errors (D-032). `TurnTrace.llm_retries` marks the agent turn.
 - **Why not in the adapter:** D-027's rule stands. The adapter stays a translation of one request, and retry policy differs per provider and caller. As a wrapper, it is written once for Gemini and Claude and tested with a fake.
 - **Why longer than Google Books' 0.5 s:** a "high demand" 503 is load shedding, and an immediate retry would likely hit the same overload. A retry can resend a request that already cost tokens, so it is limited to one.
+
+## D-031 · Eval runs are interleaved: run 1 of every case, then run 2, then run 3 (2026-11-22)
+
+- **Context:** F-014: the runner went case by case (all runs of case 1, then case 2). A 9-minute Gemini outage fell on a stretch of mostly Spanish cases, which made a capacity problem look like a language problem, and it hit argentine-novel's runs 1 and 2 back to back, turning one outage into 2 of that case's 3 runs.
+- **Options:** Keep case-by-case order; shuffle randomly; interleave by run index.
+- **Choice:** `plan_runs` orders by run index first, then case-file order. A resumed plan keeps the same order for what remains.
+- **Reason:** A time-clustered failure now lands on different cases instead of one case's runs, so per-case numbers aren't distorted and no case category looks to blame by position. Interleaving keeps the order deterministic and easy to read in the progress output, unlike a shuffle. It doesn't remove the outage: D-030 and the report's infrastructure-excluding rate (D-032) handle that.
