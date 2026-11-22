@@ -206,3 +206,16 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - A new failure kind, 4 `llm_error`, all in Spanish requests (argentine-novel 2, borges-stories-es 1, short-light-es 1), needs investigating before the agent's 85% is read as final.
 - **Fix:** None yet; investigation follows.
 - **How it was verified:** The report from the stored records of both rounds.
+
+## F-014 · The 4 `llm_error` runs in F-013: transient Gemini 503s, clustered in time (2026-11-22)
+
+- **What happened:** All 4 `llm_error` runs of round 2 failed on one agent request with HTTP 503 UNAVAILABLE, "This model is currently experiencing high demand". borges-stories-es run 3 failed on turn 4, argentine-novel runs 1 and 2 on turn 6 (forced submit), and short-light-es run 3 on turn 1. None had submitted yet. The request parser (66 calls) and the same-work judge (31 calls) never failed.
+- **How it was detected:** The stored records only (errors, call lists, turn traces, start times), no live calls.
+- **Cause:** Gemini capacity, not our changes:
+  - The first 196 LLM requests (10:26–10:40 UTC) had no failures. All 4 fell between 10:40 and 10:49, 4 of 130 requests (3%).
+  - **Spanish is a coincidence of order:** runs went case by case, and the last part of the session was mostly Spanish cases (about 77% of the window's requests). The English cases in the same window (scifi-not-space, litrpg) didn't fail. With that share, all 4 random failures landing on Spanish requests has a chance of about 35%.
+  - **Forced turns:** 2 of 21 forced requests failed, against 2 of 169 unforced, but the two forced failures are argentine-novel's back-to-back runs within one minute, inside the cluster. A broken tool choice would fail every forced call with a 400, not a 503.
+  - Case-by-case order let one short outage hit the same case twice.
+- **Why it surfaced now:** Any Gemini error other than a 429 became an immediate `llm_error`: `PacedLLM` retries only rate limits and the adapter doesn't retry (D-027). Round 1 simply had no 503s. Without these 4 runs, round 2's agent would be 33/35.
+- **Fix:** One retry on LLM 5xx in a wrapper applied in wiring (D-030), interleaved run order in the eval runner (D-031), and an acceptance rate that excludes infrastructure failures in the report (D-032).
+- **How it was verified:** Error messages, call positions, turn traces and timestamps of all agent records in the round 2 folder.
