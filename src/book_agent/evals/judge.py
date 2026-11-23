@@ -8,6 +8,7 @@ Layout:
     data/evals/<case set>/judgments/<judge id>/<record config id>/<case>__run<k>.json
 """
 
+import json
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from enum import StrEnum
 from pathlib import Path
 from time import perf_counter
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from book_agent.domain.models import Book, Profile
 from book_agent.domain.recommendations import Filters
@@ -24,9 +25,9 @@ from book_agent.evals.pacing import QuotaExhausted
 from book_agent.evals.records import EvalRecord, RecordStore
 from book_agent.files import write_atomic
 from book_agent.json_reply import ReplyParseError, extract_json, parse_model
-from book_agent.llm.base import LLMClient, LLMError, Message
+from book_agent.llm.base import LLMClient, LLMError, LLMResponse, Message, ToolChoice, ToolSpec
 from book_agent.llm.calls import LLMCall
-from book_agent.prompts import judge_v1, judge_v2
+from book_agent.prompts import judge_v1, judge_v2, judge_v3
 from book_agent.prompts.judge_v1 import CitedBook, JudgeInput
 
 CALL_NAME = "judge"
@@ -38,9 +39,13 @@ _UNSAFE = re.compile(r"[^a-zA-Z0-9._-]+")
 
 @dataclass(frozen=True)
 class JudgePrompt:
+    """A judge prompt version. With `tool_description`, the judge answers through a
+    forced `submit_judgment` call (D-037); without, with JSON text."""
+
     prompt_id: str
     system: str
     build_user_prompt: Callable[[JudgeInput], str]
+    tool_description: str | None = None
 
 
 JUDGE_PROMPTS = {
@@ -49,6 +54,12 @@ JUDGE_PROMPTS = {
     ),
     judge_v2.PROMPT_ID: JudgePrompt(
         judge_v2.PROMPT_ID, judge_v2.SYSTEM, judge_v2.build_user_prompt
+    ),
+    judge_v3.PROMPT_ID: JudgePrompt(
+        judge_v3.PROMPT_ID,
+        judge_v3.SYSTEM,
+        judge_v3.build_user_prompt,
+        tool_description=judge_v3.TOOL_DESCRIPTION,
     ),
 }
 DEFAULT_JUDGE_PROMPT = JUDGE_PROMPTS[judge_v1.PROMPT_ID]
@@ -74,7 +85,10 @@ class Criterion(StrEnum):
 
 
 class CriterionJudgment(BaseModel, frozen=True):
-    justification: str = Field(min_length=1)
+    # Also submit_judgment's schema (judge_v3). Fields that are a `$ref` (verdict, and
+    # the args' criteria) get no description: the agent's live schema uses plain
+    # `$ref`s, the shape Gemini is known to accept. The prompt explains each field.
+    justification: str = Field(min_length=1, description="One sentence, written first.")
     verdict: Verdict
 
 
@@ -147,6 +161,25 @@ class _Reply(BaseModel):
     reason_quality: _CriterionReply
 
 
+# The tool's arguments (D-037): generated schemas, one shape per kind of run.
+class JudgmentArgs(BaseModel):
+    """submit_judgment's arguments for a run with request text."""
+
+    fits_request: CriterionJudgment
+    reason_quality: CriterionJudgment
+
+
+class ReasonOnlyArgs(BaseModel):
+    """submit_judgment's arguments for a run without request text: no fits_request."""
+
+    reason_quality: CriterionJudgment
+
+
+def judgment_tool(description: str, has_request: bool) -> ToolSpec:
+    args = JudgmentArgs if has_request else ReasonOnlyArgs
+    return ToolSpec.from_model(name=judge_v3.TOOL_NAME, description=description, args=args)
+
+
 # --- Inputs ---------------------------------------------------------------------------
 
 
@@ -213,6 +246,32 @@ def parse_judgment(text: str, has_request: bool) -> _Reply:
     return reply
 
 
+def parse_tool_judgment(response: LLMResponse, has_request: bool) -> _Reply:
+    """Read the judgment from the forced submit_judgment call. The provider follows the
+    schema loosely, so the arguments are validated here, as strictly as a text reply.
+    Raises ReplyParseError with the reason."""
+    calls = [c for c in response.message.tool_calls if c.name == judge_v3.TOOL_NAME]
+    if len(calls) != 1:
+        raise ReplyParseError(f"expected one {judge_v3.TOOL_NAME} call, got {len(calls)}")
+    arguments = calls[0].arguments
+    if not has_request and "fits_request" in arguments:
+        raise ReplyParseError("fits_request given without a request")
+    args_model = JudgmentArgs if has_request else ReasonOnlyArgs
+    try:
+        args = args_model.model_validate(arguments)
+    except ValidationError as e:
+        raise ReplyParseError(f"invalid {judge_v3.TOOL_NAME} arguments: {e}") from e
+    return _Reply.model_validate(args.model_dump())
+
+
+def _raw(response: LLMResponse) -> str:
+    """What to keep of an unreadable reply: the tool calls' arguments, or the text."""
+    calls = response.message.tool_calls
+    if calls:
+        return json.dumps([{c.name: c.arguments} for c in calls], ensure_ascii=False)
+    return response.message.text
+
+
 async def judge_book(
     item: JudgeInput, item_index: int, llm: LLMClient, prompt: JudgePrompt = DEFAULT_JUDGE_PROMPT
 ) -> BookJudgment:
@@ -225,13 +284,20 @@ async def judge_book(
         "has_request": item.has_request,
         "had_description": bool(item.description),
     }
+    tools = (
+        [judgment_tool(prompt.tool_description, item.has_request)]
+        if prompt.tool_description is not None
+        else []
+    )
     started = perf_counter()
     try:
         response = await llm.complete(
             system=prompt.system,
             messages=[Message.user(prompt.build_user_prompt(item))],
+            tools=tools,
             max_tokens=MAX_TOKENS,
             temperature=0.0,  # the same book should get the same grade every time
+            tool_choice=ToolChoice.required(judge_v3.TOOL_NAME) if tools else None,
         )
     except LLMError as e:
         failed = LLMCall.failed(CALL_NAME, e, started)
@@ -239,12 +305,15 @@ async def judge_book(
             {**base, "error": f"LLM call failed: {e}", "call": failed}
         )
     call = LLMCall.succeeded(CALL_NAME, response, started)
-    text = response.message.text
     try:
-        reply = parse_judgment(text, item.has_request)
+        reply = (
+            parse_tool_judgment(response, item.has_request)
+            if tools
+            else parse_judgment(response.message.text, item.has_request)
+        )
     except ReplyParseError as e:
         return BookJudgment.model_validate(
-            {**base, "error": f"unreadable reply: {e}", "raw_text": text, "call": call}
+            {**base, "error": f"unreadable reply: {e}", "raw_text": _raw(response), "call": call}
         )
     return BookJudgment.model_validate(
         {
