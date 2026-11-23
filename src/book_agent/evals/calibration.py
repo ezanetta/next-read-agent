@@ -408,6 +408,45 @@ class Agreement:
         return Counter(self.pairs)
 
 
+@dataclass(frozen=True)
+class SharedQuestion:
+    """Sample books that ask the same fits_request question: the same book recommended
+    for the same case (same request) in different runs or by different systems. Their
+    reasons differ, so reason_quality stays independent."""
+
+    case_id: str
+    title: str
+    refs: Sequence[BookRef]  # in sample order
+
+
+def shared_questions(
+    sample: CalibrationSample, inputs: dict[BookRef, JudgeInput]
+) -> list[SharedQuestion]:
+    groups: dict[tuple[str, str, str], list[BookRef]] = {}
+    for item in sample.items:
+        book = inputs[item.ref]
+        key = (item.ref.case_id, book.title.casefold(), book.author.casefold())
+        groups.setdefault(key, []).append(item.ref)
+    positions = sample.positions()
+    return [
+        SharedQuestion(case_id=refs[0].case_id, title=inputs[refs[0]].title, refs=refs)
+        for refs in sorted(groups.values(), key=lambda rs: positions[rs[0]])
+        if len(refs) > 1
+    ]
+
+
+def fits_left_out(sample: CalibrationSample, shared: Iterable[SharedQuestion]) -> set[BookRef]:
+    """Held-out books whose fits_request question is also asked on the tuning half:
+    tuning on it would tune them too, so their fits_request is left out of held-out
+    agreement (their reason_quality stays). D-034."""
+    split = {item.ref: item.split for item in sample.items}
+    left_out: set[BookRef] = set()
+    for question in shared:
+        if any(split[r] == TUNING for r in question.refs):
+            left_out |= {r for r in question.refs if split[r] == HELD_OUT}
+    return left_out
+
+
 def human_verdict(label: Label, criterion: Criterion) -> Verdict | None:
     return label.fits_request if criterion is Criterion.FITS_REQUEST else label.reason_quality
 
@@ -417,10 +456,15 @@ def agreement(
     labels: dict[BookRef, Label],
     judgments: dict[BookRef, BookJudgment],
     criterion: Criterion,
+    fits_excluded: Iterable[BookRef] = (),
 ) -> Agreement:
-    """Pairs for the items both labeled and judged on this criterion."""
+    """Pairs for the items both labeled and judged on this criterion, without the
+    fits_request of `fits_excluded`."""
+    excluded = set(fits_excluded) if criterion is Criterion.FITS_REQUEST else set[BookRef]()
     pairs: list[tuple[Verdict, Verdict]] = []
     for item in items:
+        if item.ref in excluded:
+            continue
         label, judgment = labels.get(item.ref), judgments.get(item.ref)
         if label is None or judgment is None:
             continue
@@ -437,8 +481,10 @@ def render_calibration(
     labels: dict[BookRef, Label],
     judgments: dict[BookRef, BookJudgment],
     held_out_looks: int = 0,
+    shared: Sequence[SharedQuestion] = (),
 ) -> str:
     items = sample.split(split)
+    left_out = fits_left_out(sample, shared) if split == HELD_OUT else set[BookRef]()
     labeled = sum(i.ref in labels for i in items)
     judged = sum(i.ref in judgments and judgments[i.ref].judged for i in items)
     lines = [
@@ -451,12 +497,17 @@ def render_calibration(
             f"Held-out looks so far: {held_out_looks}. Only aggregates are shown for this "
             "half: never tune the prompt on it."
         )
+        if left_out:
+            lines.append(
+                f"fits_request leaves out {len(left_out)} book(s) whose question is also asked "
+                "on the tuning half; their reason_quality counts (D-034)."
+            )
     lines += [
         "",
         "| Criterion | Pairs | Exact | Within one | Judge more lenient | Judge stricter |",
     ]
     lines += ["| --- | --- | --- | --- | --- | --- |"]
-    stats = {c: agreement(items, labels, judgments, c) for c in Criterion}
+    stats = {c: agreement(items, labels, judgments, c, left_out) for c in Criterion}
     for criterion, a in stats.items():
         lines.append(
             f"| {criterion.value} | {a.n} | {_share(a.exact, a.n)} | {_share(a.within_one, a.n)} "
@@ -471,6 +522,8 @@ def render_calibration(
         lines += _disagreements(items, positions, labels, judgments) or ["None."]
         lines += ["", "## Corrected labels", ""]
         lines += _corrections(items, positions, labels, judgments) or ["None."]
+        lines += ["", "## Repeated fits_request questions", ""]
+        lines += _repeated(sample, positions, shared) or ["None."]
     return "\n".join(lines) + "\n"
 
 
@@ -554,3 +607,30 @@ def _corrections(
 
 def _value(verdict: Verdict | None) -> str:
     return verdict.value if verdict is not None else "n/a"
+
+
+def _repeated(
+    sample: CalibrationSample, positions: dict[BookRef, int], shared: Sequence[SharedQuestion]
+) -> list[str]:
+    """Tuning books that share a fits_request question, among themselves or with the
+    held-out half. Held-out books are counted, never named."""
+    split = {item.ref: item.split for item in sample.items}
+    lines: list[str] = []
+    for question in shared:
+        tuning = [r for r in question.refs if split[r] == TUNING]
+        held_out = len(question.refs) - len(tuning)
+        if not tuning:
+            continue
+        numbers = " and ".join(f"#{positions[r]}" for r in tuning)
+        book = f"{question.title} ({question.case_id})"
+        if len(tuning) > 1:
+            lines.append(
+                f"- {numbers}: {book} ask the same fits_request question, so it counts "
+                f"{len(tuning)} times in tuning agreement."
+            )
+        if held_out:
+            lines.append(
+                f"- {numbers}: {book} shares its fits_request question with {held_out} "
+                "held-out book(s), whose fits_request is left out of held-out agreement."
+            )
+    return lines

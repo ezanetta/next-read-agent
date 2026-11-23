@@ -16,13 +16,16 @@ from book_agent.evals.calibration import (
     Label,
     LabelSet,
     SampleItem,
+    Split,
     agreement,
     correct_label,
     draw_sample,
     eligible_items,
+    fits_left_out,
     label_session,
     render_calibration,
     render_card,
+    shared_questions,
 )
 from book_agent.evals.judge import (
     BookJudgment,
@@ -268,7 +271,7 @@ def test_the_tuning_report_lists_every_correction_and_scores_the_corrected_label
     correct_label(sample(ITEMS), labels, 1, note="misread it", reason_quality=YES)
     markdown = render_calibration(sample(ITEMS), TUNING, JUDGE, labels.by_ref(), JUDGMENTS)
     assert "- #1 Sand (case-0), reason_quality partial -> yes on " in markdown
-    assert markdown.rstrip().endswith("Note: misread it")
+    assert "Note: misread it\n" in markdown
     assert "| reason_quality | 2 | 2/2 (100%) |" in markdown  # the corrected label counts
     untouched = render_calibration(sample(ITEMS), TUNING, JUDGE, LABELS, JUDGMENTS)
     assert "## Corrected labels\n\nNone." in untouched
@@ -294,3 +297,65 @@ def test_the_card_number_is_the_book_position_even_after_skips() -> None:
     )  # fmt: skip
     cards = [text.splitlines()[0] for text in shown if text.startswith("--- Book")]
     assert cards == ["--- Book 2 of 3 ---", "--- Book 3 of 3 ---"]
+
+
+def same_book_sample() -> tuple[CalibrationSample, dict[BookRef, JudgeInput]]:
+    """#1/#2: one book twice on tuning. #3/#4: one book on both halves. #5: alone."""
+
+    def r(case: str, run: int) -> BookRef:
+        return BookRef(config_id="c", case_id=case, run_index=run, item_index=0)
+
+    refs = [r("a", 1), r("a", 2), r("b", 1), r("b", 2), r("b", 3)]
+    splits: list[Split] = [TUNING, TUNING, TUNING, HELD_OUT, HELD_OUT]
+    items = [
+        SampleItem(ref=x, system="agent", split=sp) for x, sp in zip(refs, splits, strict=True)
+    ]
+    titles = ["Sand", "sand", "Rain", "Rain", "Snow"]  # the match ignores case
+    inputs = {x: dataclasses.replace(card(), title=t) for x, t in zip(refs, titles, strict=True)}
+    return sample(items), inputs
+
+
+def test_the_same_book_for_the_same_case_shares_a_question() -> None:
+    s, inputs = same_book_sample()
+    shared = shared_questions(s, inputs)
+    found = [(q.case_id, q.title, len(q.refs)) for q in shared]
+    assert found == [("a", "Sand", 2), ("b", "Rain", 2)]
+    assert fits_left_out(s, shared) == {s.items[3].ref}  # held-out twin of a tuning book
+
+
+def test_the_same_title_in_another_case_is_a_different_question() -> None:
+    s, inputs = same_book_sample()
+    inputs[s.items[4].ref] = dataclasses.replace(inputs[s.items[4].ref], title="Sand")
+    assert [len(q.refs) for q in shared_questions(s, inputs)] == [2, 2]
+
+
+def test_held_out_agreement_leaves_out_only_the_twins_fits_request() -> None:
+    s, inputs = same_book_sample()
+    labels = {i.ref: label(i.ref, NO, NO) for i in s.items}
+    judgments = {i.ref: judgment(YES, YES) for i in s.items}
+    markdown = render_calibration(
+        s, HELD_OUT, JUDGE, labels, judgments, shared=shared_questions(s, inputs)
+    )
+    assert "| fits_request | 1 |" in markdown and "| reason_quality | 2 |" in markdown
+    assert "fits_request leaves out 1 book(s) whose question is also asked" in markdown
+    assert "Rain" not in markdown and "#4" not in markdown  # held-out stays anonymous
+    plain = render_calibration(s, HELD_OUT, JUDGE, labels, judgments)
+    assert "| fits_request | 2 |" in plain and "leaves out" not in plain
+
+
+def test_the_tuning_report_notes_repeated_questions() -> None:
+    s, inputs = same_book_sample()
+    labels = {i.ref: label(i.ref, NO, NO) for i in s.items}
+    judgments = {i.ref: judgment(YES, YES) for i in s.items}
+    markdown = render_calibration(
+        s, TUNING, JUDGE, labels, judgments, shared=shared_questions(s, inputs)
+    )
+    assert (
+        "- #1 and #2: Sand (a) ask the same fits_request question, so it counts 2 times "
+        "in tuning agreement." in markdown
+    )
+    assert (
+        "- #3: Rain (b) shares its fits_request question with 1 held-out book(s), whose "
+        "fits_request is left out of held-out agreement." in markdown
+    )
+    assert "| fits_request | 3 |" in markdown  # tuning keeps every pair

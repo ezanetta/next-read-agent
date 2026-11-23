@@ -293,6 +293,13 @@ Significant design decisions: context, options considered, choice, and reason.
   - **Labels** (`evals label`): one book at a time in shuffled order, showing exactly the judge's inputs and never the system. Three labels, each yes / partial / no: fits the request, reason quality, and would I read it (only the user answers it). Saved after each book; skipping and quitting resume later.
   - **Agreement** (`evals calibrate --split tuning|held-out`): per criterion, exact agreement, agreement within one step, the judge more lenient or stricter than the user, and the 3×3 table. The tuning half lists every disagreement with the judge's justification and the user's note. The held-out half shows only aggregates, and each look is logged with the judge configuration, so it stays visible how many prompt versions have seen it.
 - **Reason:** Tuning on one half and verifying on the other keeps the agreement number honest. Blind labeling keeps the labels about the book, not about the system. 20 held-out books give noisy numbers, so small differences shouldn't be over-read (F-013).
+- **Shared fits_request questions (2026-11-23):** a check of calibration_v1 found no identical cards, but two books recommended twice for the same case, with different reasons:
+  - *La muerte y otras sorpresas* (borges-stories-es), #22 in tuning and #11 in held-out. **This pair crosses the halves.**
+  - *The Priory of the Orange Tree* (fantasy-no-sanderson), #1 and #4, both in tuning.
+
+  Same case and same book means the same request and the same book, so it is the same `fits_request` question. Rules, applied by `shared_questions` and `fits_left_out` and found from the sample, not hard-coded:
+  - **A held-out book whose question is also asked on the tuning half is left out of held-out `fits_request` agreement** (#11). Its `reason_quality` still counts, since the reasons differ. Reason: tuning the prompt on #22's `fits_request` would also tune #11's, so it is no longer an unseen check. Leaving out one pair is cheaper than redrawing an already labeled sample. The held-out report states how many books were left out, without naming them.
+  - **The tuning report notes repeated questions:** #1 and #4 count twice in tuning agreement, and #22 shares its question with a held-out book. They stay in, since tuning numbers only guide prompt changes, but the note keeps one disagreement from reading as two independent ones.
 
 ## D-035 · judge_v2: independent criteria, concrete connections, form mismatch is a no (2026-11-23)
 

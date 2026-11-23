@@ -46,6 +46,7 @@ from book_agent.evals.calibration import (
     draw_sample,
     label_session,
     render_calibration,
+    shared_questions,
 )
 from book_agent.evals.cases import ParserCase, load_parser_cases, load_recommend_cases
 from book_agent.evals.judge import (
@@ -467,6 +468,7 @@ def _calibrate_command(args: argparse.Namespace) -> int:
         refs = {i.ref for i in sample.split(split)}
         records = [r for r in store.load_all(sample.case_set) if r.config.harness == sample.harness]
         plan = plan_books(records, judgments, sample.case_set, judge, only=refs)
+        shared = shared_questions(sample, _sample_inputs(store, sample))
     except (OSError, ValueError) as e:
         print(f"error: {e}")
         return EXIT_ERROR
@@ -487,6 +489,7 @@ def _calibrate_command(args: argparse.Namespace) -> int:
         labels.by_ref(),
         judgments.judged(sample.case_set, judge),
         held_out_looks=looks,
+        shared=shared,
     )
     print(markdown)
     path = calibration.root / f"{sample.version}-{judge.id}-{args.split}.md"
