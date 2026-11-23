@@ -330,3 +330,30 @@ Significant design decisions: context, options considered, choice, and reason.
   - Corrections are refused on the held-out half, for unlabeled books, when nothing changes, and for `fits_request` on runs without a request.
   - The user's policy: correct only factual errors, not changes of opinion prompted by the judge.
 - **Reason:** It keeps labels fixable while making every change visible and explained. The held-out half stays untouchable, so its agreement remains an honest check.
+
+## D-037 · judge_v3: the judgment comes back as a forced tool call (2026-11-23)
+
+- **Context:** The judge kept failing on format, not on criteria:
+  - v1 gave `fits_request` without a request (F-015).
+  - v2 split a key and nested an object, losing two of the most discussed tuning books (F-016).
+
+  D-010 already chose tool calling for the agent's final answer for this reason, and the LLM contract now has tool choice (`ToolChoice`).
+- **Options:**
+  - **Accept v2 with the caveat:** keeps losing books, and not at random.
+  - **Retry the two books:** at temperature 0 the same reply may come back.
+  - **Ask the judge again after an unreadable reply:** costs a call each time and hides the cause.
+  - **Lenient JSON parsing:** repair, which D-010 rejects.
+  - **A forced tool call.**
+- **Choice:** `judge_v3`:
+  - **The judge answers by calling `submit_judgment`, forced by `ToolChoice`.** The schema is generated from Pydantic models (`JudgmentArgs`, or `ReasonOnlyArgs` without `fits_request` for runs without request text). The call's arguments are validated as strictly as a text reply was: a missing or extra criterion, a bad verdict or no call at all is still an unreadable reply, kept with its raw arguments.
+  - **The system prompt is v2's instructions and examples word for word** (derived from `judge_v2.SYSTEM`, and a test checks they match). Only the answer paragraph changes. The user prompt is v2's.
+  - **Fields that are a `$ref` carry no `description`,** matching the plain-`$ref` shape the agent's submit tool already uses live with Gemini. The prompt explains each field.
+  - **v1 and v2 stay frozen** and still answer with text.
+- **Not tuning on the labels:** v3 changes the output channel, not what the judge is asked to decide. No instruction, example or criterion moved. Its tuning calibration measures whether the format change loses nothing and recovers the unjudged books. A change in verdicts would point to the channel, not to a better rubric.
+- **Reason:** A provider-enforced schema removes the class of errors instead of patching instances. The strict validation keeps any remaining drift visible.
+
+## D-038 · reason_quality is also reported on two levels, split both ways (2026-11-23)
+
+- **Context:** F-016: almost every `reason_quality` disagreement is one step around partial. The three-level number mixes two different questions: does the judge agree on what a good reason is, and on what a bad one is.
+- **Choice:** The calibration report and the eval report's judge section show `reason_quality` three ways: the three levels, "yes vs partial or no" (split at yes), and "no vs partial or yes" (split at no). In calibration each is a row with exact agreement and direction. In the eval report each is a table per configuration and view.
+- **Reason:** On judge_v2's tuning half, splitting at yes gives 10/20 and splitting at no gives 18/20 (F-016): the judge separates bad reasons from the rest much better than it separates good ones. A single split would hide one of the two.
