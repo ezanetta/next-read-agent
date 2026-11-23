@@ -300,6 +300,19 @@ Significant design decisions: context, options considered, choice, and reason.
   Same case and same book means the same request and the same book, so it is the same `fits_request` question. Rules, applied by `shared_questions` and `fits_left_out` and found from the sample, not hard-coded:
   - **A held-out book whose question is also asked on the tuning half is left out of held-out `fits_request` agreement** (#11). Its `reason_quality` still counts, since the reasons differ. Reason: tuning the prompt on #22's `fits_request` would also tune #11's, so it is no longer an unseen check. Leaving out one pair is cheaper than redrawing an already labeled sample. The held-out report states how many books were left out, without naming them.
   - **The tuning report notes repeated questions:** #1 and #4 count twice in tuning agreement, and #22 shares its question with a held-out book. They stay in, since tuning numbers only guide prompt changes, but the note keeps one disagreement from reading as two independent ones.
+- **Held-out acceptance thresholds (2026-11-23, set before the first held-out look):**
+
+  | Measure | Threshold |
+  | --- | --- |
+  | `fits_request` exact agreement | at least 70% |
+  | `fits_request` within one step | at least 90% |
+  | `reason_quality`, "no vs partial or yes" | at least 85% |
+  | `reason_quality`, "yes vs partial or no" | none: a known limitation (F-016) |
+
+  - **The 3-level `reason_quality` and "yes vs partial or no"** are reported, but have no threshold. The line between a tone-only link and a concrete shared element is fuzzy even in the user's own labels, and the evidence on the tuning half points there, not at the judge.
+  - **Shares are over the held-out pairs as counted under the rules above** (#11's `fits_request` left out).
+  - **If the held-out half misses a threshold,** the judge's scores are still reported, with that caveat next to them. The held-out half is not used for further iteration: no new prompt is tuned against it or checked on it again to pass.
+  - **Why in advance:** a threshold chosen after seeing the result would be fitted to it. Fixing the thresholds, and what happens if they're missed, before the single look keeps the held-out number an honest test rather than another tuning step.
 
 ## D-035 · judge_v2: independent criteria, concrete connections, form mismatch is a no (2026-11-23)
 
