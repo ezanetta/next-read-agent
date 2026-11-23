@@ -5,6 +5,8 @@ For each criterion, the share of yes / partial / no over:
 - books from accepted runs (what a user would actually get),
 - books with and without a catalog description, to see whether the judge is more
   lenient when it has to rely on its own knowledge of the book.
+reason_quality also gets a two-level view, yes vs partial or no, since the judge's
+disagreements with the user's labels are almost all one step around partial.
 """
 
 from collections import Counter
@@ -72,7 +74,25 @@ def render_judge_section(
                     if (v := b.judgment.verdict(criterion)) is not None
                 ]
                 lines.append(_row(f"{config_id}, {view}", verdicts))
+    lines += ["", "### reason_quality, yes vs partial or no", ""]
+    lines += ["| Configuration | Books | Yes | Partial or no |", "| --- | --- | --- | --- |"]
+    for config_id in configs:
+        for view, keep in _VIEWS:
+            verdicts = [
+                v
+                for b in books
+                if b.config_id == config_id and keep(b)
+                if (v := b.judgment.verdict(Criterion.REASON_QUALITY)) is not None
+            ]
+            lines.append(_binary_row(f"{config_id}, {view}", verdicts))
     return lines
+
+
+def _binary_row(label: str, verdicts: list[Verdict]) -> str:
+    n = len(verdicts)
+    yes = sum(v is Verdict.YES for v in verdicts)
+    cells = [f"{yes} ({yes / n:.0%})", f"{n - yes} ({(n - yes) / n:.0%})"] if n else ["-", "-"]
+    return f"| {label} | {n} | " + " | ".join(cells) + " |"
 
 
 def _row(label: str, verdicts: list[Verdict]) -> str:

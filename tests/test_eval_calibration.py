@@ -359,3 +359,18 @@ def test_the_tuning_report_notes_repeated_questions() -> None:
         "fits_request is left out of held-out agreement." in markdown
     )
     assert "| fits_request | 3 |" in markdown  # tuning keeps every pair
+
+
+def test_binary_agreement_merges_partial_into_no() -> None:
+    a = Agreement([(YES, YES), (YES, PARTIAL), (PARTIAL, NO), (NO, YES), (PARTIAL, YES)])
+    b = a.binary()
+    assert b.pairs == [(YES, YES), (YES, NO), (NO, NO), (NO, YES), (NO, YES)]
+    assert (b.exact, b.lenient, b.strict) == (2, 1, 2)
+
+
+def test_the_calibration_table_has_the_binary_reason_quality_row() -> None:
+    # Tuning pairs: (yes, partial) and (no, no), so yes vs not-yes: 1 of 2, 1 lenient.
+    tuning = render_calibration(sample(ITEMS), TUNING, JUDGE, LABELS, JUDGMENTS)
+    assert "| reason_quality, yes vs partial or no | 2 | 1/2 (50%) | - | 1 | 0 |" in tuning
+    held_out = render_calibration(sample(ITEMS), HELD_OUT, JUDGE, LABELS, JUDGMENTS)
+    assert "| reason_quality, yes vs partial or no | 1 | 1/1 (100%) | - | 0 | 0 |" in held_out

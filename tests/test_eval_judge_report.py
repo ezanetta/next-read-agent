@@ -47,3 +47,19 @@ def test_errors_are_counted_apart() -> None:
 
 def test_no_judgments_yet() -> None:
     assert render_judge_section([ACCEPTED_RUN], {}, "j")[-1] == "No judgments yet."
+
+
+def test_reason_quality_has_a_yes_vs_rest_view() -> None:
+    judgments = {
+        ref("a", 0): judged(Verdict.YES),
+        ref("a", 1): judged(Verdict.PARTIAL, had_description=False),
+        ref("b", 0): judged(Verdict.NO),
+    }
+    text = "\n".join(
+        render_judge_section([ACCEPTED_RUN, REJECTED_RUN], judgments, "judge_v2-m-default")
+    )
+    binary = text.split("### reason_quality, yes vs partial or no")[1]
+    assert "| Configuration | Books | Yes | Partial or no |" in binary
+    assert f"| {AGENT.id}, all judged | 3 | 1 (33%) | 2 (67%) |" in binary
+    assert f"| {AGENT.id}, without description | 1 | 0 (0%) | 1 (100%) |" in binary
+    assert "fits_request" not in binary  # only reason_quality gets the binary view
