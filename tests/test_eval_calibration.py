@@ -17,6 +17,7 @@ from book_agent.evals.calibration import (
     LabelSet,
     SampleItem,
     agreement,
+    correct_label,
     draw_sample,
     eligible_items,
     label_session,
@@ -195,7 +196,7 @@ def test_the_tuning_report_lists_disagreements() -> None:
     markdown = render_calibration(sample(ITEMS), TUNING, JUDGE, LABELS, JUDGMENTS)
     assert "| reason_quality | 2 | 1/2 (50%) | 2/2 (100%) | 1 | 0 |" in markdown
     assert (
-        "- Sand (case-0), reason_quality: judge yes, you partial. "
+        "- #1 Sand (case-0), reason_quality: judge yes, you partial. "
         "Judge: 'because yes'. Your note: too generic" in markdown
     )
 
@@ -211,3 +212,85 @@ def test_the_held_out_report_shows_only_aggregates(tmp_path: Path) -> None:
     assert (
         CalibrationStore(tmp_path).log_held_out_look("cal_v1", JUDGE).looks[-1].judge_id == JUDGE.id
     )
+
+
+def labeled_set() -> LabelSet:
+    return LabelSet(sample_version="cal_v1", sample_sha256="s", labels=list(LABELS.values()))
+
+
+def test_a_correction_keeps_the_original_in_history() -> None:
+    labels = labeled_set()
+    before, after = correct_label(
+        sample(ITEMS), labels, 1, note="  misread the cited book  ", reason_quality=NO
+    )
+    assert (before.reason_quality, after.reason_quality) == (PARTIAL, NO)
+    assert (after.fits_request, after.would_read, after.note) == (YES, YES, "too generic")
+    (correction,) = after.corrections
+    assert correction.before == before.values and correction.after == after.values
+    assert correction.note == "misread the cited book"
+    assert labels.by_ref()[ref(0)] == after  # replaced in place, nothing appended
+    assert len(labels.labels) == 3
+
+    # A second correction stacks on the first, so the original stays first in history.
+    _, again = correct_label(sample(ITEMS), labels, 1, note="checked again", fits_request=NO)
+    assert [c.before.reason_quality for c in again.corrections] == [PARTIAL, NO]
+    assert again.values == again.corrections[-1].after
+
+
+@pytest.mark.parametrize(
+    ("position", "changes", "note", "error"),
+    [
+        (3, {"reason_quality": NO}, "n", "held-out half"),
+        (1, {"reason_quality": NO}, "   ", "needs a note"),
+        (1, {"reason_quality": PARTIAL}, "n", "nothing to correct"),
+        (1, {}, "n", "nothing to correct"),
+        (2, {"fits_request": YES}, "n", "no request text"),
+        (4, {"reason_quality": NO}, "n", "no book #4"),
+    ],
+)
+def test_corrections_are_refused_outside_their_rules(
+    position: int, changes: dict[str, Verdict], note: str, error: str
+) -> None:
+    labels = labeled_set()
+    with pytest.raises(ValueError, match=error):
+        correct_label(sample(ITEMS), labels, position, note=note, **changes)
+    assert labels.labels == list(LABELS.values())
+
+
+def test_a_correction_needs_a_label_first() -> None:
+    labels = LabelSet(sample_version="cal_v1", sample_sha256="s")
+    with pytest.raises(ValueError, match="no label yet"):
+        correct_label(sample(ITEMS), labels, 1, note="n", reason_quality=NO)
+
+
+def test_the_tuning_report_lists_every_correction_and_scores_the_corrected_label() -> None:
+    labels = labeled_set()
+    correct_label(sample(ITEMS), labels, 1, note="misread it", reason_quality=YES)
+    markdown = render_calibration(sample(ITEMS), TUNING, JUDGE, labels.by_ref(), JUDGMENTS)
+    assert "- #1 Sand (case-0), reason_quality partial -> yes on " in markdown
+    assert markdown.rstrip().endswith("Note: misread it")
+    assert "| reason_quality | 2 | 2/2 (100%) |" in markdown  # the corrected label counts
+    untouched = render_calibration(sample(ITEMS), TUNING, JUDGE, LABELS, JUDGMENTS)
+    assert "## Corrected labels\n\nNone." in untouched
+
+
+def test_labels_without_corrections_still_load() -> None:
+    stored = (
+        '{"ref": {"config_id": "c", "case_id": "x", "run_index": 1, "item_index": 0}, '
+        '"fits_request": "yes", "reason_quality": "no", "would_read": "yes", '
+        '"labeled_at": "2026-11-22T10:00:00Z"}'
+    )
+    assert Label.model_validate_json(stored).corrections == []
+
+
+def test_the_card_number_is_the_book_position_even_after_skips() -> None:
+    items = [SampleItem(ref=ref(n), system="agent", split=TUNING) for n in range(3)]
+    labels = LabelSet(sample_version="cal_v1", sample_sha256="s", labels=[LABELS[ref(0)]])
+    answers = iter(["s", "y", "y", "y", ""])  # skip book 2, label book 3
+    shown: list[str] = []
+    label_session(
+        sample(items), {r.ref: card() for r in items}, labels,
+        save=lambda _: None, ask=lambda _: next(answers), show=shown.append,
+    )  # fmt: skip
+    cards = [text.splitlines()[0] for text in shown if text.startswith("--- Book")]
+    assert cards == ["--- Book 2 of 3 ---", "--- Book 3 of 3 ---"]

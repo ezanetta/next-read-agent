@@ -42,7 +42,7 @@ def results(tmp_path: Path) -> RecordStore:
 
 def run(tmp_path: Path, *argv: str) -> int:
     paths = ["--results", str(tmp_path / "results")]
-    if argv[0] in ("sample", "label", "calibrate"):
+    if argv[0] in ("sample", "label", "relabel", "calibrate"):
         paths += ["--calibration", str(tmp_path / "cal")]
     return evals_cli.main([*argv, "--cases" if argv[0] in ("sample", "judge") else "--sample",
                            "set_v1" if argv[0] in ("sample", "judge") else "calibration_v1",
@@ -98,6 +98,19 @@ def test_sample_label_judge_plan_calibrate_and_report(
     assert "| reason_quality | 2 | 0/2 (0%) | 2/2 (100%) | 0 | 2 |" in out
     assert run(tmp_path, "calibrate", "--split", "held-out") == evals_cli.EXIT_OK
     assert "Held-out looks so far: 1." in capsys.readouterr().out
+
+    # Correct one tuning label; a held-out one is refused and nothing changes.
+    positions = sample.positions()
+    tuning = next(positions[i.ref] for i in sample.items if i.split == "tuning")
+    held_out = next(positions[i.ref] for i in sample.items if i.split == "held_out")
+    fix = ("--quality", "n", "--note", "the reason misdescribes the cited book")
+    assert run(tmp_path, "relabel", "--book", str(tuning), *fix) == evals_cli.EXIT_OK
+    assert "- reason_quality: yes -> no" in capsys.readouterr().out
+    assert run(tmp_path, "relabel", "--book", str(held_out), *fix) == evals_cli.EXIT_ERROR
+    assert "held-out half" in capsys.readouterr().out
+    assert run(tmp_path, "calibrate", "--split", "tuning") == evals_cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert f"- #{tuning} T (" in out and "reason_quality yes -> no on " in out
 
     code = evals_cli.main(
         ["report", "--cases", "set_v1", "--results", str(tmp_path / "results"),

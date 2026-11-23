@@ -6,6 +6,8 @@
 - Agreement per criterion, with the direction of each disagreement. The tuning half
   lists every disagreement; the held-out half only gives aggregates, and each look at
   it is logged with the judge configuration, so the prompt is never tuned on it.
+- Label corrections, tuning half only: each needs a note, keeps the earlier values in
+  the label's history, and is listed in the tuning report (D-036).
 
 Everything lives in data/evals/calibration/ (private: it points at the library, D-024).
 """
@@ -19,7 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from book_agent.domain.recommendations import Rule
 from book_agent.evals.judge import (
@@ -66,6 +68,25 @@ class CalibrationSample(BaseModel, frozen=True):
     def split(self, split: Split) -> list[SampleItem]:
         return [i for i in self.items if i.split == split]
 
+    def positions(self) -> dict[BookRef, int]:
+        """Each book's 1-based position: "Book N" on the labeling card, "#N" in reports."""
+        return {item.ref: number for number, item in enumerate(self.items, start=1)}
+
+
+class LabelValues(BaseModel, frozen=True):
+    fits_request: Verdict | None
+    reason_quality: Verdict
+    would_read: Verdict
+
+
+class LabelCorrection(BaseModel, frozen=True):
+    """One correction of a label: the values before and after, and why (D-036)."""
+
+    before: LabelValues
+    after: LabelValues
+    note: str = Field(min_length=1)
+    corrected_at: datetime
+
 
 class Label(BaseModel, frozen=True):
     ref: BookRef
@@ -74,6 +95,15 @@ class Label(BaseModel, frozen=True):
     would_read: Verdict  # only the user answers this one
     note: str | None = None
     labeled_at: datetime
+    corrections: list[LabelCorrection] = []  # oldest first; the fields above are current
+
+    @property
+    def values(self) -> LabelValues:
+        return LabelValues(
+            fits_request=self.fits_request,
+            reason_quality=self.reason_quality,
+            would_read=self.would_read,
+        )
 
 
 class LabelSet(BaseModel):
@@ -255,8 +285,9 @@ def label_session(
     show(f"{len(done)} labeled, {len(todo)} to go. Answer y (yes), p (partial), n (no); "
          "s skips the book, q quits.")  # fmt: skip
     count = 0
-    for number, entry in enumerate(todo, start=len(done) + 1):
-        item = inputs[entry.ref]
+    positions = sample.positions()
+    for entry in todo:
+        number, item = positions[entry.ref], inputs[entry.ref]
         show("")
         show(render_card(number, len(sample.items), item))
         try:
@@ -281,6 +312,53 @@ def label_session(
         save(labels)
         count += 1
     return count
+
+
+def correct_label(
+    sample: CalibrationSample,
+    labels: LabelSet,
+    position: int,
+    *,
+    note: str,
+    fits_request: Verdict | None = None,
+    reason_quality: Verdict | None = None,
+    would_read: Verdict | None = None,
+) -> tuple[Label, Label]:
+    """Correct the label of the book at `position` (1-based, as "#N" in the tuning
+    report). Only the given verdicts change; the earlier values stay in the label's
+    history. Returns (before, after); the caller saves. Raises ValueError when the book
+    is on the held-out half, unlabeled, the note is empty or nothing changes (D-036)."""
+    if not 1 <= position <= len(sample.items):
+        raise ValueError(f"no book #{position}: the sample has {len(sample.items)} books")
+    item = sample.items[position - 1]
+    if item.split != TUNING:
+        raise ValueError(f"book #{position} is on the held-out half: its labels can't change")
+    if not note.strip():
+        raise ValueError("a correction needs a note saying why")
+    index = next((i for i, lb in enumerate(labels.labels) if lb.ref == item.ref), None)
+    if index is None:
+        raise ValueError(f"book #{position} has no label yet; label it first")
+    before = labels.labels[index]
+    if fits_request is not None and before.fits_request is None:
+        raise ValueError(f"book #{position} has no request text, so no fits_request label")
+    after_values = LabelValues(
+        fits_request=fits_request or before.fits_request,
+        reason_quality=reason_quality or before.reason_quality,
+        would_read=would_read or before.would_read,
+    )
+    if after_values == before.values:
+        raise ValueError(f"book #{position} already has these labels: nothing to correct")
+    correction = LabelCorrection(
+        before=before.values,
+        after=after_values,
+        note=note.strip(),
+        corrected_at=datetime.now(UTC),
+    )
+    after = before.model_copy(
+        update={**after_values.model_dump(), "corrections": [*before.corrections, correction]}
+    )
+    labels.labels[index] = after
+    return before, after
 
 
 def _verdict(ask: Ask, question: str) -> Verdict:
@@ -388,8 +466,11 @@ def render_calibration(
         lines += ["", f"## {criterion.value}: judge (rows) vs your label (columns)", ""]
         lines += _matrix(a)
     if split == TUNING:
+        positions = sample.positions()
         lines += ["", "## Disagreements", ""]
-        lines += _disagreements(items, labels, judgments) or ["None."]
+        lines += _disagreements(items, positions, labels, judgments) or ["None."]
+        lines += ["", "## Corrected labels", ""]
+        lines += _corrections(items, positions, labels, judgments) or ["None."]
     return "\n".join(lines) + "\n"
 
 
@@ -412,6 +493,7 @@ def _matrix(a: Agreement) -> list[str]:
 
 def _disagreements(
     items: Sequence[SampleItem],
+    positions: dict[BookRef, int],
     labels: dict[BookRef, Label],
     judgments: dict[BookRef, BookJudgment],
 ) -> list[str]:
@@ -432,7 +514,43 @@ def _disagreements(
             justification = reply.justification if reply else ""
             note = f" Your note: {label.note}" if label.note else ""
             lines.append(
-                f"- {judgment.title} ({item.ref.case_id}), {criterion.value}: judge "
+                f"- #{positions[item.ref]} {judgment.title} ({item.ref.case_id}), "
+                f"{criterion.value}: judge "
                 f"{judge.value}, you {human.value}. Judge: {justification!r}.{note}"
             )
     return lines
+
+
+_LABEL_FIELDS = ("fits_request", "reason_quality", "would_read")
+
+
+def _corrections(
+    items: Sequence[SampleItem],
+    positions: dict[BookRef, int],
+    labels: dict[BookRef, Label],
+    judgments: dict[BookRef, BookJudgment],
+) -> list[str]:
+    """Every correction of a label on these items, oldest first per book. Agreement
+    above uses the corrected labels."""
+    lines: list[str] = []
+    for item in items:
+        label = labels.get(item.ref)
+        if label is None:
+            continue
+        judgment = judgments.get(item.ref)
+        title = judgment.title if judgment else f"run {item.ref.run_index}"
+        for c in label.corrections:
+            changes = [
+                f"{name} {_value(getattr(c.before, name))} -> {_value(getattr(c.after, name))}"
+                for name in _LABEL_FIELDS
+                if getattr(c.before, name) != getattr(c.after, name)
+            ]
+            lines.append(
+                f"- #{positions[item.ref]} {title} ({item.ref.case_id}), "
+                f"{'; '.join(changes)} on {c.corrected_at:%Y-%m-%d}. Note: {c.note}"
+            )
+    return lines
+
+
+def _value(verdict: Verdict | None) -> str:
+    return verdict.value if verdict is not None else "n/a"

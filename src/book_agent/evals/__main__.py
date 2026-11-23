@@ -7,6 +7,8 @@
         [--prompt request_parser_v2] [--yes]
     uv run python -m book_agent.evals sample [--harness 2] [--seed N]
     uv run python -m book_agent.evals label [--sample calibration_v1]
+    uv run python -m book_agent.evals relabel --book N --note TEXT [--fits y|p|n]
+        [--quality y|p|n] [--would-read y|p|n]
     uv run python -m book_agent.evals judge [--harness 2] [--model M] [--yes]
     uv run python -m book_agent.evals calibrate --split tuning|held-out [--model M] [--yes]
 
@@ -15,8 +17,9 @@ report reads the records only (no LLM calls) and writes data/evals/<cases>/repor
 parser interprets each labeled request once (temperature 0) and reports per-field
 accuracy, dropped preference terms, and every interpreted preference.
 sample draws the frozen calibration sample; label asks for your labels, one blind book
-at a time; judge grades every matched book of a round's records; calibrate scores the
-judge against your labels on one half of the sample (D-033, D-034).
+at a time; relabel corrects one tuning-half label, with a note (D-036); judge grades
+every matched book of a round's records; calibrate scores the judge against your labels
+on one half of the sample (D-033, D-034).
 Exit codes: 0 done (or nothing to do), 1 stopped early by quota (rerun to resume), 2 errors.
 """
 
@@ -39,6 +42,7 @@ from book_agent.evals.calibration import (
     CalibrationSample,
     CalibrationStore,
     Split,
+    correct_label,
     draw_sample,
     label_session,
     render_calibration,
@@ -52,6 +56,7 @@ from book_agent.evals.judge import (
     JudgeConfig,
     JudgmentStore,
     PlannedBook,
+    Verdict,
     judge_input,
     judgeable_items,
     plan_books,
@@ -118,6 +123,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _sample_command(args)
     if args.command == "label":
         return _label_command(args)
+    if args.command == "relabel":
+        return _relabel_command(args)
     if args.command == "judge":
         return _judge_command(args)
     if args.command == "calibrate":
@@ -350,6 +357,38 @@ def _label_command(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+_VERDICTS = {"y": Verdict.YES, "p": Verdict.PARTIAL, "n": Verdict.NO}
+
+
+def _relabel_command(args: argparse.Namespace) -> int:
+    calibration = CalibrationStore(args.calibration)
+    try:
+        sample, sha = calibration.load_sample(args.sample)
+        labels = calibration.load_labels(args.sample, sha)
+        before, after = correct_label(
+            sample,
+            labels,
+            args.book,
+            note=args.note,
+            fits_request=_VERDICTS.get(args.fits or ""),
+            reason_quality=_VERDICTS.get(args.quality or ""),
+            would_read=_VERDICTS.get(args.would_read or ""),
+        )
+        calibration.save_labels(labels)
+    except (OSError, ValueError) as e:
+        print(f"error: {e}")
+        return EXIT_ERROR
+    ref = after.ref
+    print(f"Book #{args.book} ({ref.case_id} run {ref.run_index} book {ref.item_index + 1}):")
+    for name in ("fits_request", "reason_quality", "would_read"):
+        old, new = getattr(before, name), getattr(after, name)
+        if old != new:
+            print(f"- {name}: {old} -> {new}")
+    print(f"Note: {after.corrections[-1].note}")
+    print(f"Saved to {calibration.labels_path(args.sample)}; the earlier labels stay in history.")
+    return EXIT_OK
+
+
 def _judge_command(args: argparse.Namespace) -> int:
     store = RecordStore(args.results)
     judgments = JudgmentStore(store)
@@ -548,6 +587,16 @@ def _parser() -> argparse.ArgumentParser:
         "label", help="label the calibration sample, one blind book at a time"
     )
     _calibration_arguments(label)
+
+    relabel = commands.add_parser(
+        "relabel", help="correct one tuning-half label (#N in the tuning report), with a note"
+    )
+    relabel.add_argument("--book", type=int, required=True, help="the book's #N")
+    relabel.add_argument("--note", required=True, help="why the label is corrected")
+    relabel.add_argument("--fits", choices=sorted(_VERDICTS), help="new fits_request label")
+    relabel.add_argument("--quality", choices=sorted(_VERDICTS), help="new reason_quality")
+    relabel.add_argument("--would-read", choices=sorted(_VERDICTS), help="new would_read")
+    _calibration_arguments(relabel)
 
     judge = commands.add_parser("judge", help="grade every matched book of a round's records")
     judge.add_argument("--cases", default=DEFAULT_CASES, help="case set version")

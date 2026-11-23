@@ -293,3 +293,33 @@ Significant design decisions: context, options considered, choice, and reason.
   - **Labels** (`evals label`): one book at a time in shuffled order, showing exactly the judge's inputs and never the system. Three labels, each yes / partial / no: fits the request, reason quality, and would I read it (only the user answers it). Saved after each book; skipping and quitting resume later.
   - **Agreement** (`evals calibrate --split tuning|held-out`): per criterion, exact agreement, agreement within one step, the judge more lenient or stricter than the user, and the 3×3 table. The tuning half lists every disagreement with the judge's justification and the user's note. The held-out half shows only aggregates, and each look is logged with the judge configuration, so it stays visible how many prompt versions have seen it.
 - **Reason:** Tuning on one half and verifying on the other keeps the agreement number honest. Blind labeling keeps the labels about the book, not about the system. 20 held-out books give noisy numbers, so small differences shouldn't be over-read (F-013).
+
+## D-035 · judge_v2: independent criteria, concrete connections, form mismatch is a no (2026-11-23)
+
+- **Context:** First tuning calibration of judge_v1 (D-034): `fits_request` 14/18 exact (2 lenient, 2 stricter), `reason_quality` 12/19 (4 lenient, 3 stricter). The disagreements showed three patterns:
+  - The judge accepted connections through mood or tone alone as good reasons.
+  - A poetry book for "una novela argentina" got partial, though the request named a form.
+  - The user's own labels mixed the criteria, marking a reason down because the book was wrong.
+
+  Also F-015.
+- **Options:** Tune v1 in place; a new version; more examples versus sharper rules.
+- **Choice:** `judge_v2`, with v1 frozen (it has stored judgments and a calibration report). Same inputs and reply shape. Changes:
+  - **`reason_quality` judges only the connection** between the book and the cited library books: accurate and specific. Whether the book fits the request is `fits_request`'s job. Each criterion is judged on its own.
+  - **A link through mood, tone or genre alone is at most partial.** Yes needs a concrete shared element: themes, structure, style, characters or setting.
+  - **A form mismatch is a no:** when the request names a form (novel, short stories, non-fiction, poetry) and the book is another form.
+  - **Without request text,** the user prompt ends with a reminder to answer `reason_quality` only (F-015).
+  - **Examples are disjoint from the calibration sample:** four worked examples and the exclusion examples name no book, author or request text from calibration_v1 or the reader's library (checked against both). v1's "nothing by Brandon Sanderson" and "around 700 pages" came from calibration requests, so v2 replaces them.
+- **Reason:** Each rule targets a pattern seen on the tuning half, and none was written from a held-out result. Independent criteria make each agreement number measure one thing. v2 is tuned on 20 books, so improvements must be confirmed on the held-out half before they count.
+
+## D-036 · Label corrections: tuning half only, with a note and a history (2026-11-23)
+
+- **Context:** The judge caught two errors in the user's tuning labels, such as a reason that misdescribes the cited book. Leaving known errors in the labels would understate the judge's agreement. Silently editing labels after seeing the judge's answers would bias calibration toward the judge.
+- **Options:** Edit the labels file by hand; relabel from scratch; a correction command with an audit trail.
+- **Choice:** `evals relabel --book N --note TEXT [--fits|--quality|--would-read y|p|n]`:
+  - `N` is the book's position in the sample: "Book N" on the labeling card, "#N" in the tuning report.
+  - The note is required.
+  - The earlier values stay in the label's `corrections` history, with the note and date. Agreement uses the current label.
+  - The tuning report lists every correction.
+  - Corrections are refused on the held-out half, for unlabeled books, when nothing changes, and for `fits_request` on runs without a request.
+  - The user's policy: correct only factual errors, not changes of opinion prompted by the judge.
+- **Reason:** It keeps labels fixable while making every change visible and explained. The held-out half stays untouchable, so its agreement remains an honest check.
