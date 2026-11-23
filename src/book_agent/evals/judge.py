@@ -26,7 +26,7 @@ from book_agent.files import write_atomic
 from book_agent.json_reply import ReplyParseError, extract_json, parse_model
 from book_agent.llm.base import LLMClient, LLMError, Message
 from book_agent.llm.calls import LLMCall
-from book_agent.prompts import judge_v1
+from book_agent.prompts import judge_v1, judge_v2
 from book_agent.prompts.judge_v1 import CitedBook, JudgeInput
 
 CALL_NAME = "judge"
@@ -46,6 +46,9 @@ class JudgePrompt:
 JUDGE_PROMPTS = {
     judge_v1.PROMPT_ID: JudgePrompt(
         judge_v1.PROMPT_ID, judge_v1.SYSTEM, judge_v1.build_user_prompt
+    ),
+    judge_v2.PROMPT_ID: JudgePrompt(
+        judge_v2.PROMPT_ID, judge_v2.SYSTEM, judge_v2.build_user_prompt
     ),
 }
 DEFAULT_JUDGE_PROMPT = JUDGE_PROMPTS[judge_v1.PROMPT_ID]
