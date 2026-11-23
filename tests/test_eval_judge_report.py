@@ -49,7 +49,7 @@ def test_no_judgments_yet() -> None:
     assert render_judge_section([ACCEPTED_RUN], {}, "j")[-1] == "No judgments yet."
 
 
-def test_reason_quality_has_a_yes_vs_rest_view() -> None:
+def test_reason_quality_has_both_two_level_views() -> None:
     judgments = {
         ref("a", 0): judged(Verdict.YES),
         ref("a", 1): judged(Verdict.PARTIAL, had_description=False),
@@ -58,8 +58,13 @@ def test_reason_quality_has_a_yes_vs_rest_view() -> None:
     text = "\n".join(
         render_judge_section([ACCEPTED_RUN, REJECTED_RUN], judgments, "judge_v2-m-default")
     )
-    binary = text.split("### reason_quality, yes vs partial or no")[1]
-    assert "| Configuration | Books | Yes | Partial or no |" in binary
-    assert f"| {AGENT.id}, all judged | 3 | 1 (33%) | 2 (67%) |" in binary
-    assert f"| {AGENT.id}, without description | 1 | 0 (0%) | 1 (100%) |" in binary
-    assert "fits_request" not in binary  # only reason_quality gets the binary view
+    _, yes_view = text.split("### reason_quality, yes vs partial or no")
+    yes_view, no_view = yes_view.split("### reason_quality, no vs partial or yes")
+    assert "| Configuration | Books | Yes | Partial or no |" in yes_view
+    assert f"| {AGENT.id}, all judged | 3 | 1 (33%) | 2 (67%) |" in yes_view
+    assert f"| {AGENT.id}, without description | 1 | 0 (0%) | 1 (100%) |" in yes_view
+    assert "| Configuration | Books | No | Partial or yes |" in no_view
+    assert f"| {AGENT.id}, all judged | 3 | 1 (33%) | 2 (67%) |" in no_view
+    assert f"| {AGENT.id}, without description | 1 | 0 (0%) | 1 (100%) |" in no_view
+    assert f"| {AGENT.id}, accepted runs | 2 | 0 (0%) | 2 (100%) |" in no_view
+    assert "fits_request" not in yes_view + no_view  # only reason_quality gets them

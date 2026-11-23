@@ -45,7 +45,8 @@ DEFAULT_SAMPLE = "calibration_v1"
 CALIBRATION_DIR = Path("data/evals/calibration")
 PER_SYSTEM = 20
 PER_GROUP = 2  # at most this many books per (system, case)
-BINARY_LABEL = "reason_quality, yes vs partial or no"
+YES_VS_REST = "reason_quality, yes vs partial or no"
+NO_VS_REST = "reason_quality, no vs partial or yes"
 
 # A book the reader has read, plans to read or is reading: "would I read it" makes no
 # sense for it, so it is left out of the sample (it is still judged in the full run).
@@ -408,13 +409,17 @@ class Agreement:
     def matrix(self) -> Counter[tuple[Verdict, Verdict]]:
         return Counter(self.pairs)
 
-    def binary(self) -> "Agreement":
-        """The same pairs on two levels: yes vs not yes (partial or no become no)."""
-        return Agreement([(_yes_or_no(j), _yes_or_no(h)) for j, h in self.pairs])
+    def yes_vs_rest(self) -> "Agreement":
+        """Two levels, split at yes: partial counts as no."""
+        return Agreement([(_merge(j, Verdict.NO), _merge(h, Verdict.NO)) for j, h in self.pairs])
+
+    def no_vs_rest(self) -> "Agreement":
+        """Two levels, split at no: partial counts as yes."""
+        return Agreement([(_merge(j, Verdict.YES), _merge(h, Verdict.YES)) for j, h in self.pairs])
 
 
-def _yes_or_no(verdict: Verdict) -> Verdict:
-    return Verdict.YES if verdict is Verdict.YES else Verdict.NO
+def _merge(verdict: Verdict, partial_as: Verdict) -> Verdict:
+    return partial_as if verdict is Verdict.PARTIAL else verdict
 
 
 @dataclass(frozen=True)
@@ -522,12 +527,11 @@ def render_calibration(
             f"| {criterion.value} | {a.n} | {_share(a.exact, a.n)} | {_share(a.within_one, a.n)} "
             f"| {a.lenient} | {a.strict} |"
         )
-    # The judge's errors on reason_quality are mostly partial vs a neighbor, so the
-    # yes / not-yes split shows whether it agrees on what counts as a good reason.
-    b = stats[Criterion.REASON_QUALITY].binary()
-    lines.append(
-        f"| {BINARY_LABEL} | {b.n} | {_share(b.exact, b.n)} | - | {b.lenient} | {b.strict} |"
-    )
+    # reason_quality's disagreements sit around partial: split at yes, it shows whether
+    # the judge agrees on what a good reason is; split at no, on what a bad one is.
+    quality = stats[Criterion.REASON_QUALITY]
+    for label, b in ((YES_VS_REST, quality.yes_vs_rest()), (NO_VS_REST, quality.no_vs_rest())):
+        lines.append(f"| {label} | {b.n} | {_share(b.exact, b.n)} | - | {b.lenient} | {b.strict} |")
     for criterion, a in stats.items():
         lines += ["", f"## {criterion.value}: judge (rows) vs your label (columns)", ""]
         lines += _matrix(a)

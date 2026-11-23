@@ -361,16 +361,21 @@ def test_the_tuning_report_notes_repeated_questions() -> None:
     assert "| fits_request | 3 |" in markdown  # tuning keeps every pair
 
 
-def test_binary_agreement_merges_partial_into_no() -> None:
+def test_two_level_agreement_merges_partial_on_either_side() -> None:
     a = Agreement([(YES, YES), (YES, PARTIAL), (PARTIAL, NO), (NO, YES), (PARTIAL, YES)])
-    b = a.binary()
-    assert b.pairs == [(YES, YES), (YES, NO), (NO, NO), (NO, YES), (NO, YES)]
-    assert (b.exact, b.lenient, b.strict) == (2, 1, 2)
+    at_yes = a.yes_vs_rest()
+    assert at_yes.pairs == [(YES, YES), (YES, NO), (NO, NO), (NO, YES), (NO, YES)]
+    assert (at_yes.exact, at_yes.lenient, at_yes.strict) == (2, 1, 2)
+    at_no = a.no_vs_rest()
+    assert at_no.pairs == [(YES, YES), (YES, YES), (YES, NO), (NO, YES), (YES, YES)]
+    assert (at_no.exact, at_no.lenient, at_no.strict) == (3, 1, 1)
 
 
-def test_the_calibration_table_has_the_binary_reason_quality_row() -> None:
-    # Tuning pairs: (yes, partial) and (no, no), so yes vs not-yes: 1 of 2, 1 lenient.
+def test_the_calibration_table_has_both_two_level_rows() -> None:
+    # Tuning pairs (judge, you): (yes, partial) and (no, no).
     tuning = render_calibration(sample(ITEMS), TUNING, JUDGE, LABELS, JUDGMENTS)
     assert "| reason_quality, yes vs partial or no | 2 | 1/2 (50%) | - | 1 | 0 |" in tuning
+    assert "| reason_quality, no vs partial or yes | 2 | 2/2 (100%) | - | 0 | 0 |" in tuning
     held_out = render_calibration(sample(ITEMS), HELD_OUT, JUDGE, LABELS, JUDGMENTS)
     assert "| reason_quality, yes vs partial or no | 1 | 1/1 (100%) | - | 0 | 0 |" in held_out
+    assert "| reason_quality, no vs partial or yes | 1 | 1/1 (100%) | - | 0 | 0 |" in held_out
