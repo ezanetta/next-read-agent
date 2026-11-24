@@ -33,6 +33,7 @@ from book_agent.adapters.goodreads import load_goodreads_export
 from book_agent.agent_run import AGENT_PROMPTS, DEFAULT_AGENT_PROMPT
 from book_agent.baseline import baseline_prompt
 from book_agent.config import Settings, get_settings
+from book_agent.evals.backups import backup_dir
 from book_agent.evals.calibration import (
     CALIBRATION_DIR,
     DEFAULT_SAMPLE,
@@ -62,6 +63,7 @@ from book_agent.evals.judge import (
     judge_input,
     judgeable_items,
     plan_books,
+    retried_errors,
     run_judge,
 )
 from book_agent.evals.judge_report import render_judge_section
@@ -149,7 +151,9 @@ def _run_command(args: argparse.Namespace) -> int:
             system, prompt.prompt_id if prompt else baseline_prompt.PROMPT_ID, settings
         )
         store = RecordStore(args.results)
-        plan = plan_runs(loaded, config, args.runs, store)
+        plan = plan_runs(
+            loaded, config, args.runs, store, rerun_infrastructure=args.rerun_infrastructure
+        )
         profile = load_goodreads_export(args.csv, profile_name="Me")
         cache = load_cache(args.cache)
         # A prompt with library retrieval needs a built index: fail before any run (D-041).
@@ -163,6 +167,11 @@ def _run_command(args: argparse.Namespace) -> int:
         return EXIT_ERROR
 
     print(format_plan(loaded.cases.version, len(loaded.cases.cases), args.runs, config, plan))
+    backup = backup_dir(store.root, loaded.cases.version, datetime.now(UTC))
+    if plan.reruns:
+        print(f"Reruns of infrastructure failures: {len(plan.reruns)} (backup: {backup})")
+        for planned in plan.reruns:
+            print(f"- {planned.case.id} run {planned.run_index} ({planned.replaces})")
     if retriever is not None:
         texts = {p.case.request for p in plan.to_run if p.case.request}
         print(
@@ -197,6 +206,7 @@ def _run_command(args: argparse.Namespace) -> int:
                 requests_sent=lambda: paced.requests,
                 progress=_print_progress,
                 retriever=retriever,
+                backup=backup,
             )
 
     summary = asyncio.run(execute())
@@ -425,6 +435,9 @@ def _judge_command(args: argparse.Namespace) -> int:
     print(f"Case set: {args.cases} | harness {args.harness} | {len(records)} records")
     print(f"Judge: {judge.id}")
     print(f"Matched books: {books}, {books - len(plan)} already judged, {len(plan)} to judge")
+    retries = retried_errors(plan, judgments, args.cases, judge)
+    if retries:
+        print(f"Of those, {retries} retry an earlier error (the old files are backed up, D-042)")
     print(f"Estimated LLM requests: {len(plan)} (free tier: {DAILY_FREE_TIER} per day)")
     return _judge_plan(args, settings, store, judgments, judge, plan)
 
@@ -454,6 +467,7 @@ def _judge_plan(
             store=judgments,
             git_commit=git_state().commit,
             progress=_print_judge_progress,
+            backup=backup_dir(store.root, args.cases, datetime.now(UTC)),
         )
     )
     print(
@@ -551,6 +565,10 @@ def _estimate(estimate: RequestEstimate) -> str:
 
 def format_summary(summary: RunSummary, plan: Plan, folder: Path) -> str:
     lines = [f"Done: {summary.done} of {len(plan.to_run)} runs, {summary.requests} LLM requests."]
+    if summary.replaced:
+        lines.append(
+            f"Replaced: {summary.replaced} infrastructure failures (old records backed up)"
+        )
     if summary.stopped:
         lines.append(f"Stopped early: {summary.stopped}")
         lines.append("Run the same command again later to resume; finished runs are kept.")
@@ -578,6 +596,12 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--runs", type=int, default=3, help="runs per case")
     run.add_argument("--max-rpm", type=int, default=DEFAULT_MAX_RPM, help="requests per minute")
     run.add_argument("--yes", action="store_true", help="start the runs (otherwise plan only)")
+    run.add_argument(
+        "--rerun-infrastructure",
+        action="store_true",
+        help="also rerun recorded runs an outage stopped (5xx, network, catalog), replacing "
+        "them; the old records and their judgments go to data/evals/_backups (D-042)",
+    )
     run.add_argument("--csv", type=Path, default=DEFAULT_CSV, help="Goodreads export")
     run.add_argument("--cache", type=Path, default=DEFAULT_CACHE_PATH, help="work key cache")
     run.add_argument("--results", type=Path, default=RESULTS_DIR, help="results directory")

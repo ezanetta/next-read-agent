@@ -8,6 +8,7 @@ import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from time import perf_counter
 
 from pydantic import BaseModel
@@ -16,9 +17,11 @@ from book_agent.agent import MAX_TURNS
 from book_agent.agent_run import run_agent_pipeline
 from book_agent.baseline import run_baseline
 from book_agent.domain.models import Profile
+from book_agent.evals.backups import retire_run
 from book_agent.evals.cases import LoadedCases, RecommendCase, RecommendCaseSet
 from book_agent.evals.pacing import QuotaExhausted
 from book_agent.evals.records import EvalRecord, RecordStore, RunConfig
+from book_agent.evals.report import infrastructure_failure
 from book_agent.llm.base import LLMClient
 from book_agent.ports import BookSearch, LibraryRetriever, WorkResolver
 from book_agent.prompts.agent_prompt import AgentPrompt
@@ -33,6 +36,7 @@ _MAX_JUDGE_CALLS_PER_SUBMISSION = 3  # one per recommendation by a library autho
 class PlannedRun:
     case: RecommendCase
     run_index: int
+    replaces: str | None = None  # the error kind of the infrastructure failure it reruns
 
 
 @dataclass(frozen=True)
@@ -43,6 +47,10 @@ class Plan:
     @property
     def total(self) -> int:
         return len(self.to_run) + self.already_recorded
+
+    @property
+    def reruns(self) -> list[PlannedRun]:
+        return [p for p in self.to_run if p.replaces is not None]
 
 
 class RequestEstimate(BaseModel, frozen=True):
@@ -56,6 +64,7 @@ class RequestEstimate(BaseModel, frozen=True):
 @dataclass
 class RunSummary:
     done: int = 0
+    replaced: int = 0  # reruns that replaced an infrastructure failure (D-042)
     stopped: str | None = None  # why the run stopped early, if it did
     requests: int = 0  # LLM requests sent, retries included
 
@@ -84,12 +93,19 @@ def git_state() -> GitState:
 
 
 def plan_runs(
-    loaded: LoadedCases[RecommendCaseSet], config: RunConfig, runs: int, store: RecordStore
+    loaded: LoadedCases[RecommendCaseSet],
+    config: RunConfig,
+    runs: int,
+    store: RecordStore,
+    *,
+    rerun_infrastructure: bool = False,
 ) -> Plan:
     """Every (case, run index) pair not yet recorded for this configuration, interleaved:
     run 1 of every case, then run 2, and so on, so a short outage spreads across cases
     instead of hitting one case's runs back to back (D-031).
 
+    With `rerun_infrastructure`, recorded runs that an outage stopped (D-032) are planned
+    again: outages aren't the system's behavior, so the rerun replaces them (D-042).
     Raises ValueError if the case file changed after results exist (D-023).
     """
     case_set = loaded.cases.version
@@ -103,10 +119,13 @@ def plan_runs(
     recorded = 0
     for run_index in range(1, runs + 1):
         for case in loaded.cases.cases:
-            if store.exists(case_set, config, case.id, run_index):
-                recorded += 1
-            else:
+            record = store.load(case_set, config, case.id, run_index)
+            if record is None:
                 to_run.append(PlannedRun(case=case, run_index=run_index))
+            elif rerun_infrastructure and infrastructure_failure(record):
+                to_run.append(PlannedRun(case, run_index, replaces=record.error_kind))
+            else:
+                recorded += 1
     return Plan(to_run=to_run, already_recorded=recorded)
 
 
@@ -138,13 +157,21 @@ async def run_plan(
     store: RecordStore,
     git: GitState,
     retriever: LibraryRetriever | None = None,
+    backup: Path | None = None,
     requests_sent: Callable[[], int] = lambda: 0,
     progress: Callable[[int, int, PlannedRun], None] | None = None,
 ) -> RunSummary:
     """Run each planned case and save its record. A quota stop ends the loop cleanly:
-    the interrupted run leaves no record, so a rerun of the same plan resumes there."""
+    the interrupted run leaves no record, so a rerun of the same plan resumes there.
+
+    A planned rerun (`replaces` set) backs up the old record and moves that run's
+    judgments into `backup` just before saving the new record, so an interrupted rerun
+    leaves the old record in place (D-042).
+    """
     if config.system == "agent" and prompt is None:
         raise ValueError("agent runs need a prompt version")
+    if backup is None and any(p.replaces is not None for p in plan.to_run):
+        raise ValueError("reruns need a backup folder")
     profile_sha = store.save_profile(loaded.cases.version, profile)
     summary = RunSummary()
     for number, planned in enumerate(plan.to_run, start=1):
@@ -174,6 +201,14 @@ async def run_plan(
                 **fields,
             }
         )
+        if planned.replaces is not None:
+            assert backup is not None
+            retire_run(
+                store.path(record.case_set, config, record.case_id, record.run_index),
+                store.root, record.case_set, config.id, record.case_id, record.run_index,
+                backup,
+            )  # fmt: skip
+            summary.replaced += 1
         store.save(record)
         summary.done += 1
     summary.requests = requests_sent()

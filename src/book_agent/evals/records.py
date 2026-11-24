@@ -119,6 +119,12 @@ class RecordStore:
     def exists(self, case_set: str, config: RunConfig, case_id: str, run_index: int) -> bool:
         return self.path(case_set, config, case_id, run_index).exists()
 
+    def load(
+        self, case_set: str, config: RunConfig, case_id: str, run_index: int
+    ) -> EvalRecord | None:
+        path = self.path(case_set, config, case_id, run_index)
+        return EvalRecord.model_validate_json(path.read_bytes()) if path.exists() else None
+
     def save(self, record: EvalRecord) -> Path:
         path = self.path(record.case_set, record.config, record.case_id, record.run_index)
         write_atomic(path, record.model_dump_json(indent=1) + "\n")
