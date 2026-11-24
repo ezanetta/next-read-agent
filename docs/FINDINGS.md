@@ -391,6 +391,6 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - **Descriptions are the weak spot:** 62% at ≥20 signals. The rest would be embedded from title, author and subjects. Filling them from Google Books would take about 29,000 requests at ≥20, about 29 days of the 1,000-per-day quota: not worth it for the whole catalog.
   - **Embedding cost:** about 77,000 works × about 200 tokens is about 15 million tokens, about 8.5 hours at 30,000 tokens per minute, and over 1,000 requests per day unless texts are batched per request. A local multilingual embedding model would avoid the quota and is worth comparing.
   - **Page counts and languages are per edition:** a filter must ask "is there an edition that fits", which is what the validator already does with Google Books.
-  - **The library extract is useful now:** Open Library descriptions for 151 library books, at no API cost, feed the library retrieval design (D-040, proposed).
+  - **The library extract is useful now:** Open Library descriptions for 151 library books, at no API cost, feed the proposed library retrieval design.
 - **Fix:** None; this informs milestone B.
 - **How it was verified:** The counts above, from the dump extracts. The extracts were deleted afterwards except a 240 KB file of the library's matched works (`data/openlibrary/library_works.json`). The spike scripts are throwaway and not committed.
