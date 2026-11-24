@@ -3,8 +3,9 @@
     uv run python -m book_agent.cli baseline ["free-text request"] [--language en]
         [--max-pages 400] [--min-pages 200] [--csv PATH] [--cache PATH]
     uv run python -m book_agent.cli agent ["free-text request"] [same options as baseline]
-        [--prompt agent_v1|agent_v2|agent_v3] [--verbose]
+        [--prompt agent_v1|agent_v2|agent_v3|agent_v4] [--verbose]
     uv run python -m book_agent.cli works [--refresh] [--csv PATH] [--cache PATH]
+    uv run python -m book_agent.cli library [--refresh] [--yes] [--csv PATH] [--cache PATH]
 
 baseline: flags override filters interpreted from the request text, field by field.
 Exit codes: 0 all hard rules passed (unknowns allowed), 1 rule violations, 2 errors.
@@ -18,6 +19,12 @@ Exit codes: 0 accepted, 1 only rejected submissions until the iterations ran out
 works: resolves the library's ISBNs to Open Library work keys once and caches them, so
 baseline runs don't repeat the requests. --refresh looks every ISBN up again.
 Exit codes: 0 every lookup done, 2 some lookups failed or errors.
+
+library: builds the index agent_v4 retrieves from (D-041). Describes the read books once
+(Open Library by cached work key, then Google Books) and embeds them. Prints a plan and
+starts only with --yes; reruns continue where they stopped. --refresh describes every
+book again. Run `works` first so Open Library can be used.
+Exit codes: 0 index complete, 2 some books failed or errors.
 """
 
 import argparse
@@ -26,8 +33,12 @@ import json
 import logging
 import re
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import AsyncExitStack
+from datetime import date
 from pathlib import Path
+
+import httpx
 
 from book_agent.adapters.goodreads import load_goodreads_export
 from book_agent.agent import MAX_ITERATIONS, REPAIR_TURNS, AgentFailure, ToolTrace, TurnTrace
@@ -40,18 +51,35 @@ from book_agent.agent_run import (
 from book_agent.baseline import BaselineResult, run_baseline
 from book_agent.config import Settings, get_settings
 from book_agent.domain.acceptance import Problem, blocking_problems
-from book_agent.domain.models import Profile
+from book_agent.domain.library import MIN_RATING, retrieval_pool
+from book_agent.domain.models import Book, Profile
 from book_agent.domain.recommendations import Check, Filters, Lookup, Unknown, ValidationResult
 from book_agent.domain.requests import FilterName, ResolvedRequest
-from book_agent.llm.base import LLMClient
+from book_agent.embedding_index import VectorStore, load_store, missing, save_store
+from book_agent.library_enrichment import (
+    EnrichmentCache,
+    book_key,
+    enrich_books,
+    load_enrichment,
+    save_enrichment,
+    to_enrich,
+)
+from book_agent.library_retrieval import index_library, library_documents
+from book_agent.llm.base import Embedder, LLMClient, LLMError
 from book_agent.llm.calls import LLMCall
-from book_agent.ports import BookSearch, WorkResolver
+from book_agent.ports import BookSearch, LibraryRetriever, WorkDescriptions, WorkResolver
 from book_agent.prompts.agent_prompt import AgentPrompt
 from book_agent.prompts.user_content import one_line
 from book_agent.wiring import (
+    DEFAULT_LIBRARY_PATHS,
+    GOOGLE_BOOKS_TIMEOUT_S,
     NO_CONTACT,
+    build_book_search,
+    build_embedder,
+    build_library_retriever,
     build_llm,
     build_open_library_http,
+    build_work_descriptions,
     build_work_resolver,
     catalog_services,
 )
@@ -81,7 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Flags first: a contradictory combination fails before any file is read.
         flags = (
             Filters(language=args.language, max_pages=args.max_pages, min_pages=args.min_pages)
-            if args.command != "works"
+            if args.command in ("baseline", "agent")
             else Filters()
         )
         profile = load_goodreads_export(args.csv, profile_name="Me")
@@ -89,6 +117,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         cache = load_cache(args.cache)
         if args.command == "works":
             return asyncio.run(_works(profile, settings, cache, args.cache, refresh=args.refresh))
+        if args.command == "library":
+            return asyncio.run(
+                _library(profile, settings, cache, refresh=args.refresh, yes=args.yes)
+            )
+        prompt = AGENT_PROMPTS[getattr(args, "prompt", DEFAULT_AGENT_PROMPT.prompt_id)]
+        # agent_v4 needs the library index: fail before any LLM call when it's missing.
+        retriever = build_library_retriever(settings, profile) if prompt.uses_retrieval else None
         llm = build_llm(settings)
         return asyncio.run(
             _run(
@@ -101,7 +136,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cache,
                 args.cache,
                 verbose=verbose,
-                prompt=AGENT_PROMPTS[getattr(args, "prompt", DEFAULT_AGENT_PROMPT.prompt_id)],
+                prompt=prompt,
+                retriever=retriever,
             )
         )
     # Missing file, bad CSV or cache, invalid settings, contradictory flags.
@@ -122,6 +158,7 @@ async def _run(
     *,
     verbose: bool = False,
     prompt: AgentPrompt = DEFAULT_AGENT_PROMPT,
+    retriever: LibraryRetriever | None = None,
 ) -> int:
     async with catalog_services(settings, profile, cache, cache_path) as services:
         books, works = services.books, services.works
@@ -135,6 +172,7 @@ async def _run(
                 works=works,
                 verbose=verbose,
                 prompt=prompt,
+                retriever=retriever,
             )
         else:
             output, code = await baseline_command(
@@ -193,6 +231,124 @@ def _print_progress(done: int, total: int) -> None:
         print(format_progress(done, total), flush=True)
 
 
+async def _library(
+    profile: Profile, settings: Settings, work_keys: WorkKeyCache, *, refresh: bool, yes: bool
+) -> int:
+    paths = DEFAULT_LIBRARY_PATHS
+    enrichment = load_enrichment(paths.enrichment)
+    embedder = build_embedder(settings)
+    documents = load_store(paths.documents, embedder)
+    print(format_library_plan(profile, enrichment, documents, refresh=refresh))
+    if not yes:
+        print("Add --yes to start.")
+        return EXIT_OK
+    open_library = build_open_library_http(settings)
+    if open_library is None:
+        print(f"Open Library is off ({NO_CONTACT}): every book goes to Google Books.")
+    async with AsyncExitStack() as stack:
+        http = await stack.enter_async_context(httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S))
+        works = None
+        if open_library is not None:
+            works = build_work_descriptions(await stack.enter_async_context(open_library))
+        output, code = await library_command(
+            profile,
+            enrichment,
+            documents,
+            work_keys,
+            works=works,
+            search=build_book_search(settings, http),
+            embedder=embedder,
+            today=date.today(),
+            refresh=refresh,
+            save_enrichment=lambda c: save_enrichment(c, paths.enrichment),
+            save_documents=lambda store: save_store(store, paths.documents),
+        )
+    print(output)
+    return code
+
+
+def format_library_plan(
+    profile: Profile, enrichment: EnrichmentCache, documents: VectorStore, *, refresh: bool
+) -> str:
+    pool = retrieval_pool(profile)
+    todo = to_enrich(pool, enrichment, refresh=refresh)
+    stale = missing(library_documents(profile, enrichment), documents)
+    return "\n".join(
+        [
+            f"Retrieval pool: {len(pool)} read books (rated {MIN_RATING:g}+ or unrated)",
+            f"To describe: {len(todo)} (Open Library first, then at most {len(todo)} "
+            "Google Books searches)",
+            f"To embed: {len(stale)} now, plus any book whose description changes "
+            f"({documents.model}, {documents.dimensions} dimensions)",
+        ]
+    )
+
+
+async def library_command(
+    profile: Profile,
+    enrichment: EnrichmentCache,
+    documents: VectorStore,
+    work_keys: WorkKeyCache,
+    *,
+    works: WorkDescriptions | None,
+    search: BookSearch,
+    embedder: Embedder,
+    today: date,
+    refresh: bool = False,
+    save_enrichment: Callable[[EnrichmentCache], None] | None = None,
+    save_documents: Callable[[VectorStore], None] | None = None,
+) -> tuple[str, int]:
+    """Describe the pool books that need it, embed what changed, and report coverage."""
+    pool = retrieval_pool(profile)
+    summary = await enrich_books(
+        to_enrich(pool, enrichment, refresh=refresh),
+        enrichment,
+        work_keys=work_keys,
+        works=works,
+        search=search,
+        today=today,
+        checkpoint=save_enrichment,
+    )
+    lines = [
+        f"Described: {summary.open_library} from Open Library, {summary.google_books} from "
+        f"Google Books, {summary.undescribed} with no description anywhere "
+        f"({summary.search_requests} Google Books searches)",
+    ]
+    code = EXIT_OK
+    if summary.failed:
+        lines.append(f"Failed: {summary.failed} books (not cached; rerun to retry)")
+        code = EXIT_ERROR
+    try:
+        embedded = await index_library(profile, enrichment, documents, embedder)
+    except LLMError as e:
+        lines.append(f"error: embedding failed: {e}")
+        return "\n".join(lines), EXIT_ERROR
+    finally:
+        if save_documents is not None:
+            save_documents(documents)
+    lines.append(f"Embedded: {len(embedded)} books")
+    lines += library_coverage(profile, enrichment)
+    return "\n".join(lines), code
+
+
+def library_coverage(profile: Profile, enrichment: EnrichmentCache) -> list[str]:
+    """How many pool books have a description: D-041 asks for 80% of the liked ones."""
+
+    def described(books: list[Book]) -> int:
+        return sum(
+            1
+            for b in books
+            if (entry := enrichment.entries.get(book_key(b))) is not None and entry.description
+        )
+
+    pool = retrieval_pool(profile)
+    liked = [b for b in pool if b in profile.liked_books]
+    return [
+        f"With a description: {described(pool)} of {len(pool)} pool books, "
+        f"{described(liked)} of {len(liked)} liked books"
+    ]
+
+
 async def baseline_command(
     profile: Profile,
     flags: Filters,
@@ -217,10 +373,18 @@ async def agent_command(
     works: WorkResolver | None = None,
     verbose: bool = False,
     prompt: AgentPrompt = DEFAULT_AGENT_PROMPT,
+    retriever: LibraryRetriever | None = None,
 ) -> tuple[str, int]:
     """Run the agent and return the printable report and the exit code."""
     run = await run_agent_pipeline(
-        profile, flags, request=request, llm=llm, books=books, works=works, prompt=prompt
+        profile,
+        flags,
+        request=request,
+        llm=llm,
+        books=books,
+        works=works,
+        prompt=prompt,
+        retriever=retriever,
     )
     return format_agent_run(run, verbose=verbose), agent_exit_code(run)
 
@@ -273,6 +437,10 @@ def format_agent_run(run: AgentRun, *, verbose: bool = False) -> str:
             f"{f' + {REPAIR_TURNS} repair turn' if run.repair_turn_used else ''} | "
             f"Submissions: {run.submissions}{rejected}"
         )
+        if run.retrieved:
+            lines.append("Related books shown: " + "; ".join(run.retrieved))
+        if run.retrieval_error:
+            lines.append(f"Retrieval failed, related books not shown: {run.retrieval_error}")
         lines.append("")
     if verbose and run.turns:
         lines += [*format_trace(run.turns), ""]
@@ -490,6 +658,12 @@ def _parser() -> argparse.ArgumentParser:
         "works", parents=[shared], help="resolve the library to work keys and cache them"
     )
     works.add_argument("--refresh", action="store_true", help="look up every ISBN again")
+
+    library = commands.add_parser(
+        "library", parents=[shared], help="describe and embed the read books for agent_v4"
+    )
+    library.add_argument("--refresh", action="store_true", help="describe every book again")
+    library.add_argument("--yes", action="store_true", help="start (otherwise: plan only)")
     return parser
 
 

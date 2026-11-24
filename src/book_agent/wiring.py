@@ -15,10 +15,14 @@ from book_agent.adapters.google_books import GoogleBooksSearch
 from book_agent.adapters.open_library import OpenLibraryWorks, user_agent
 from book_agent.config import Settings
 from book_agent.domain.models import Profile
+from book_agent.embedding_index import load_store, save_store
+from book_agent.library_enrichment import DEFAULT_ENRICHMENT_PATH, load_enrichment
+from book_agent.library_retrieval import DEFAULT_DOCUMENTS_PATH, DEFAULT_QUERIES_PATH, LibraryIndex
 from book_agent.llm.base import LLMClient
 from book_agent.llm.gemini import GeminiClient
+from book_agent.llm.gemini_embeddings import GeminiEmbedder
 from book_agent.llm.retrying import RetryingLLM
-from book_agent.ports import BookSearch, WorkResolver
+from book_agent.ports import BookSearch, WorkDescriptions, WorkResolver
 from book_agent.work_keys import CachedWorkResolver, WorkKeyCache, coverage, save_cache
 
 OPEN_LIBRARY_TIMEOUT_S = 10
@@ -66,6 +70,10 @@ def build_work_resolver(http: httpx.AsyncClient) -> WorkResolver:
     return OpenLibraryWorks(http)
 
 
+def build_work_descriptions(http: httpx.AsyncClient) -> WorkDescriptions:
+    return OpenLibraryWorks(http)
+
+
 GOOGLE_BOOKS_TIMEOUT_S = 15
 NO_CONTACT = "OPEN_LIBRARY_CONTACT is not set in .env"
 
@@ -108,3 +116,40 @@ async def catalog_services(
         finally:
             if services.works is not None and services.works.changed:
                 save_cache(services.works.cache, cache_path)
+
+
+def build_embedder(settings: Settings) -> GeminiEmbedder:
+    """The embedder for library retrieval (D-041). Gemini only, whatever LLM_PROVIDER says."""
+    client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
+    return GeminiEmbedder(client, model=settings.gemini_embedding_model)
+
+
+@dataclass(frozen=True)
+class LibraryPaths:
+    enrichment: Path = DEFAULT_ENRICHMENT_PATH
+    documents: Path = DEFAULT_DOCUMENTS_PATH
+    queries: Path = DEFAULT_QUERIES_PATH
+
+
+DEFAULT_LIBRARY_PATHS = LibraryPaths()
+
+
+def build_library_retriever(
+    settings: Settings, profile: Profile, paths: LibraryPaths = DEFAULT_LIBRARY_PATHS
+) -> LibraryIndex:
+    """The retriever over the reader's library, from the caches the library command builds.
+
+    New query vectors are saved as they are embedded. Raises ValueError when the index is
+    missing or out of date for this library, before any run starts.
+    """
+    embedder = build_embedder(settings)
+    documents = load_store(paths.documents, embedder)
+    queries = load_store(paths.queries, embedder)
+    return LibraryIndex(
+        profile,
+        load_enrichment(paths.enrichment),
+        documents,
+        queries,
+        embedder,
+        save_queries=lambda store: save_store(store, paths.queries),
+    )

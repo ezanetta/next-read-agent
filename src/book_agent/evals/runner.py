@@ -20,7 +20,7 @@ from book_agent.evals.cases import LoadedCases, RecommendCase, RecommendCaseSet
 from book_agent.evals.pacing import QuotaExhausted
 from book_agent.evals.records import EvalRecord, RecordStore, RunConfig
 from book_agent.llm.base import LLMClient
-from book_agent.ports import BookSearch, WorkResolver
+from book_agent.ports import BookSearch, LibraryRetriever, WorkResolver
 from book_agent.prompts.agent_prompt import AgentPrompt
 
 # Typical counts from the real runs (F-006): 2 to 4 agent turns, rarely a judge call.
@@ -137,6 +137,7 @@ async def run_plan(
     works: WorkResolver | None,
     store: RecordStore,
     git: GitState,
+    retriever: LibraryRetriever | None = None,
     requests_sent: Callable[[], int] = lambda: 0,
     progress: Callable[[int, int, PlannedRun], None] | None = None,
 ) -> RunSummary:
@@ -152,7 +153,9 @@ async def run_plan(
         started_at = datetime.now(UTC)
         started = perf_counter()
         try:
-            fields = await _run_case(planned.case, config, prompt, profile, llm, books, works)
+            fields = await _run_case(
+                planned.case, config, prompt, profile, llm, books, works, retriever
+            )
         except QuotaExhausted as e:
             summary.stopped = str(e)
             break
@@ -185,6 +188,7 @@ async def _run_case(
     llm: LLMClient,
     books: BookSearch,
     works: WorkResolver | None,
+    retriever: LibraryRetriever | None = None,
 ) -> dict[str, object]:
     """Run one case and return the record fields it produced."""
     if config.system == "baseline":
@@ -204,7 +208,14 @@ async def _run_case(
         }
     assert prompt is not None
     run = await run_agent_pipeline(
-        profile, case.flags, request=case.request, llm=llm, books=books, works=works, prompt=prompt
+        profile,
+        case.flags,
+        request=case.request,
+        llm=llm,
+        books=books,
+        works=works,
+        prompt=prompt,
+        retriever=retriever,
     )
     if run.failure is not None:
         error_kind: str | None = run.failure.value
@@ -225,4 +236,6 @@ async def _run_case(
         "iterations": run.iterations,
         "submissions": run.submissions,
         "repair_turn_used": run.repair_turn_used,
+        "retrieved": run.retrieved,
+        "retrieval_error": run.retrieval_error,
     }

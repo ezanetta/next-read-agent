@@ -97,6 +97,10 @@ class EvalRecord(BaseModel, frozen=True):
     iterations: int = 0  # agent turns; 0 for the baseline
     submissions: int = 0  # validated submissions (the baseline's one reply counts as one)
     repair_turn_used: bool = False
+    # Library retrieval (D-041): titles shown to the agent, most related first, and the
+    # error when retrieval was attempted and failed. Empty for prompts without retrieval.
+    retrieved: list[str] = []
+    retrieval_error: str | None = None
 
 
 def profile_sha256(profile: Profile) -> str:

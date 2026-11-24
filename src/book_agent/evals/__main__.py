@@ -97,7 +97,12 @@ from book_agent.files import write_atomic
 from book_agent.llm.base import LLMClient
 from book_agent.prompts.judge_v1 import JudgeInput
 from book_agent.request_parser import DEFAULT_PARSER_PROMPT, PARSER_PROMPTS
-from book_agent.wiring import build_provider, catalog_services, with_retries
+from book_agent.wiring import (
+    build_library_retriever,
+    build_provider,
+    catalog_services,
+    with_retries,
+)
 from book_agent.work_keys import DEFAULT_CACHE_PATH, load_cache
 
 DEFAULT_CSV = Path("data/goodreads_library_export.csv")
@@ -146,11 +151,23 @@ def _run_command(args: argparse.Namespace) -> int:
         plan = plan_runs(loaded, config, args.runs, store)
         profile = load_goodreads_export(args.csv, profile_name="Me")
         cache = load_cache(args.cache)
+        # A prompt with library retrieval needs a built index: fail before any run (D-041).
+        retriever = (
+            build_library_retriever(settings, profile)
+            if prompt is not None and prompt.uses_retrieval
+            else None
+        )
     except (OSError, ValueError) as e:  # missing or changed cases, bad CSV, invalid settings
         print(f"error: {e}")
         return EXIT_ERROR
 
     print(format_plan(loaded.cases.version, len(loaded.cases.cases), args.runs, config, plan))
+    if retriever is not None:
+        texts = {p.case.request for p in plan.to_run if p.case.request}
+        print(
+            f"Library retrieval: {len(texts)} distinct request texts, "
+            f"at most {len(texts)} embedding requests (cached queries are free)"
+        )
     if not plan.to_run:
         print("Nothing to run: every planned run is already recorded.")
         return EXIT_OK
@@ -178,6 +195,7 @@ def _run_command(args: argparse.Namespace) -> int:
                 git=git_state(),
                 requests_sent=lambda: paced.requests,
                 progress=_print_progress,
+                retriever=retriever,
             )
 
     summary = asyncio.run(execute())

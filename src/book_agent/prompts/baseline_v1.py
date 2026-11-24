@@ -4,6 +4,8 @@ Frozen once used by evals. Both the wording and the formatting of the book lists
 of the version: change either one in a new module (baseline_v2).
 """
 
+from collections.abc import Sequence
+
 from book_agent.domain.models import Book, Profile, ReadingStatus
 from book_agent.domain.recommendations import EXPECTED_RECOMMENDATIONS, Filters
 from book_agent.prompts.user_content import request_block
@@ -39,12 +41,17 @@ def build_user_prompt(profile: Profile, filters: Filters, preference: str | None
 
 
 def compose_user_prompt(
-    profile: Profile, constraints: list[str], preference: str | None = None
+    profile: Profile,
+    constraints: list[str],
+    preference: str | None = None,
+    extra_sections: Sequence[str] = (),
 ) -> str:
     """The reader's lists, their request and the constraint lines, in baseline_v1's form.
 
     Shared by later versions that change only the constraint lines (baseline_v2), so the
     rest of the prompt stays byte-for-byte the same and results stay comparable.
+    `extra_sections` go after the lists and before the request (agent_v4's related books,
+    D-041); with none, the output is exactly baseline_v1's.
     """
     liked = profile.liked_books
     less_liked = profile.not_so_liked_books
@@ -63,6 +70,7 @@ def compose_user_prompt(
     ]
     parts = [s for s in sections if s]
     parts.append("Do not recommend any book from the lists above, in any language or edition.")
+    parts += [section for section in extra_sections if section]
 
     if preference:
         parts.append(f"My request, in my own words:\n{request_block(preference)}")

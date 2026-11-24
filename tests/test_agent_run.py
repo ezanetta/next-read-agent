@@ -1,12 +1,15 @@
 import json
 
+import pytest
+
 from book_agent.agent import CALL_NAME, AgentFailure
 from book_agent.agent_run import AGENT_PROMPTS, DEFAULT_AGENT_PROMPT, run_agent_pipeline
+from book_agent.domain.library import RelatedBook
 from book_agent.domain.recommendations import Filters, Recommendation
 from book_agent.domain.requests import FilterSource
 from book_agent.llm.base import LLMError, LLMResponse, ToolCallPart
-from book_agent.prompts import agent_v1, agent_v3, request_parser_v3
-from tests.fakes import FakeLLM, text_response, tool_call_response
+from book_agent.prompts import agent_v1, agent_v3, agent_v4, request_parser_v3
+from tests.fakes import FakeLibraryRetriever, FakeLLM, text_response, tool_call_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog, rec
 
 
@@ -91,7 +94,7 @@ async def test_the_prompt_version_can_be_chosen() -> None:
 
 
 def test_registry_has_every_version_and_v3_is_the_default() -> None:
-    assert sorted(AGENT_PROMPTS) == ["agent_v1", "agent_v2", "agent_v3"]
+    assert sorted(AGENT_PROMPTS) == ["agent_v1", "agent_v2", "agent_v3", "agent_v4"]
     assert DEFAULT_AGENT_PROMPT is agent_v3.PROMPT
 
 
@@ -106,3 +109,58 @@ async def test_a_contradiction_stops_before_the_agent_with_its_kind() -> None:
     assert run.request_error_kind == "contradiction"
     assert run.error is not None and run.error.startswith("The request contradicts the flags")
     assert len(llm.requests) == 1
+
+
+RELATED = [
+    RelatedBook(
+        title="Ficciones", author="Jorge Luis Borges", rating=None, description="Labyrinths."
+    ),
+    RelatedBook(
+        title="Dune (Dune Chronicles, #1)", author="Frank Herbert", rating=5.0, description=None
+    ),
+]
+V4 = AGENT_PROMPTS["agent_v4"]
+
+
+async def test_agent_v4_shows_the_related_books_and_records_them() -> None:
+    llm = FakeLLM([interpreted("a labyrinth story", None, None), submit()])
+    retriever = FakeLibraryRetriever(RELATED)
+    run = await run_agent_pipeline(
+        PROFILE, Filters(), request="something with labyrinths", llm=llm, books=catalog(),
+        prompt=V4, retriever=retriever,
+    )  # fmt: skip
+    assert run.passed and run.retrieved == ["Ficciones", "Dune (Dune Chronicles, #1)"]
+    assert retriever.queries == [
+        "task: search result | query: something with labyrinths a labyrinth story"
+    ]
+    agent_request = llm.requests[1]
+    assert agent_request.system == agent_v4.SYSTEM
+    text = agent_request.messages[0].text
+    assert "- Ficciones by Jorge Luis Borges: Labyrinths." in text
+    assert "- Dune (Dune Chronicles, #1) by Frank Herbert (5)" in text
+    assert text.index("most related to this request") < text.index("<request>")
+
+
+async def test_agent_v4_without_request_text_skips_retrieval() -> None:
+    llm = FakeLLM([submit()])
+    retriever = FakeLibraryRetriever(RELATED)
+    run = await run_agent_pipeline(
+        PROFILE, Filters(), llm=llm, books=catalog(), prompt=V4, retriever=retriever
+    )
+    assert run.passed and run.retrieved == [] and retriever.queries == []
+    assert llm.requests[0].messages[0].text == agent_v3.build_user_prompt(PROFILE, Filters(), None)
+
+
+async def test_a_failed_retrieval_falls_back_and_is_recorded() -> None:
+    llm = FakeLLM([interpreted("a labyrinth story", None, None), submit()])
+    run = await run_agent_pipeline(
+        PROFILE, Filters(), request="labyrinths", llm=llm, books=catalog(), prompt=V4,
+        retriever=FakeLibraryRetriever(fail=True),
+    )  # fmt: skip
+    assert run.passed and run.retrieved == [] and run.retrieval_error == "embedding failed"
+    assert "most related" not in llm.requests[1].messages[0].text
+
+
+async def test_agent_v4_needs_a_retriever() -> None:
+    with pytest.raises(ValueError, match="needs a library retriever"):
+        await run_agent_pipeline(PROFILE, Filters(), llm=FakeLLM([]), books=catalog(), prompt=V4)

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from book_agent.config import get_settings
+from book_agent.domain.library import RelatedBook
 from book_agent.domain.recommendations import Filters, Recommendation
 from book_agent.evals import __main__ as evals_cli
 from book_agent.evals.cases import LoadedCases, RecommendCaseSet, load_recommend_cases
@@ -12,8 +13,8 @@ from book_agent.evals.pacing import QuotaExhausted
 from book_agent.evals.records import RecordStore, RunConfig
 from book_agent.evals.runner import GitState, RunSummary, estimate_requests, plan_runs, run_plan
 from book_agent.llm.base import LLMResponse, ToolCallPart
-from book_agent.prompts import agent_v2
-from tests.fakes import FakeLLM, text_response, tool_call_response
+from book_agent.prompts import agent_v2, agent_v4
+from tests.fakes import FakeLibraryRetriever, FakeLLM, text_response, tool_call_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog
 
 BASELINE = RunConfig(system="baseline", prompt_id="baseline_v1", model="fake-model")
@@ -213,3 +214,19 @@ def test_cli_prints_the_plan_and_needs_yes(
     assert "Estimated LLM requests: min 6, typical 18" in out
     assert out.rstrip().endswith("Add --yes to start.")
     assert not (tmp_path / "r").exists()  # nothing ran, nothing written
+
+
+async def test_agent_v4_records_what_retrieval_showed(tmp_path: Path) -> None:
+    loaded = load_recommend_cases("set_v1", write_cases(tmp_path, CASES))
+    store = RecordStore(tmp_path / "results")
+    config = AGENT.model_copy(update={"prompt_id": "agent_v4"})
+    retriever = FakeLibraryRetriever(
+        [RelatedBook(title="Ficciones", author="Borges", rating=None, description=None)]
+    )
+    await run_plan(
+        plan_runs(loaded, config, 1, store), loaded, config, prompt=agent_v4.PROMPT,
+        profile=PROFILE, llm=FakeLLM([submit(), interpreted("a classic"), submit()]),
+        books=catalog(), works=None, store=store, git=GIT, retriever=retriever,
+    )  # fmt: skip
+    retrieved = {r.case_id: r.retrieved for r in store.load_all("set_v1")}
+    assert retrieved == {"library-only": [], "a-classic": ["Ficciones"]}  # no text, no retrieval
