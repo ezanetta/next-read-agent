@@ -51,3 +51,10 @@ class SameWorkVerdict(BaseModel, frozen=True):
         "different" recommends a book the reader already has, the failure being fixed.
         """
         return self.answer in (SameWorkAnswer.SAME, SameWorkAnswer.UNSURE)
+
+
+class WorkInfo(BaseModel, frozen=True):
+    """What a catalog says a work is about: used to describe the reader's own books (D-041)."""
+
+    description: str | None = None  # plain text
+    subjects: tuple[str, ...] = ()

@@ -7,8 +7,9 @@ the Protocol and the port-level exceptions, never the adapter's HTTP library.
 from collections.abc import Sequence
 from typing import Protocol
 
+from book_agent.domain.library import RelatedBook
 from book_agent.domain.models import CatalogBook
-from book_agent.domain.works import SameWorkVerdict, WorkRef
+from book_agent.domain.works import SameWorkVerdict, WorkInfo, WorkRef
 
 
 class BookSearchError(Exception):
@@ -79,5 +80,27 @@ class WorkResolver(Protocol):
         Equal keys mean the same work. Different keys do not prove different works:
         catalogs split some works across several keys.
         Raises WorkLookupError if the lookup fails for any other reason.
+        """
+        ...
+
+
+class WorkDescriptions(Protocol):
+    """Describes a work by its key: description and subjects (D-041)."""
+
+    async def work_info(self, work_key: str) -> WorkInfo | None:
+        """What the catalog says about this work (e.g. "/works/OL498556W"), or None if the
+        key is unknown. Raises WorkLookupError if the lookup fails for any other reason.
+        """
+        ...
+
+
+class LibraryRetriever(Protocol):
+    """Finds the reader's books most related to a request (D-041)."""
+
+    async def related_books(self, query: str) -> list[RelatedBook]:
+        """The read books most related to `query`, most related first.
+
+        Raises an LLMError subclass if the query can't be embedded: the caller decides
+        whether that stops the run.
         """
         ...
