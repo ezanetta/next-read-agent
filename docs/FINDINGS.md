@@ -339,3 +339,58 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - **"Catalog" may mean another source.** Open Library's data dumps are multilingual and not limited to 2017. Their license and description coverage are unverified: worth a second spike before committing to Goodbooks.
 - **Fix:** None; this informs the milestone B design.
 - **How it was verified:** The counts above, from local files only. The spike scripts are throwaway and not committed.
+
+## F-019 · Open Library dumps spike: a license-clean, current catalog that covers this reader, with descriptions as the weak spot (2026-11-24)
+
+- **What happened:** A second catalog spike after F-018, on Open Library's monthly dumps of 2026-10-31: works (4.1 GB compressed), editions (12.6 GB), authors (0.8 GB), reading log and ratings. The files were downloaded in parallel byte ranges (21.5 minutes) and processed in one pass each (7 minutes). Only small extracts were kept in `data/` (gitignored), and the dumps were deleted afterwards. No Gemini calls.
+- **License:** Open Library's FAQ asks that catalog contributions be released under CC0 1.0. The licensing page says the Internet Archive "does not assert any new copyright", with a caveat about existing rights on some contributions. **A public demo can serve data derived from the catalog records.** Descriptions copied in from publishers are the one gray area worth an attribution line. Covers have no monthly dump and no clear license: link to the Covers API, never redistribute.
+- **Size and completeness (whole dump):**
+  - 41.7 million works. 4.7% have a description, 50% have subjects.
+  - 56.9 million editions. 63% have a page count, 64% an ISBN, 87% a language, 97% a year.
+  - Languages by edition: English 32.2 million, German 3.6 million, French 2.8 million, **Spanish 2.0 million**.
+- **A manageable subset by popularity** (reading-log entries plus ratings per work; 13.2 million log rows and 1.1 million ratings over 3.4 million works):
+
+  | Works with at least | Works | Description | Subjects | An edition with pages | An ISBN-13 | A Spanish edition |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | 5 signals | 451,797 | 41% | 85% | 88% | 81% | 24,051 (5%) |
+  | 20 signals | 76,964 | 62% | 88% | 92% | 88% | 10,209 (13%) |
+  | 100 signals | 9,897 | 79% | 91% | 95% | 94% | 3,509 (35%) |
+
+- **How current:** editions per publication year peak in 2021 (2.3 million), then fall: 2023 0.8 million, 2024 0.45 million, 2025 0.21 million, 2026 so far 77,000. Cataloging lags by a year or two, but recent books are there: 30,927 works in the ≥5 subset first appeared in 2020–2024. Goodbooks stops at 2017.
+- **Coverage of the reader's library** (by ISBN through cached work keys, then title + author with the project's matchers; 2 or 3 of the 51 title matches are combined volumes, such as *Magician / Assassin's Apprentice*):
+
+  | Popularity cutoff | All 226 books | Liked (93) |
+  | --- | --- | --- |
+  | none | 207 (92%) | 86 (92%) |
+  | ≥5 | 182 (81%) | 81 (87%) |
+  | ≥20 | 155 (69%) | 71 (76%) |
+  | ≥100 | 97 (43%) | 43 (46%) |
+
+  - Books first published after 2017: 75 of 87 match (Goodbooks: none). Spanish-looking titles: 41 of 48 (Goodbooks: 7).
+  - 151 of the 207 matched works have a description, including 67 of the 93 liked books (72%).
+- **Coverage of the eval cases** (works with ≥5 / ≥20 signals; from subjects, edition languages and median page counts; subjects are noisy, so the counts are rough):
+
+  | Case | Candidates | Goodbooks (F-018) | Comment |
+  | --- | --- | --- | --- |
+  | kafka-filters (English edition, ≤200 pages) | 117,614 / 20,657 | 1,143 | |
+  | short-and-light (≤250 pages, humor) | 9,897 / 2,228 | 204–750 | |
+  | dystopia-filters (English, ≤400 pages) | 432 / 169 | 171–460 | |
+  | like-east-of-eden (family saga) | 113 / 41 | 4–106 | similarity needs embeddings |
+  | fantasy-no-sanderson (600–800 pages) | 632 / 275 | 143–221 | |
+  | scifi-not-space | 10,430 / 2,629 | 997–2,816 | |
+  | history-nonfiction (≤300 pages) | 14,866 / 1,642 | 86–353 | "history" subjects include self-help; needs a stricter filter |
+  | borges-stories-es (Spanish edition + short stories) | 1,078 / 643 | 1–4 | includes translations, which is right for a Spanish request |
+  | short-light-es (Spanish edition, ≤250 pages) | 11,214 / 4,399 | 4 | |
+  | argentine-novel | 146 / 48 with Argentine subjects | 0 usable | *Sobre héroes y tumbas*, Mariana Enríquez and more, beyond the reader's shelves |
+  | more-claire-keegan | 6 by Keegan | 0 | *Walk the Blue Fields*, *Antarctica* and *The Forester's Daughter* aren't in the library |
+  | litrpg | 30 / 10 | 0 | mostly the *Dungeon Crawler Carl* series, which the reader knows; still thin |
+
+- **How it was detected:** Scripts over the dumps and the reader's export, using `titles_match` and `authors_match` from `domain/matching.py`. Live checks: Open Library's dumps, licensing and FAQ pages.
+- **What it implies:**
+  - **Open Library is a viable catalog where Goodbooks wasn't:** a clean license for a public demo, books up to 2025, Spanish editions, and 69–81% of this reader's library at a ≥20 or ≥5 cutoff. Every Spanish case and the Argentine novel go from near zero to hundreds of candidates.
+  - **Descriptions are the weak spot:** 62% at ≥20 signals. The rest would be embedded from title, author and subjects. Filling them from Google Books would take about 29,000 requests at ≥20, about 29 days of the 1,000-per-day quota: not worth it for the whole catalog.
+  - **Embedding cost:** about 77,000 works × about 200 tokens is about 15 million tokens, about 8.5 hours at 30,000 tokens per minute, and over 1,000 requests per day unless texts are batched per request. A local multilingual embedding model would avoid the quota and is worth comparing.
+  - **Page counts and languages are per edition:** a filter must ask "is there an edition that fits", which is what the validator already does with Google Books.
+  - **The library extract is useful now:** Open Library descriptions for 151 library books, at no API cost, feed the library retrieval design (D-040, proposed).
+- **Fix:** None; this informs milestone B.
+- **How it was verified:** The counts above, from the dump extracts. The extracts were deleted afterwards except a 240 KB file of the library's matched works (`data/openlibrary/library_works.json`). The spike scripts are throwaway and not committed.
