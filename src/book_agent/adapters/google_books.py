@@ -1,6 +1,6 @@
 """Google Books API client: implements the BookSearch port with an injected httpx.AsyncClient.
 
-Used live only as an agent fallback tool and for the UI book search.
+The catalog for the agent's search_books tool and for the validator's existence lookups.
 Docs: https://developers.google.com/books/docs/v1/reference/volumes
 """
 
