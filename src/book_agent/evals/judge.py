@@ -62,7 +62,7 @@ JUDGE_PROMPTS = {
         tool_description=judge_v3.TOOL_DESCRIPTION,
     ),
 }
-DEFAULT_JUDGE_PROMPT = JUDGE_PROMPTS[judge_v1.PROMPT_ID]
+DEFAULT_JUDGE_PROMPT = JUDGE_PROMPTS[judge_v3.PROMPT_ID]  # frozen as the judge (D-039)
 
 
 class Verdict(StrEnum):

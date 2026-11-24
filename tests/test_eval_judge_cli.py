@@ -8,6 +8,7 @@ from book_agent.config import get_settings
 from book_agent.evals import __main__ as evals_cli
 from book_agent.evals.calibration import CalibrationStore
 from book_agent.evals.judge import (
+    DEFAULT_JUDGE_PROMPT,
     BookJudgment,
     CriterionJudgment,
     JudgeConfig,
@@ -19,7 +20,8 @@ from book_agent.evals.records import RecordStore
 from tests.judge_data import AGENT, BASELINE, checked, stored
 from tests.library_data import PROFILE
 
-JUDGE = JudgeConfig(prompt_id="judge_v1", model="gemini-3.5-flash-lite")
+# The CLI defaults to the frozen judge (judge_v3, D-039).
+JUDGE = JudgeConfig(prompt_id=DEFAULT_JUDGE_PROMPT.prompt_id, model="gemini-3.5-flash-lite")
 
 
 @pytest.fixture(autouse=True)

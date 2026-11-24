@@ -5,6 +5,8 @@ import pytest
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters
 from book_agent.evals.judge import (
+    DEFAULT_JUDGE_PROMPT,
+    JUDGE_PROMPTS,
     BookRef,
     JudgeConfig,
     JudgmentStore,
@@ -25,9 +27,14 @@ from tests.judge_data import AGENT, checked, stored, verdict_reply
 from tests.library_data import PROFILE
 
 JUDGE = JudgeConfig(prompt_id="judge_v1", model="judge-model")
+V1 = JUDGE_PROMPTS["judge_v1"]  # these tests cover the text-JSON path
 RECORD = stored(
     "desert", [checked("Sand One"), checked("Lost", matched=False), checked("Sand Two")]
 )
+
+
+def test_the_frozen_judge_is_the_default() -> None:
+    assert DEFAULT_JUDGE_PROMPT is JUDGE_PROMPTS["judge_v3"]  # D-039
 
 
 def test_the_merged_filters_and_a_missing_page_count_reach_the_input() -> None:
@@ -79,7 +86,7 @@ def test_unusable_replies_are_rejected(reply: str, has_request: bool, problem: s
 
 async def test_a_judgment_records_both_criteria_and_the_call() -> None:
     llm = FakeLLM([verdict_reply("partial", "no")])
-    judgment = await judge_book(judge_input(RECORD, 0, PROFILE), 0, llm)
+    judgment = await judge_book(judge_input(RECORD, 0, PROFILE), 0, llm, V1)
     assert judgment.judged and judgment.had_description and judgment.has_request
     assert judgment.fits_request is not None and judgment.fits_request.verdict is Verdict.PARTIAL
     assert judgment.reason_quality is not None and judgment.reason_quality.verdict is Verdict.NO
@@ -89,7 +96,9 @@ async def test_a_judgment_records_both_criteria_and_the_call() -> None:
 
 async def test_without_a_request_only_reason_quality_is_judged() -> None:
     record = stored("lib", [checked("Sand One", description=None)], request=None)
-    judgment = await judge_book(judge_input(record, 0, PROFILE), 0, FakeLLM([verdict_reply(None)]))
+    judgment = await judge_book(
+        judge_input(record, 0, PROFILE), 0, FakeLLM([verdict_reply(None)]), V1
+    )
     assert judgment.fits_request is None and judgment.reason_quality is not None
     assert not judgment.had_description and not judgment.has_request
 
@@ -104,7 +113,7 @@ async def test_without_a_request_only_reason_quality_is_judged() -> None:
 async def test_failures_become_unjudged_books(
     script: list[LLMResponse | Exception], error: str
 ) -> None:
-    judgment = await judge_book(judge_input(RECORD, 0, PROFILE), 0, FakeLLM(script))
+    judgment = await judge_book(judge_input(RECORD, 0, PROFILE), 0, FakeLLM(script), V1)
     assert not judgment.judged and judgment.error is not None and judgment.error.startswith(error)
 
 
