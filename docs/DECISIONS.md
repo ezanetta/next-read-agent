@@ -381,3 +381,41 @@ Significant design decisions: context, options considered, choice, and reason.
   - The judge's blind spot is the same for both systems, so comparisons still hold.
   - Dropping `reason_quality` would throw away its one reliable signal: a "no" from the judge is right (precision 1 of 1).
   - A better `reason_quality` judge needs new labeled data and probably the cited books' descriptions (B-002). That's a new calibration sample, not a prompt tweak.
+
+## D-040 · Open Library is the candidate catalog, decided after library retrieval (2026-11-24)
+
+- **Context:** Milestone B planned a catalog for candidate retrieval, built on Goodbooks-10k. Two spikes measured the options against the reader's library and the 13 eval cases (F-018, F-019).
+- **Options:** Goodbooks-10k; Open Library's monthly dumps; keep only live Google Books search.
+- **Choice:** **Open Library is the candidate catalog for a later step.** Goodbooks-10k is ruled out as the catalog: it stops in 2017, has 20 Spanish books in 10,000, misses 7 of the 13 eval cases, and its Goodreads-derived data makes a public demo serving from it a gray area. Whether and how to build the catalog is decided after library retrieval (D-041) is measured. The enrich, embed and retrieve pipeline built for D-041 is generic, so it can be reused for the catalog.
+- **Reason:** Open Library's data is CC0. It covers 69–81% of the library at a 20- or 5-signal popularity cutoff, has books up to 2025 and 10,000 or more works with Spanish editions, and turns the Spanish and Argentine cases from near zero into hundreds of candidates. Its weak spot, descriptions on 62% of popular works, is known and measured. Live Google Books search stays as a tool either way: the validator depends on it, and catalogs lag.
+
+## D-041 · Retrieval over the reader's library, with thresholds set before the run (2026-11-24)
+
+- **Context:** The agent sees the library as titles and ratings only, so it cites the same favorites across unrelated requests. In round 2, 6 library books were cited in 3 or more of the 13 cases, and 36 distinct books were cited in all. The judge can't check claims about cited books either (B-002).
+- **Choice:**
+  - **Enrich the read books once:** Open Library work descriptions (by cached work key) first, then Google Books for the rest. Cached by Goodreads id; resumable.
+  - **Embed them** with Gemini Embedding 2, using the model's document format. Cached with the model, dimensions and a hash of each text, so a change re-embeds only what changed.
+  - **Retrieval pool:** read books rated 3 or higher, **and read books without a rating, which count as neutral, not negative**. Books rated below 3 are left out: the prompt already lists them as "avoid similar". To-read and currently-reading books aren't in the pool, since they can't be cited as read.
+  - **Per request:** embed the request text, plus the parsed preference when it differs, using the model's query format; cache by text. Take the 8 nearest books by cosine similarity. Requests without text get no retrieval and serve as a control.
+  - **agent_v4:** agent_v3's prompts, plus a user-prompt section listing the 8 related books with rating and the start of the description, and one system sentence asking to cite them when the connection is real. The whole library stays in the prompt, for exclusion. If embedding fails, the run uses agent_v3's prompt text, and the record says so.
+  - **Records** store the retrieved titles and any retrieval error. The report shows citation diversity per configuration and, per case, the 8 retrieved books and the books actually cited, for a quick manual check.
+  - **No vector database:** cosine over about 100 vectors is instant in plain Python.
+  - **The judge doesn't change in this step:** both rounds are judged with judge_v3. judge_v4 (cited-book descriptions, B-002) and its new labeling sample come after the agent results.
+- **Thresholds, set before the agent_v4 round** (compared with round 2's agent_v3 records):
+
+  | Measure | Round 2 (agent_v3) | Success |
+  | --- | --- | --- |
+  | Library books cited in 3 or more cases | 6 | at most 3 |
+  | Distinct library books cited | 36 | at least 45 |
+  | Citations from the retrieved 8 (runs with retrieval) | n/a | at least 60% |
+  | Accepted, outages excluded | 33/35 | at most 3 runs fewer |
+  | `cites_library` rejections | 4 | no more |
+  | judge_v3 `reason_quality` no | 2/103 | no higher share (a lower bound, F-017) |
+  | judge_v3 `fits_request` no | 4/86 | no higher share |
+  | Input tokens per run | 25,553 | reported, no threshold |
+
+  - **Diversity alone could reward random citations,** so the per-case listing of retrieved and cited books gets a manual review. A citation that fits worse than round 2's counts against the result, whatever the numbers say.
+  - **The two cases without request text** (library-only, kafka-filters) get no retrieval: their citations should change only within noise.
+  - **Harness:** the round runs on harness 3 (one retry on LLM server errors, D-030; interleaved order, D-031), while round 2 ran on harness 2. Retries mostly change outage failures, so acceptance is compared with outages excluded.
+  - **If a threshold is missed,** the result is reported as it is. agent_v4 is not tuned against this round's per-case listing and then rerun to pass.
+- **Reason:** Relevant citations need the model to see what the reader's books are about, not just their titles. Retrieval puts the right few books in front of it without dropping the full list it needs for exclusion. Thresholds fixed in advance keep the round an honest test (as with D-034).
