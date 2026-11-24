@@ -379,3 +379,22 @@ def test_the_calibration_table_has_both_two_level_rows() -> None:
     held_out = render_calibration(sample(ITEMS), HELD_OUT, JUDGE, LABELS, JUDGMENTS)
     assert "| reason_quality, yes vs partial or no | 1 | 1/1 (100%) | - | 0 | 0 |" in held_out
     assert "| reason_quality, no vs partial or yes | 1 | 1/1 (100%) | - | 0 | 0 |" in held_out
+
+
+def test_recall_and_precision_per_verdict() -> None:
+    # (judge, you): the judge never says no, and misses both of your noes.
+    a = Agreement([(YES, YES), (PARTIAL, NO), (YES, NO), (PARTIAL, PARTIAL), (YES, PARTIAL)])
+    assert a.recall(NO) == (0, 2) and a.precision(NO) == (0, 0)
+    assert a.recall(YES) == (1, 1) and a.precision(YES) == (1, 3)
+    assert a.recall(PARTIAL) == (1, 2) and a.precision(PARTIAL) == (1, 2)
+
+
+def test_the_report_shows_recall_and_precision_on_both_halves() -> None:
+    # Tuning reason_quality pairs (judge, you): (yes, partial) and (no, no).
+    tuning = render_calibration(sample(ITEMS), TUNING, JUDGE, LABELS, JUDGMENTS)
+    assert "## Recall and precision per verdict" in tuning
+    assert "| reason_quality | yes | 0 | 1 | 0/0 | 0/1 (0%) |" in tuning
+    assert "| reason_quality | partial | 1 | 0 | 0/1 (0%) | 0/0 |" in tuning
+    assert "| reason_quality | no | 1 | 1 | 1/1 (100%) | 1/1 (100%) |" in tuning
+    held_out = render_calibration(sample(ITEMS), HELD_OUT, JUDGE, LABELS, JUDGMENTS)
+    assert "| fits_request | no | 1 | 0 | 0/1 (0%) | 0/0 |" in held_out

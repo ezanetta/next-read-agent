@@ -409,6 +409,14 @@ class Agreement:
     def matrix(self) -> Counter[tuple[Verdict, Verdict]]:
         return Counter(self.pairs)
 
+    def recall(self, verdict: Verdict) -> tuple[int, int]:
+        """Of the books you labeled `verdict`, how many the judge also called it."""
+        return self.matrix[(verdict, verdict)], sum(h is verdict for _, h in self.pairs)
+
+    def precision(self, verdict: Verdict) -> tuple[int, int]:
+        """Of the books the judge called `verdict`, how many you also labeled it."""
+        return self.matrix[(verdict, verdict)], sum(j is verdict for j, _ in self.pairs)
+
     def yes_vs_rest(self) -> "Agreement":
         """Two levels, split at yes: partial counts as no."""
         return Agreement([(_merge(j, Verdict.NO), _merge(h, Verdict.NO)) for j, h in self.pairs])
@@ -532,6 +540,13 @@ def render_calibration(
     quality = stats[Criterion.REASON_QUALITY]
     for label, b in ((YES_VS_REST, quality.yes_vs_rest()), (NO_VS_REST, quality.no_vs_rest())):
         lines.append(f"| {label} | {b.n} | {_share(b.exact, b.n)} | - | {b.lenient} | {b.strict} |")
+    # A rare verdict can hide behind overall agreement: a judge that never says no
+    # still agrees on most books when bad reasons are rare (F-017).
+    lines += ["", "## Recall and precision per verdict", ""]
+    lines += ["| Criterion | Verdict | Your labels | Judge said | Recall | Precision |"]
+    lines += ["| --- | --- | --- | --- | --- | --- |"]
+    for criterion, a in stats.items():
+        lines += _per_verdict(criterion, a)
     for criterion, a in stats.items():
         lines += ["", f"## {criterion.value}: judge (rows) vs your label (columns)", ""]
         lines += _matrix(a)
@@ -551,6 +566,17 @@ def _share(part: int, whole: int) -> str:
 
 
 _ORDER = [Verdict.YES, Verdict.PARTIAL, Verdict.NO]
+
+
+def _per_verdict(criterion: Criterion, a: Agreement) -> list[str]:
+    rows: list[str] = []
+    for verdict in _ORDER:
+        recall, precision = a.recall(verdict), a.precision(verdict)
+        rows.append(
+            f"| {criterion.value} | {verdict.value} | {recall[1]} | {precision[1]} "
+            f"| {_share(*recall)} | {_share(*precision)} |"
+        )
+    return rows
 
 
 def _matrix(a: Agreement) -> list[str]:
