@@ -25,13 +25,13 @@ flowchart TB
         MAT[matching.py]
         MOD[models, requests, recommendations, works]
     end
-    PORTS[ports.py: BookSearch, WorkResolver, SameWorkJudge]
-    LLMB[llm/base.py: LLMClient, Message, ToolSpec, ToolChoice]
+    PORTS[ports.py: BookSearch, WorkResolver, WorkDescriptions, SameWorkJudge, LibraryRetriever]
+    LLMB[llm/base.py: LLMClient, Embedder, Message, ToolSpec, ToolChoice]
     subgraph adapters[Adapters]
         GB[adapters/google_books.py]
         OL[adapters/open_library.py]
         GR[adapters/goodreads.py]
-        GEM[llm/gemini.py]
+        GEM[llm/gemini.py + gemini_embeddings.py]
         RET[llm/retrying.py]
     end
     entry --> W --> app
@@ -60,7 +60,8 @@ flowchart TB
 | Work matching | `domain/matching.py`, `adapters/open_library.py`, `work_keys.py`, `same_work_judge.py` | Is a recommendation a book the reader already has? First title variants and ISBN. Then Open Library work keys, looked up by ISBN and cached. Then an LLM same-work judge for translations and retitled editions, which leans towards "same" (D-011 to D-013). |
 | Acceptance policy | `domain/acceptance.py` | Decides which validation results may reach the reader. It rejects violations and unverifiable books, and stops on catalog outages the model can't fix (D-014). |
 | LLM adapters | `llm/gemini.py`, `llm/retrying.py` | Gemini translation in pure functions, so it can be tested without network. One retry on 5xx and network errors, in a wrapper (D-027, D-030). The Claude adapter is planned. |
-| Eval harness | `evals/` | Frozen case sets, a resumable runner that records but never scores, reports computed from the records, an LLM judge with a calibration workflow, and a parser eval (D-021 to D-039). |
+| Library retrieval | `library_enrichment.py`, `library_retrieval.py`, `embedding_index.py`, `llm/gemini_embeddings.py`, `domain/library.py` | Describes the read books once (Open Library, then Google Books), embeds them, and for each request retrieves the 8 most related ones for agent_v4's prompt. The index is generic, so a catalog can reuse it (D-040, D-041). |
+| Eval harness | `evals/` | Frozen case sets, a resumable runner that records but never scores, reports computed from the records, an LLM judge with a calibration workflow, and a parser eval (D-021 to D-039), plus library citation diversity (D-041). |
 
 ## Request flow
 
@@ -109,6 +110,8 @@ sequenceDiagram
 | **Versioned, frozen prompts** | `prompts/*_vN.py`, registries like `AGENT_PROMPTS` and `JUDGE_PROMPTS` | Stored results always match the prompt that produced them, and versions compare side by side. |
 | **Derivation over duplication** | `judge_v3.INSTRUCTIONS` from `judge_v2.SYSTEM` | "Same instructions" is enforced at import time, not promised. |
 | **Append-only history (audit trail)** | `Label.corrections` in `evals/calibration.py` | Calibration labels can be fixed without losing what they were or why (D-036). |
+| **Cache keyed by content hash** | `embedding_index.VectorStore` (model, dimensions, text SHA-256) | Only new or changed texts are re-embedded, and vectors from another model are never mixed in. |
+| **Graceful degradation** | `run_agent_pipeline`: a failed retrieval falls back to agent_v3's user prompt and is recorded | An embedding outage doesn't stop a recommendation. |
 | **Record once, score many times** | `evals/runner.py` vs `evals/report.py` (D-021) | New metrics and judges run over stored runs with no new LLM calls. |
 | **Frozen inputs by hash** | case sets, calibration sample (D-023, D-034) | An eval result can't drift because its inputs changed underneath it. |
 | **Train / held-out split with pre-registered thresholds** | `evals/calibration.py`, D-034 | The judge's agreement on unseen books stays an honest estimate. |
