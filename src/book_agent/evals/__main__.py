@@ -49,6 +49,7 @@ from book_agent.evals.calibration import (
     shared_questions,
 )
 from book_agent.evals.cases import ParserCase, load_parser_cases, load_recommend_cases
+from book_agent.evals.citation_report import render_citation_section
 from book_agent.evals.judge import (
     DEFAULT_JUDGE_MODEL,
     DEFAULT_JUDGE_PROMPT,
@@ -211,6 +212,7 @@ def _report_command(args: argparse.Namespace) -> int:
         print(f"error: {e}")
         return EXIT_ERROR
     markdown = render_markdown(build_report(args.cases, records))
+    markdown += "\n".join(render_citation_section(records)) + "\n"
     if args.judge:
         judgments = JudgmentStore(store).judged(args.cases, args.judge)
         markdown += "\n".join(render_judge_section(records, judgments, args.judge)) + "\n"
