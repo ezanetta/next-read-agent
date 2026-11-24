@@ -271,3 +271,113 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Options:** Keep one rate; drop infrastructure failures from the table; show both rates.
 - **Choice:** The report shows "Accepted" over every run (the whole system, as a user would see it) and "Accepted, outages excluded" over the runs no outage stopped (the agent's own choices). Each configuration's details give the number left out. An infrastructure failure is a run that wasn't accepted and either stopped with `catalog_unavailable` or whose last LLM call failed with a 5xx or a network error, at any step (agent turn, request interpretation, baseline reply). Records from before D-030 have no `error_status`, so for them the status is read from the error text ("API error 5xx").
 - **Reason:** Both questions matter and neither number answers the other. Keeping both visible stops a provider outage from hiding, or excusing, a change in the agent. 429s, refusals and 4xx stay counted against the system: they come from our requests or our quota, not from a service failing.
+
+## D-033 · An LLM judge grades each recommended book on two criteria (2026-11-22)
+
+- **Context:** The rules (D-014) say whether a recommendation is valid, not whether it is good. F-012 saw "history" picks that were philosophy, and reasons the rules can't check. Phase 2 of the eval harness (D-021) adds a quality judge that scores stored records without new runs.
+- **Options:** Judge a whole submission at once; judge each book; pairwise comparisons between systems.
+- **Choice:** One judge call per recommended book, on round 2's stored records (harness 2), with prompt `judge_v1`, temperature 0:
+  - **Inputs:** request text, interpreted preference, the merged hard filters, the matched edition's title, author, year, page count ("unknown" when missing), categories and description, the reason, and each cited library book with the reader's rating and shelf. No system name, no rule results.
+  - **Hard filters vs soft length:** the judge ignores only what became a filter (language, min_pages, max_pages), which the validator checks. A length wish that never became a filter ("algo corto", "around 700 pages") counts for `fits_request`, judged from the page count. Ignoring all page talk would leave those wishes checked by nobody, the same silent gap as request_parser_v1 (F-009).
+  - **Two criteria, each yes / partial / no with a one-sentence justification written before the verdict:** `fits_request` (soft constraints, including tone and exclusions such as "not about space" or "nothing by Sanderson"), and `reason_quality` (specific, a real connection to a cited book, nothing invented). `fits_request` is n/a for runs without request text.
+  - **Only books that matched a catalog edition are judged:** unfound books already fail the rules. Books without a description are judged, with `had_description` recorded; the report splits scores by it, since the judge then relies on its own knowledge and may hallucinate.
+  - **Judgments are a separate layer** (`data/evals/<set>/judgments/<judge id>/...`), one file per record. A judge is identified by (prompt, model, thinking level). LLM failures and unreadable replies are stored as "not judged" and retried on the next run.
+- **Model and the self-preference risk:** the default judge is `gemini-3.5-flash-lite` (`--model`, `--thinking`), the same model family that wrote the recommendations. A judge may prefer text in its own style, so it could grade the agent's and baseline's reasons too kindly. Calibration against the user's labels (D-034) measures this, including the error direction. A judge from another provider is the planned check if agreement is poor or skewed lenient.
+- **Reason:** Per-book judging gives one grade per decision the user cares about, makes labels and judgments comparable one to one, and keeps each prompt small enough for a small model.
+
+## D-034 · Judge calibration: a frozen, blind sample with a tuning half and a held-out half (2026-11-22)
+
+- **Context:** A judge is only useful once it agrees with the user. Tuning its prompt on the same labels used to measure it would overstate agreement.
+- **Choice:**
+  - **Sample** (`evals sample`): 40 matched books from round 2, 20 per system, at most 2 per (system, case), drawn round-robin over cases with a fixed seed. Books with an already-read, to-read or currently-reading violation are left out, since "would I read it" makes no sense for them (they are still judged in the full run). Within each system, books alternate between tuning and held-out in case order, so a case with two books has one in each half. The sample file is frozen: it can't be overwritten, and labels store its hash.
+  - **Labels** (`evals label`): one book at a time in shuffled order, showing exactly the judge's inputs and never the system. Three labels, each yes / partial / no: fits the request, reason quality, and would I read it (only the user answers it). Saved after each book; skipping and quitting resume later.
+  - **Agreement** (`evals calibrate --split tuning|held-out`): per criterion, exact agreement, agreement within one step, the judge more lenient or stricter than the user, and the 3×3 table. The tuning half lists every disagreement with the judge's justification and the user's note. The held-out half shows only aggregates, and each look is logged with the judge configuration, so it stays visible how many prompt versions have seen it.
+- **Reason:** Tuning on one half and verifying on the other keeps the agreement number honest. Blind labeling keeps the labels about the book, not about the system. 20 held-out books give noisy numbers, so small differences shouldn't be over-read (F-013).
+- **Shared fits_request questions (2026-11-23):** a check of calibration_v1 found no identical cards, but two books recommended twice for the same case, with different reasons:
+  - *La muerte y otras sorpresas* (borges-stories-es), #22 in tuning and #11 in held-out. **This pair crosses the halves.**
+  - *The Priory of the Orange Tree* (fantasy-no-sanderson), #1 and #4, both in tuning.
+
+  Same case and same book means the same request and the same book, so it is the same `fits_request` question. Rules, applied by `shared_questions` and `fits_left_out` and found from the sample, not hard-coded:
+  - **A held-out book whose question is also asked on the tuning half is left out of held-out `fits_request` agreement** (#11). Its `reason_quality` still counts, since the reasons differ. Reason: tuning the prompt on #22's `fits_request` would also tune #11's, so it is no longer an unseen check. Leaving out one pair is cheaper than redrawing an already labeled sample. The held-out report states how many books were left out, without naming them.
+  - **The tuning report notes repeated questions:** #1 and #4 count twice in tuning agreement, and #22 shares its question with a held-out book. They stay in, since tuning numbers only guide prompt changes, but the note keeps one disagreement from reading as two independent ones.
+- **Held-out acceptance thresholds (2026-11-23, set before the first held-out look):**
+
+  | Measure | Threshold |
+  | --- | --- |
+  | `fits_request` exact agreement | at least 70% |
+  | `fits_request` within one step | at least 90% |
+  | `reason_quality`, "no vs partial or yes" | at least 85% |
+  | `reason_quality`, "yes vs partial or no" | none: a known limitation (F-016) |
+
+  - **The 3-level `reason_quality` and "yes vs partial or no"** are reported, but have no threshold. The line between a tone-only link and a concrete shared element is fuzzy even in the user's own labels, and the evidence on the tuning half points there, not at the judge.
+  - **Shares are over the held-out pairs as counted under the rules above** (#11's `fits_request` left out).
+  - **If the held-out half misses a threshold,** the judge's scores are still reported, with that caveat next to them. The held-out half is not used for further iteration: no new prompt is tuned against it or checked on it again to pass.
+  - **Why in advance:** a threshold chosen after seeing the result would be fitted to it. Fixing the thresholds, and what happens if they're missed, before the single look keeps the held-out number an honest test rather than another tuning step.
+
+## D-035 · judge_v2: independent criteria, concrete connections, form mismatch is a no (2026-11-23)
+
+- **Context:** First tuning calibration of judge_v1 (D-034): `fits_request` 14/18 exact (2 lenient, 2 stricter), `reason_quality` 12/19 (4 lenient, 3 stricter). The disagreements showed three patterns:
+  - The judge accepted connections through mood or tone alone as good reasons.
+  - A poetry book for "una novela argentina" got partial, though the request named a form.
+  - The user's own labels mixed the criteria, marking a reason down because the book was wrong.
+
+  Also F-015.
+- **Options:** Tune v1 in place; a new version; more examples versus sharper rules.
+- **Choice:** `judge_v2`, with v1 frozen (it has stored judgments and a calibration report). Same inputs and reply shape. Changes:
+  - **`reason_quality` judges only the connection** between the book and the cited library books: accurate and specific. Whether the book fits the request is `fits_request`'s job. Each criterion is judged on its own.
+  - **A link through mood, tone or genre alone is at most partial.** Yes needs a concrete shared element: themes, structure, style, characters or setting.
+  - **A form mismatch is a no:** when the request names a form (novel, short stories, non-fiction, poetry) and the book is another form.
+  - **Without request text,** the user prompt ends with a reminder to answer `reason_quality` only (F-015).
+  - **Examples are disjoint from the calibration sample:** four worked examples and the exclusion examples name no book, author or request text from calibration_v1 or the reader's library (checked against both). v1's "nothing by Brandon Sanderson" and "around 700 pages" came from calibration requests, so v2 replaces them.
+- **Reason:** Each rule targets a pattern seen on the tuning half, and none was written from a held-out result. Independent criteria make each agreement number measure one thing. v2 is tuned on 20 books, so improvements must be confirmed on the held-out half before they count.
+
+## D-036 · Label corrections: tuning half only, with a note and a history (2026-11-23)
+
+- **Context:** The judge caught two errors in the user's tuning labels, such as a reason that misdescribes the cited book. Leaving known errors in the labels would understate the judge's agreement. Silently editing labels after seeing the judge's answers would bias calibration toward the judge.
+- **Options:** Edit the labels file by hand; relabel from scratch; a correction command with an audit trail.
+- **Choice:** `evals relabel --book N --note TEXT [--fits|--quality|--would-read y|p|n]`:
+  - `N` is the book's position in the sample: "Book N" on the labeling card, "#N" in the tuning report.
+  - The note is required.
+  - The earlier values stay in the label's `corrections` history, with the note and date. Agreement uses the current label.
+  - The tuning report lists every correction.
+  - Corrections are refused on the held-out half, for unlabeled books, when nothing changes, and for `fits_request` on runs without a request.
+  - The user's policy: correct only factual errors, not changes of opinion prompted by the judge.
+- **Reason:** It keeps labels fixable while making every change visible and explained. The held-out half stays untouchable, so its agreement remains an honest check.
+
+## D-037 · judge_v3: the judgment comes back as a forced tool call (2026-11-23)
+
+- **Context:** The judge kept failing on format, not on criteria:
+  - v1 gave `fits_request` without a request (F-015).
+  - v2 split a key and nested an object, losing two of the most discussed tuning books (F-016).
+
+  D-010 already chose tool calling for the agent's final answer for this reason, and the LLM contract now has tool choice (`ToolChoice`).
+- **Options:**
+  - **Accept v2 with the caveat:** keeps losing books, and not at random.
+  - **Retry the two books:** at temperature 0 the same reply may come back.
+  - **Ask the judge again after an unreadable reply:** costs a call each time and hides the cause.
+  - **Lenient JSON parsing:** repair, which D-010 rejects.
+  - **A forced tool call.**
+- **Choice:** `judge_v3`:
+  - **The judge answers by calling `submit_judgment`, forced by `ToolChoice`.** The schema is generated from Pydantic models (`JudgmentArgs`, or `ReasonOnlyArgs` without `fits_request` for runs without request text). The call's arguments are validated as strictly as a text reply was: a missing or extra criterion, a bad verdict or no call at all is still an unreadable reply, kept with its raw arguments.
+  - **The system prompt is v2's instructions and examples word for word** (derived from `judge_v2.SYSTEM`, and a test checks they match). Only the answer paragraph changes. The user prompt is v2's.
+  - **Fields that are a `$ref` carry no `description`,** matching the plain-`$ref` shape the agent's submit tool already uses live with Gemini. The prompt explains each field.
+  - **v1 and v2 stay frozen** and still answer with text.
+- **Not tuning on the labels:** v3 changes the output channel, not what the judge is asked to decide. No instruction, example or criterion moved. Its tuning calibration measures whether the format change loses nothing and recovers the unjudged books. A change in verdicts would point to the channel, not to a better rubric.
+- **Reason:** A provider-enforced schema removes the class of errors instead of patching instances. The strict validation keeps any remaining drift visible.
+
+## D-038 · reason_quality is also reported on two levels, split both ways (2026-11-23)
+
+- **Context:** F-016: almost every `reason_quality` disagreement is one step around partial. The three-level number mixes two different questions: does the judge agree on what a good reason is, and on what a bad one is.
+- **Choice:** The calibration report and the eval report's judge section show `reason_quality` three ways: the three levels, "yes vs partial or no" (split at yes), and "no vs partial or yes" (split at no). In calibration each is a row with exact agreement and direction. In the eval report each is a table per configuration and view.
+- **Reason:** On judge_v2's tuning half, splitting at yes gives 10/20 and splitting at no gives 18/20 (F-016): the judge separates bad reasons from the rest much better than it separates good ones. A single split would hide one of the two.
+
+## D-039 · judge_v3 is frozen as the judge (2026-11-24)
+
+- **Context:** judge_v3 (D-037) passed the three held-out thresholds set in advance (D-034): `fits_request` 75% exact and 94% within one, `reason_quality` "no vs partial or yes" 90%. It judged every book. But it almost never says no on `reason_quality` (recall 1 of 5 on both halves, F-017), and its yes is unreliable.
+- **Options:** Freeze v3 with the caveats; write a judge_v4 aimed at catching bad reasons; drop `reason_quality` from the eval report.
+- **Choice:** **judge_v3 is the judge.** It's the CLI's default (`DEFAULT_JUDGE_PROMPT`), and the round 2 judge scores come from it. v1, v2 and v3 all stay frozen. The eval report's judge scores are read with F-017's caveats: `fits_request` at face value; the share of bad reasons as a lower bound, compared between systems but not taken as an absolute; the share of good reasons not read as quality.
+- **Reason:**
+  - The held-out half has had its one look. A judge_v4 could only be tuned on the 20 tuning books and would have no unseen check left. D-034 rules out iterating on the held-out half.
+  - The judge's blind spot is the same for both systems, so comparisons still hold.
+  - Dropping `reason_quality` would throw away its one reliable signal: a "no" from the judge is right (precision 1 of 1).
+  - A better `reason_quality` judge needs new labeled data and probably the cited books' descriptions (B-002). That's a new calibration sample, not a prompt tweak.

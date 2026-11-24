@@ -219,3 +219,63 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **Why it surfaced now:** Any Gemini error other than a 429 became an immediate `llm_error`: `PacedLLM` retries only rate limits and the adapter doesn't retry (D-027). Round 1 simply had no 503s. Without these 4 runs, round 2's agent would be 33/35.
 - **Fix:** One retry on LLM 5xx in a wrapper applied in wiring (D-030), interleaved run order in the eval runner (D-031), and an acceptance rate that excludes infrastructure failures in the report (D-032).
 - **How it was verified:** Error messages, call positions, turn traces and timestamps of all agent records in the round 2 folder.
+
+## F-015 · judge_v1 grades fits_request on runs that have no request (2026-11-23)
+
+- **What happened:** In the first full judge_v1 run over round 2 (183 books), 15 books weren't judged. 10 of them, a third of the 29 books from runs without request text (kafka-filters: 5, library-only: 5), returned a `fits_request` verdict anyway, and the strict parser rejected the reply ("fits_request given without a request"). Example: kafka-filters run 3 book 3 (baseline, *The Great War and Modern Memory*). The request has only flags (`language: en`, `max_pages: 200`), and the judge wrote "388 pages, which violates the strict maximum filter of 200 pages", treating the filters as the request. The other 5 errors: `fits_request` missing with a request (3), a malformed JSON value (1), invalid JSON (1).
+- **How it was detected:** The calibration report showed 19 of 20 tuning books judged. The stored judgment kept the raw reply.
+- **Cause:** The only instruction to leave out `fits_request` was the system prompt's last line, after a JSON template that shows both criteria. library-only runs have no filters either and fail the same way, so the `<filters>` block isn't the only trigger: the model copies the template. The validator had already flagged the 388 pages (`max_pages`), so no rule failure was missed.
+- **Fix:** judge_v2 ends the user prompt of a run without request text with a reminder to answer `reason_quality` only, and the system prompt shows the reduced reply shape (D-035). judge_v1 stays frozen. The parser stays strict.
+- **How it was verified:** The 15 stored replies. Tests check the reminder appears only without a request. The live check is judge_v2's tuning calibration, which includes kafka-filters run 3 book 3.
+
+## F-016 · judge_v2's tuning results looked better than they were: two unreadable replies, on two of the most discussed books (2026-11-23)
+
+- **What happened:** judge_v2 on calibration_v1's tuning half scored:
+  - `fits_request`: 13/16 exact (1 lenient, 2 stricter).
+  - `reason_quality`: 9/18 exact (5 lenient, 4 stricter), every disagreement within one step.
+
+  It read as an improvement on `fits_request`, a working form rule, and balanced, never-crossing errors on `reason_quality`. But 2 of the 20 books weren't judged: their replies were unreadable JSON, and the report counts only judged books.
+  - **#38 *Poesía vertical*** (argentine-novel, baseline): `reason_quality` nested inside another `reason_quality` object. The reply said fits_request **no** (poetry, not the novel the request named) and reason_quality **yes** ("lyrical intensity and existential depth"). Labels: no and no.
+  - **#10 *Historia mínima de México*** (history-nonfiction, agent): the key `justification` split by a line break (`"just\nification"`). The reply said fits_request **yes** and reason_quality **partial**. Labels: yes and no (after the D-036 correction).
+- **With both counted**, from the replies:
+
+  | Criterion | Pairs | Exact | Within one | Judge more lenient | Judge stricter |
+  | --- | --- | --- | --- | --- | --- |
+  | fits_request | 18 | 15/18 | 18/18 | 1 | 2 |
+  | reason_quality | 20 | 9/20 | 19/20 | 7 | 4 |
+  | reason_quality, yes vs partial or no | 20 | 10/20 | - | 6 | 4 |
+  | reason_quality, no vs partial or yes | 20 | 18/20 | - | 2 | 0 |
+
+  On the 18 parsed pairs the two-level views were 9/18 (5 lenient, 4 stricter) and 18/18.
+- **What it implies:**
+  - **Excluding the unreadable replies made the results look better than they were.** The form rule had not been measured on its one test book. The judge did confuse yes with no once (#38's reason links two poets only by mood, which v2 caps at partial). With both books counted, `reason_quality` leans lenient, 7 against 4.
+  - **The missing judgments weren't random.** They were two of the most discussed books in the calibration. Unjudged books have to be counted and named, not dropped silently.
+  - **The rest of the reasoning stands:** the remaining `reason_quality` disagreements sit on a fuzzy line between tone and concrete themes, or are cases where the judge applied the rubric more consistently than the labels (Levi, Benedetti). With 18 to 20 noisy pairs, more prompt iterations would risk overfitting the tuning labels.
+- **How it was detected:** Investigating the report's "18 judged" of 20. The stored judgments keep the raw replies.
+- **Cause:** Format, not criteria. The judge writes JSON as free text, and a small model at temperature 0 sometimes breaks it: F-015's pattern in v1, and now a split key and a nested object.
+- **Fix:** judge_v3 answers through a forced tool call with a generated schema (D-037). The calibration report shows both two-level views of `reason_quality` (D-038).
+- **How it was verified:** The two stored replies and labels, re-scored offline. judge_v3's tuning calibration is the live check.
+
+## F-017 · judge_v3 passes the held-out thresholds, but the "no vs rest" threshold can't see a judge that never says no (2026-11-24)
+
+- **What happened:** The single held-out look (D-034) with judge_v3 scored:
+
+  | Measure | Result | Threshold |
+  | --- | --- | --- |
+  | `fits_request` exact | 12/16 (75%), 3 lenient, 1 stricter | at least 70%: pass |
+  | `fits_request` within one step | 15/16 (94%) | at least 90%: pass |
+  | `reason_quality`, "no vs partial or yes" | 18/20 (90%) | at least 85%: pass |
+  | `reason_quality`, 3 levels | 9/20, 8 lenient, 3 stricter | none |
+  | `reason_quality`, "yes vs partial or no" | 10/20 | none (known limitation) |
+
+  Every book was judged. All three pre-registered thresholds pass.
+- **But the "no vs partial or yes" threshold was a poor choice.** On the held-out half the judge never said no, and it missed both reasons the user labeled no. Bad reasons are rare, so a judge that never says no would also score 18/20 (90%). Both halves combined, recall on no is 1 of 5 and precision is 1 of 1: when the judge says no it is right, but it almost never says it.
+- **The thresholds stay as recorded.** The judge passes formally, with this caveat. Changing a threshold after the look would be fitting it to the result, which is what D-034 set them in advance to prevent.
+- **The class-imbalance lesson:** agreement on a two-level split is dominated by the common class. When one verdict is rare, overall agreement says almost nothing about it. A threshold on a rare class should be set on its recall (how many of the real cases the judge catches), alongside precision, not on overall agreement.
+- **What it means for the eval report (judge scores of round 2):**
+  - **`fits_request` is reliable:** 75% exact and 94% within one on unseen books, errors leaning slightly lenient.
+  - **The share of bad reasons (`reason_quality` no) is a lower bound for both systems.** The judge catches about 1 in 5 of them. Both systems are judged by the same judge with the same blind spot, so the comparison between them holds. The absolute numbers don't.
+  - **"yes" on `reason_quality` is unreliable:** 10/20 at the yes split, leaning lenient (8 against 3 on three levels). The share of good reasons should not be read as a measure of quality.
+- **How it was detected:** Reading the held-out 3×3 table after the thresholds passed: the judge's "no" row was empty while the user's "no" column had 2 books.
+- **Fix:** The calibration report shows recall and precision per verdict for each criterion, on both halves, so a rare class can't hide behind overall agreement again. judge_v3 is frozen as the judge with these caveats (D-039). The held-out half is not used for further iteration (D-034).
+- **How it was verified:** Tests build a judge that never says no and check that its recall on no shows 0/2 even though split-at-no agreement stays high.
