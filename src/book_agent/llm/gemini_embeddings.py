@@ -6,7 +6,9 @@ vector). The translation lives in pure functions so it can be tested without net
 Errors map to the LLM error hierarchy like the chat adapter's (to_llm_error).
 """
 
-from collections.abc import Sequence
+import asyncio
+from collections.abc import Awaitable, Callable, Sequence
+from time import monotonic
 
 import httpx2
 from google import genai
@@ -30,13 +32,22 @@ class GeminiEmbedder:
         model: str = DEFAULT_EMBEDDING_MODEL,
         dimensions: int = DEFAULT_DIMENSIONS,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        min_interval_s: float = 0.0,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        clock: Callable[[], float] = monotonic,
     ) -> None:
+        """`min_interval_s` spaces requests out, to stay under a tokens-per-minute limit
+        when embedding many texts (the library index); queries need none."""
         if batch_size < 1:
             raise ValueError("batch_size must be at least 1")
         self._client = client
         self._model = model
         self._dimensions = dimensions
         self._batch_size = batch_size
+        self._min_interval_s = min_interval_s
+        self._sleep = sleep
+        self._clock = clock
+        self._last_request: float | None = None
         self.requests = 0  # sent requests, for plans and reports
 
     @property
@@ -51,6 +62,7 @@ class GeminiEmbedder:
         vectors: list[list[float]] = []
         for start in range(0, len(texts), self._batch_size):
             batch = texts[start : start + self._batch_size]
+            await self._wait_turn()
             self.requests += 1
             try:
                 # The SDK's `contents` union mentions types from optional deps (e.g. PIL).
@@ -67,6 +79,19 @@ class GeminiEmbedder:
                 raise LLMError(f"Gemini embedding failed: {type(e).__name__}") from e
             vectors += from_embed_response(response, expected=len(batch))
         return vectors
+
+    @property
+    def batch_size(self) -> int:
+        return self._batch_size
+
+    async def _wait_turn(self) -> None:
+        now = self._clock()
+        if self._last_request is not None:
+            wait = self._last_request + self._min_interval_s - now
+            if wait > 0:
+                await self._sleep(wait)
+                now += wait
+        self._last_request = now
 
 
 def to_embed_contents(texts: Sequence[str]) -> list[types.Content]:

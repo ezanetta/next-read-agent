@@ -73,6 +73,7 @@ from book_agent.prompts.user_content import one_line
 from book_agent.wiring import (
     DEFAULT_LIBRARY_PATHS,
     GOOGLE_BOOKS_TIMEOUT_S,
+    LIBRARY_EMBEDDING_INTERVAL_S,
     NO_CONTACT,
     build_book_search,
     build_embedder,
@@ -236,7 +237,7 @@ async def _library(
 ) -> int:
     paths = DEFAULT_LIBRARY_PATHS
     enrichment = load_enrichment(paths.enrichment)
-    embedder = build_embedder(settings)
+    embedder = build_embedder(settings, min_interval_s=LIBRARY_EMBEDDING_INTERVAL_S)
     documents = load_store(paths.documents, embedder)
     print(format_library_plan(profile, enrichment, documents, refresh=refresh))
     if not yes:
@@ -279,7 +280,8 @@ def format_library_plan(
             f"To describe: {len(todo)} (Open Library first, then at most {len(todo)} "
             "Google Books searches)",
             f"To embed: {len(stale)} now, plus any book whose description changes "
-            f"({documents.model}, {documents.dimensions} dimensions)",
+            f"({documents.model}, {documents.dimensions} dimensions, 20 per request, "
+            f"one request every {LIBRARY_EMBEDDING_INTERVAL_S:g} s)",
         ]
     )
 
@@ -319,13 +321,12 @@ async def library_command(
         lines.append(f"Failed: {summary.failed} books (not cached; rerun to retry)")
         code = EXIT_ERROR
     try:
-        embedded = await index_library(profile, enrichment, documents, embedder)
+        embedded = await index_library(
+            profile, enrichment, documents, embedder, checkpoint=save_documents
+        )
     except LLMError as e:
-        lines.append(f"error: embedding failed: {e}")
+        lines.append(f"error: embedding failed (finished batches are saved; rerun): {e}")
         return "\n".join(lines), EXIT_ERROR
-    finally:
-        if save_documents is not None:
-            save_documents(documents)
     lines.append(f"Embedded: {len(embedded)} books")
     lines += library_coverage(profile, enrichment)
     return "\n".join(lines), code

@@ -10,7 +10,7 @@ catalog needs one.
 
 import hashlib
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -68,21 +68,31 @@ def missing(items: Mapping[str, str], store: VectorStore) -> list[str]:
 
 
 async def ensure_vectors(
-    items: Mapping[str, str], store: VectorStore, embedder: Embedder
+    items: Mapping[str, str],
+    store: VectorStore,
+    embedder: Embedder,
+    *,
+    chunk_size: int = 20,
+    checkpoint: Callable[[VectorStore], None] | None = None,
 ) -> list[str]:
     """Embed the items that `missing` reports, store them, and return their ids.
 
-    `items` maps id to the exact text to embed (task formatting included). Raises the
-    embedder's LLMError on failure; vectors embedded before the failure stay stored.
+    `items` maps id to the exact text to embed (task formatting included). Items go to
+    the embedder `chunk_size` at a time and are stored after each chunk (`checkpoint` is
+    called then), so on the embedder's LLMError every chunk before it stays stored.
     """
     if (store.model, store.dimensions) != (embedder.model, embedder.dimensions):
         raise ValueError("the store holds another model's vectors: load it with load_store")
     todo = missing(items, store)
-    if not todo:
-        return []
-    vectors = await embedder.embed([items[i] for i in todo])
-    for item_id, vector in zip(todo, vectors, strict=True):
-        store.vectors[item_id] = StoredVector(text_sha256=text_hash(items[item_id]), vector=vector)
+    for start in range(0, len(todo), chunk_size):
+        chunk = todo[start : start + chunk_size]
+        vectors = await embedder.embed([items[i] for i in chunk])
+        for item_id, vector in zip(chunk, vectors, strict=True):
+            store.vectors[item_id] = StoredVector(
+                text_sha256=text_hash(items[item_id]), vector=vector
+            )
+        if checkpoint is not None:
+            checkpoint(store)
     return todo
 
 

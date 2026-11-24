@@ -118,10 +118,17 @@ async def catalog_services(
                 save_cache(services.works.cache, cache_path)
 
 
-def build_embedder(settings: Settings) -> GeminiEmbedder:
+# Indexing the library sends 20 books (~7,000 tokens) per request: one request every 20 s
+# stays under the free tier's ~30,000 tokens a minute. Queries are short and unpaced.
+LIBRARY_EMBEDDING_INTERVAL_S = 20.0
+
+
+def build_embedder(settings: Settings, *, min_interval_s: float = 0.0) -> GeminiEmbedder:
     """The embedder for library retrieval (D-041). Gemini only, whatever LLM_PROVIDER says."""
     client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
-    return GeminiEmbedder(client, model=settings.gemini_embedding_model)
+    return GeminiEmbedder(
+        client, model=settings.gemini_embedding_model, min_interval_s=min_interval_s
+    )
 
 
 @dataclass(frozen=True)

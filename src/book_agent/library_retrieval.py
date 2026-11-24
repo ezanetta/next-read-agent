@@ -57,10 +57,17 @@ def library_documents(profile: Profile, enrichment: EnrichmentCache) -> dict[str
 
 
 async def index_library(
-    profile: Profile, enrichment: EnrichmentCache, store: VectorStore, embedder: Embedder
+    profile: Profile,
+    enrichment: EnrichmentCache,
+    store: VectorStore,
+    embedder: Embedder,
+    *,
+    checkpoint: Callable[[VectorStore], None] | None = None,
 ) -> list[str]:
-    """Embed the pool books that have no vector for their current text. Returns their ids."""
-    return await ensure_vectors(library_documents(profile, enrichment), store, embedder)
+    """Embed the pool books that have no vector for their current text. Returns their ids.
+    `checkpoint` saves the store after each chunk, so a rate limit keeps what was done."""
+    documents = library_documents(profile, enrichment)
+    return await ensure_vectors(documents, store, embedder, checkpoint=checkpoint)
 
 
 class LibraryIndex:

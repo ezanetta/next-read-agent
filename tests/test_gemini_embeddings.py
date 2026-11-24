@@ -87,3 +87,19 @@ async def test_sdk_errors_map_to_llm_errors() -> None:
 def test_batch_size_must_be_positive() -> None:
     with pytest.raises(ValueError, match="batch_size"):
         embedder(_Models(), batch_size=0)
+
+
+async def test_requests_are_spaced_by_the_minimum_interval() -> None:
+    slept: list[float] = []
+    now = [100.0]
+
+    async def sleep(seconds: float) -> None:
+        slept.append(seconds)
+        now[0] += seconds  # time passes while sleeping
+
+    client = GeminiEmbedder(
+        cast(genai.Client, _Client(_Models())), batch_size=1, min_interval_s=20.0,
+        sleep=sleep, clock=lambda: now[0],
+    )  # fmt: skip
+    await client.embed(["a", "b", "c"])
+    assert slept == [20.0, 20.0] and client.requests == 3

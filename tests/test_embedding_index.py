@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from book_agent.embedding_index import (
     nearest,
     save_store,
 )
+from book_agent.llm.base import LLMRateLimitError
 from tests.fakes import FakeEmbedder
 
 
@@ -60,3 +62,22 @@ def test_cosine() -> None:
 def test_nearest_is_best_first_and_ties_keep_order() -> None:
     candidates = {"far": [0.0, 1.0], "tie1": [1.0, 0.0], "tie2": [2.0, 0.0], "mid": [1.0, 1.0]}
     assert [i for i, _ in nearest([1.0, 0.0], candidates, 3)] == ["tie1", "tie2", "mid"]
+
+
+class _FailsOnSecondCall(FakeEmbedder):
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        if self.calls:
+            raise LLMRateLimitError("429", retry_after=None, daily=False)
+        return await super().embed(texts)
+
+
+async def test_chunks_before_a_failure_stay_stored_and_checkpointed() -> None:
+    embedder = _FailsOnSecondCall()
+    store = VectorStore(model=embedder.model, dimensions=embedder.dimensions)
+    saved: list[int] = []
+    items = {"a": "one", "b": "two", "c": "three"}
+    with pytest.raises(LLMRateLimitError):
+        await ensure_vectors(items, store, embedder, chunk_size=2,
+                             checkpoint=lambda s: saved.append(len(s.vectors)))  # fmt: skip
+    assert sorted(store.vectors) == ["a", "b"] and saved == [2]
+    assert missing(items, store) == ["c"]
