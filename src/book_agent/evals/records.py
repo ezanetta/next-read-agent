@@ -33,10 +33,10 @@ validator, the tools or an adapter change in a way that affects results, so new 
 to a new folder instead of mixing with runs of the old code. Prompt changes don't need
 it: they have their own versions.
 
-1: round 1 (F-011), up to commit d8715a8.
+1: round 1 (F-011), up to commit 3f950f7.
 2: Google Books retries (D-027), forced submit and the notice at 2 turns left (D-028),
    " - " subtitles and combined volumes in title matching (D-029). Round 2 (F-013), up
-   to commit fd42982.
+   to commit 52f19aa.
 3: one retry on LLM server errors (D-030), interleaved run order (D-031)."""
 
 System = Literal["baseline", "agent"]
