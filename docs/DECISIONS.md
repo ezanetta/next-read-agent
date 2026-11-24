@@ -370,3 +370,14 @@ Significant design decisions: context, options considered, choice, and reason.
 - **Context:** F-016: almost every `reason_quality` disagreement is one step around partial. The three-level number mixes two different questions: does the judge agree on what a good reason is, and on what a bad one is.
 - **Choice:** The calibration report and the eval report's judge section show `reason_quality` three ways: the three levels, "yes vs partial or no" (split at yes), and "no vs partial or yes" (split at no). In calibration each is a row with exact agreement and direction. In the eval report each is a table per configuration and view.
 - **Reason:** On judge_v2's tuning half, splitting at yes gives 10/20 and splitting at no gives 18/20 (F-016): the judge separates bad reasons from the rest much better than it separates good ones. A single split would hide one of the two.
+
+## D-039 · judge_v3 is frozen as the judge (2026-11-24)
+
+- **Context:** judge_v3 (D-037) passed the three held-out thresholds set in advance (D-034): `fits_request` 75% exact and 94% within one, `reason_quality` "no vs partial or yes" 90%. It judged every book. But it almost never says no on `reason_quality` (recall 1 of 5 on both halves, F-017), and its yes is unreliable.
+- **Options:** Freeze v3 with the caveats; write a judge_v4 aimed at catching bad reasons; drop `reason_quality` from the eval report.
+- **Choice:** **judge_v3 is the judge.** It's the CLI's default (`DEFAULT_JUDGE_PROMPT`), and the round 2 judge scores come from it. v1, v2 and v3 all stay frozen. The eval report's judge scores are read with F-017's caveats: `fits_request` at face value; the share of bad reasons as a lower bound, compared between systems but not taken as an absolute; the share of good reasons not read as quality.
+- **Reason:**
+  - The held-out half has had its one look. A judge_v4 could only be tuned on the 20 tuning books and would have no unseen check left. D-034 rules out iterating on the held-out half.
+  - The judge's blind spot is the same for both systems, so comparisons still hold.
+  - Dropping `reason_quality` would throw away its one reliable signal: a "no" from the judge is right (precision 1 of 1).
+  - A better `reason_quality` judge needs new labeled data and probably the cited books' descriptions (B-002). That's a new calibration sample, not a prompt tweak.

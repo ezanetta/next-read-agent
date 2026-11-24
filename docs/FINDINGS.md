@@ -255,3 +255,27 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **Cause:** Format, not criteria. The judge writes JSON as free text, and a small model at temperature 0 sometimes breaks it: F-015's pattern in v1, and now a split key and a nested object.
 - **Fix:** judge_v3 answers through a forced tool call with a generated schema (D-037). The calibration report shows both two-level views of `reason_quality` (D-038).
 - **How it was verified:** The two stored replies and labels, re-scored offline. judge_v3's tuning calibration is the live check.
+
+## F-017 · judge_v3 passes the held-out thresholds, but the "no vs rest" threshold can't see a judge that never says no (2026-11-24)
+
+- **What happened:** The single held-out look (D-034) with judge_v3 scored:
+
+  | Measure | Result | Threshold |
+  | --- | --- | --- |
+  | `fits_request` exact | 12/16 (75%), 3 lenient, 1 stricter | at least 70%: pass |
+  | `fits_request` within one step | 15/16 (94%) | at least 90%: pass |
+  | `reason_quality`, "no vs partial or yes" | 18/20 (90%) | at least 85%: pass |
+  | `reason_quality`, 3 levels | 9/20, 8 lenient, 3 stricter | none |
+  | `reason_quality`, "yes vs partial or no" | 10/20 | none (known limitation) |
+
+  Every book was judged. All three pre-registered thresholds pass.
+- **But the "no vs partial or yes" threshold was a poor choice.** On the held-out half the judge never said no, and it missed both reasons the user labeled no. Bad reasons are rare, so a judge that never says no would also score 18/20 (90%). Both halves combined, recall on no is 1 of 5 and precision is 1 of 1: when the judge says no it is right, but it almost never says it.
+- **The thresholds stay as recorded.** The judge passes formally, with this caveat. Changing a threshold after the look would be fitting it to the result, which is what D-034 set them in advance to prevent.
+- **The class-imbalance lesson:** agreement on a two-level split is dominated by the common class. When one verdict is rare, overall agreement says almost nothing about it. A threshold on a rare class should be set on its recall (how many of the real cases the judge catches), alongside precision, not on overall agreement.
+- **What it means for the eval report (judge scores of round 2):**
+  - **`fits_request` is reliable:** 75% exact and 94% within one on unseen books, errors leaning slightly lenient.
+  - **The share of bad reasons (`reason_quality` no) is a lower bound for both systems.** The judge catches about 1 in 5 of them. Both systems are judged by the same judge with the same blind spot, so the comparison between them holds. The absolute numbers don't.
+  - **"yes" on `reason_quality` is unreliable:** 10/20 at the yes split, leaning lenient (8 against 3 on three levels). The share of good reasons should not be read as a measure of quality.
+- **How it was detected:** Reading the held-out 3×3 table after the thresholds passed: the judge's "no" row was empty while the user's "no" column had 2 books.
+- **Fix:** The calibration report shows recall and precision per verdict for each criterion, on both halves, so a rare class can't hide behind overall agreement again. judge_v3 is frozen as the judge with these caveats (D-039). The held-out half is not used for further iteration (D-034).
+- **How it was verified:** Tests build a judge that never says no and check that its recall on no shows 0/2 even though split-at-no agreement stays high.
