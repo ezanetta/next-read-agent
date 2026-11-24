@@ -279,3 +279,63 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **How it was detected:** Reading the held-out 3×3 table after the thresholds passed: the judge's "no" row was empty while the user's "no" column had 2 books.
 - **Fix:** The calibration report shows recall and precision per verdict for each criterion, on both halves, so a rare class can't hide behind overall agreement again. judge_v3 is frozen as the judge with these caveats (D-039). The held-out half is not used for further iteration (D-034).
 - **How it was verified:** Tests build a judge that never says no and check that its recall on no shows 0/2 even though split-at-no agreement stays high.
+
+## F-018 · Goodbooks-10k spike: the catalog misses most of this reader's library and the eval's hard cases (2026-11-24)
+
+- **What happened:** A spike before designing milestone B (a catalog with retrieval), to check the plan's assumption that Goodbooks-10k is a good base catalog. Dataset at commit `6dd165b` of `zygmuntz/goodbooks-10k`: `books.csv`, `book_tags.csv`, `tags.csv` and the 10,000 Goodreads XML files (`books_xml.zip`). Downloaded into `data/goodbooks/` (gitignored). No Gemini calls.
+- **License:** The repository is CC BY-SA 4.0 (attribution, share-alike for anything derived). The metadata was extracted from the Goodreads API's XML. Goodreads' current terms forbid automated collection and redistribution of their content. **Rule: the dataset and anything derived from it are never committed.** A download script fetches the pinned files and checks their SHA-256.
+- **What the dataset has without enrichment** (10,000 books):
+
+  | Field | Complete | Note |
+  | --- | --- | --- |
+  | `goodreads_book_id`, `work_id`, title, authors, ratings | 100% | `work_id` groups editions (D-011) |
+  | Original publication year | 100% | ends in 2017 |
+  | Description (XML only) | 97% | median 855 characters, with HTML |
+  | Page count (XML only) | 91% | of the edition in the dataset |
+  | Language | 89% | `eng`/`en-*` 8,726; `spa` 20; other 170 |
+  | ISBN-13 | 94% | exact in the XML; `books.csv` stores it as a float and loses digits |
+  | Tags (top Goodreads shelves) | 100% | about 100 per book, noisy (`to-read`, `favorites`) |
+  | Cover image | 67% | 3,332 are Goodreads' "no photo" placeholder |
+
+- **Coverage of the reader's library (226 books):**
+
+  | | Books | By Goodreads id or ISBN | Plus title + author |
+  | --- | --- | --- | --- |
+  | All | 226 | 39 (17%) | 80 (35%) |
+  | Liked (4 or 5 stars) | 93 | 15 (16%) | 41 (44%) |
+  | Read | 115 | 18 | 47 |
+  | To-read | 109 | 21 | 33 |
+
+  - Title + author also matches translations through `original_title` (*Rayuela* to *Hopscotch*, *La invención de Morel* to *The Invention of Morel*). 2 of its 41 matches are wrong (*Dune* matched *House Harkonnen*; *Guards! Guards!* matched its stage play), so the real total is about 78.
+  - **87 of the 226 books (38%) were first published after 2017**, the dataset's last year. Most of the unmatched books are recent, Spanish or niche.
+  - Only 2 matched books are Spanish editions. 48 library titles look Spanish, and 7 of them match.
+- **Coverage of the eval cases** (rough candidate counts from tags, language, pages and authors; "strict" requires a tag's count to be at least 2% of the book's top tag):
+
+  | Case | Candidates (loose / strict) | Comment |
+  | --- | --- | --- |
+  | library-only | 10,000 | |
+  | kafka-filters (en, ≤200 pages) | 1,143 | |
+  | short-and-light | 750 / 204 | humor, funny or light-reading tags, ≤250 pages |
+  | dystopia-filters (en, ≤400 pages) | 460 / 171 | |
+  | like-east-of-eden | 106 / 4 | family-saga tag; similarity needs embeddings, not tags |
+  | fantasy-no-sanderson (600–800 pages) | 221 / 143 | 116 / 32 with a magic tag |
+  | scifi-not-space | 2,816 / 997 | sci-fi without space tags |
+  | history-nonfiction (≤300 pages) | 353 / 86 | |
+  | borges-stories-es | 4 / 1 Spanish editions | 29 / 3 short-story collections in any language with Latin American tags |
+  | short-light-es (spa, ≤250 pages) | 4 | |
+  | argentine-novel | 10 books with Argentine tags | Only 3 are novels (*El túnel*, *Hopscotch*, *The Invention of Morel*), all on the reader's read or to-read shelves: **0 usable** |
+  | more-claire-keegan | 0 by Keegan | 54 / 7 Irish literary fiction |
+  | litrpg | 2 / 0 | both are comic fantasy, not litRPG |
+
+  The four Spanish cases, the Argentine novel, Claire Keegan and litRPG are 7 of the 13 cases. The catalog has almost nothing for them.
+- **Enrichment cost:**
+  - **Google Books is mostly not needed to fill fields.** The XML already has pages, description, language and ISBN. Google Books would add a store link, and Spanish editions of English works, which the catalog lacks. The validator keeps checking existence live either way.
+  - **Daily quota:** the default commonly reported for the Books API is 1,000 requests per day per project. The project's real limit is on its Quotas page in the Google Cloud console, which this spike couldn't check. At 1,000 per day, one ISBN lookup per book is 10 days for 10,000 books. If the real limit is higher, it's about an hour at a few requests per second.
+  - **Embeddings:** about 2.7 million tokens for 10,000 books (title, authors, description without HTML, top 15 tags; about 270 tokens per book, 2,100 at most), under the 8,192-token input limit. Free-tier embedding limits are only shown in AI Studio. `batchEmbedContents` puts many texts in one request, which helps a requests-per-minute limit but not a tokens-per-minute limit. The Batch API supports embeddings, but its documented quotas cover paid tiers only, so free-tier support is unconfirmed. `gemini-embedding-001` and `gemini-embedding-2` have incompatible vector spaces: pick one and re-embed if it changes.
+- **How it was detected:** Scripts over the downloaded files and the reader's export, using the project's own `titles_match` and `authors_match` for title matching. Live checks: GitHub (license, releases), Goodreads' terms, and the Gemini API docs.
+- **What it implies:**
+  - **Goodbooks-10k is a popularity snapshot of English books up to 2017.** For this reader it can serve as a backlist (popular English fiction, history, fantasy), but not as the whole catalog. Retrieval from it alone would make 7 of the 13 eval cases worse than today's live search.
+  - **Live search stays a tool.** A catalog can add fast, filterable, similarity-based candidates. Recent, Spanish and niche books still need Google Books.
+  - **"Catalog" may mean another source.** Open Library's data dumps are multilingual and not limited to 2017. Their license and description coverage are unverified: worth a second spike before committing to Goodbooks.
+- **Fix:** None; this informs the milestone B design.
+- **How it was verified:** The counts above, from local files only. The spike scripts are throwaway and not committed.
