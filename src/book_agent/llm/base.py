@@ -240,7 +240,7 @@ class LLMResponse(BaseModel, frozen=True):
 
 
 class LLMClient(Protocol):
-    """One LLM provider. Adapters live next to this module (gemini.py, claude.py)."""
+    """One LLM provider. Adapters live next to this module (gemini.py)."""
 
     async def complete(
         self,

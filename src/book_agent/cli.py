@@ -3,7 +3,7 @@
     uv run python -m book_agent.cli baseline ["free-text request"] [--language en]
         [--max-pages 400] [--min-pages 200] [--csv PATH] [--cache PATH]
     uv run python -m book_agent.cli agent ["free-text request"] [same options as baseline]
-        [--prompt agent_v1|agent_v2] [--verbose]
+        [--prompt agent_v1|agent_v2|agent_v3] [--verbose]
     uv run python -m book_agent.cli works [--refresh] [--csv PATH] [--cache PATH]
 
 baseline: flags override filters interpreted from the request text, field by field.
