@@ -394,3 +394,33 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   - **The library extract is useful now:** Open Library descriptions for 151 library books, at no API cost, feed the proposed library retrieval design.
 - **Fix:** None; this informs milestone B.
 - **How it was verified:** The counts above, from the dump extracts. The extracts were deleted afterwards except a 240 KB file of the library's matched works (`data/openlibrary/library_works.json`). The spike scripts are throwaway and not committed.
+
+## F-020 · The agent_v4 round lost 18 of 39 runs to Gemini overload, and the judge 18 of 63 books (2026-11-24)
+
+- **What happened:** The agent_v4 round (harness 3, D-041) ended with 18 runs stopped by infrastructure: 16 `llm_error` and 2 `interpretation`. p95 run latency was 111 s. judge_v3 then failed on 18 of 63 books. Failures looked clustered by case: short-light-es lost all 3 runs.
+- **Cause: Gemini flash-lite was overloaded, not the agent or retrieval:**
+  - **Every failure is a server or network error after the one retry D-030 allows:** 17 HTTP 503 UNAVAILABLE ("This model is currently experiencing high demand") and 1 `RemoteProtocolError` (a dropped connection) during request interpretation. All 18 judge errors are also 503s after a retry.
+  - **The failure rate grew over the session.** Runs 1, 2 and 3 of every case (interleaved, D-031) lost 4, 3 and 11 runs. 19% of all agent requests (44 of 226) failed on the first attempt, against 3% in F-014. 26 of those succeeded on the retry; 18 failed twice. In the judge run (15:29–15:39), 19 of the 45 successful calls also needed a retry.
+  - **The service was slow, too:** successful calls averaged 6.4 s (p95 27 s, max 77 s), against 2.9 s (p95 4.3 s) in round 2. Calls per run didn't change: 6.4, against 6.3 in round 2. That explains the 111 s p95: slow calls and retry pauses, not more turns.
+  - **Retrieval isn't involved:** 0 retrieval errors. The 31 runs with request text all got their 8 books, from cached query vectors.
+  - **The case clustering is timing:** each case keeps the same position in every pass. short-light-es is the last case of each pass, and its runs started at 14:02, 14:13 and 14:26, inside the worst minutes.
+- **How it was detected:** The report's outcomes, then the records' call lists (error statuses, retries, latencies, start times) and the stored judgments. No live calls.
+- **What it implies:** D-041's count thresholds (distinct books cited, books cited in 3 or more cases) need a complete round. Half a round lowers them mechanically, and the surviving runs aren't a random sample of cases. They aren't evaluated until the round is complete.
+- **Fix:** Rerun only the runs and judgments that an outage stopped, replacing them and backing up the old files (D-042). Running at a quieter time of day is the practical mitigation. One retry stays the policy.
+- **How it was verified:** All 39 records and 63 judgments of the round, read offline.
+
+## F-021 · Library retrieval: negation is ignored, irrelevant books still fill the list, and citations repeat within a case (2026-11-24)
+
+- **What happened:** The per-case listing of retrieved and cited books (D-041) from the agent_v4 round shows three patterns. These are observations from the runs that completed, not an evaluation: D-041's thresholds wait for the complete round (F-020), and nothing changes yet.
+- **Embeddings ignore negation:**
+  - fantasy-no-sanderson ("... but nothing from Brandon Sanderson") retrieved 4 Sanderson books: *Mistborn: The Final Empire*, *The Way of Kings*, *The Well of Ascension*, *The Hero of Ages*. Four reasons then cited Sanderson books as references. No recommended book was by Sanderson, so the exclusion held for the picks, but the reasons lean on the author the reader asked to avoid.
+  - scifi-not-space retrieved *Project Hail Mary* and *The Dark Forest*, both about space.
+  - The vector for "not about X" lies close to X: the query's words drive similarity, and "not" barely moves it.
+- **With nothing similar in the library, retrieval still returns 8 books:** for history-nonfiction, the list was unrelated fiction (*Ficciones*, *The Three-Body Problem*, *Bestiario*...). The agent ignored it: none of its 3 citations came from the list. Top-k has no similarity floor, so "least dissimilar" shows up as "most related".
+- **Repetition within a case:** *Small Things Like These* is cited in 6 reasons for more-claire-keegan (plus *Foster* in 3), and *East of Eden* in 6 for like-east-of-eden. Retrieval puts the obvious reference first in every run, and the agent cites it every time. That's reasonable for one run and monotonous over three. D-041's cross-case reuse measure doesn't see it.
+- **Two more observations (mine, for your review):**
+  - **Hub books:** *Las cosas que perdimos en el fuego* and *Te di ojos y miraste las tinieblas* were retrieved in 7 of the 11 cases with retrieval, whatever the request. Generic descriptions sit close to many queries, so part of "the same favorites" problem moves into retrieval.
+  - **Parser noise reaches the query:** fantasy-no-sanderson got two different lists for the same request. The parsed preference sometimes contains stray newlines (F-010's pattern). After whitespace collapsing, "magic system\n, but" became "system , but", which no longer matches the request text, so the query appended a near-duplicate preference and embedded a slightly different text.
+- **How it was detected:** The report's "Retrieved and cited per case" section and the records' parsed preferences.
+- **Fix:** None yet, by decision. Options for later, not applied: a similarity floor (or "no related books" when nothing is close), stripping negated clauses from the query, preferring variety across runs or against hub books, and normalizing the preference before comparing it with the text.
+- **How it was verified:** The 21 completed records' `retrieved` and `cited_titles` fields, rendered by `citation_report`.

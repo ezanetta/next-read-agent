@@ -419,3 +419,14 @@ Significant design decisions: context, options considered, choice, and reason.
   - **Harness:** the round runs on harness 3 (one retry on LLM server errors, D-030; interleaved order, D-031), while round 2 ran on harness 2. Retries mostly change outage failures, so acceptance is compared with outages excluded.
   - **If a threshold is missed,** the result is reported as it is. agent_v4 is not tuned against this round's per-case listing and then rerun to pass.
 - **Reason:** Relevant citations need the model to see what the reader's books are about, not just their titles. Retrieval puts the right few books in front of it without dropping the full list it needs for exclusion. Thresholds fixed in advance keep the round an honest test (as with D-034).
+
+## D-042 · Rerun runs and judgments lost to infrastructure failures, keeping backups (2026-11-24)
+
+- **Context:** The agent_v4 round lost 18 of 39 runs and 18 of 63 judgments to Gemini 503s and a dropped connection (F-020). D-032 already treats such runs as outages, not agent behavior, and reports acceptance without them. But D-041's count-based thresholds need every run, and the surviving cases may be a biased sample.
+- **Options:** Rerun the whole round; accept half a round; rerun only what an outage stopped.
+- **Choice:**
+  - **`evals run --rerun-infrastructure`** plans, besides unrecorded runs, the recorded runs that `infrastructure_failure` (D-032) flags: a catalog outage, or a last LLM call that failed with a 5xx or a network error, at any step. Rejections, exhausted turns, unparseable replies and other errors are never rerun: they are the system's behavior.
+  - **A rerun replaces the record.** Just before the new record is saved, the old one is copied, and that run's judgments (every judge) are moved, to `data/evals/_backups/<case set>/<UTC timestamp>/`, keeping their relative paths. An interrupted rerun leaves the old record in place. Nothing that reads results looks in `_backups`.
+  - **`evals judge`** already retries books whose judgment failed. Before replacing an errored judgment, it now copies the file to the same kind of backup folder, and its plan says how many books retry an error.
+  - **Order:** rerun the runs first, then judge. A replaced run's old judgments are moved aside, so its new books get judged.
+- **Reason:** It keeps the round complete without repeating 21 valid runs, which would use quota and add noise. It follows D-032's line between outages and behavior. Backups keep every replaced file inspectable. Only failures that are outages by D-032's rule get rerun.
