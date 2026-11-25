@@ -4,7 +4,11 @@ import type { components, paths } from "./schema";
 /** The API's base URL: the Vite proxy in dev, VITE_API_BASE_URL in production. */
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
-export const api = createClient<paths>({ baseUrl: API_BASE_URL });
+// fetch is looked up on each call (not captured once), so tests can replace it.
+export const api = createClient<paths>({
+  baseUrl: API_BASE_URL,
+  fetch: (request) => globalThis.fetch(request),
+});
 
 export type Schemas = components["schemas"];
 export type ProfileSummary = Schemas["ProfileSummary"];

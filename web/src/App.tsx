@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, type RouteObject, RouterProvider } from "react-router";
 import { Layout } from "./components/Layout";
+import { ChoosePage } from "./features/choose/ChoosePage";
 
 function Placeholder({ title }: { title: string }) {
   return (
@@ -11,7 +12,7 @@ function Placeholder({ title }: { title: string }) {
 }
 
 export const routes: RouteObject[] = [
-  { path: "/", element: <Placeholder title="Choose a library" /> },
+  { path: "/", element: <ChoosePage /> },
   { path: "/p/:profileId", element: <Placeholder title="Library" /> },
   { path: "/p/:profileId/ask", element: <Placeholder title="Ask" /> },
   { path: "/p/:profileId/results/:runId", element: <Placeholder title="Results" /> },

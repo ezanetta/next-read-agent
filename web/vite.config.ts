@@ -20,5 +20,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     css: false,
+    // An absolute base URL: Node's Request can't parse "/api".
+    env: { VITE_API_BASE_URL: "http://api.test" },
   },
 });
