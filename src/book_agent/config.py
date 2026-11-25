@@ -1,9 +1,10 @@
 """Application settings loaded from environment variables and the .env file."""
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 GeminiThinkingLevel = Literal["minimal", "low", "medium", "high"]
@@ -28,6 +29,11 @@ class Settings(BaseSettings):
     # Contact details for Open Library's User-Agent (an email or a project URL). Never
     # hardcoded: the repo is public. Without it, work-key matching is off.
     open_library_contact: str | None = None
+    # The demo API (D-043).
+    demo_db_path: Path = Path("data/demo.sqlite3")  # needs a persistent disk in production
+    owner_profile_path: Path | None = None  # cli export-profile's file; never committed
+    profile_ttl_days: int = Field(default=3, ge=1, le=30)
+    frontend_origins: str = ""  # comma-separated origins allowed by CORS
 
     @field_validator("open_library_contact")
     @classmethod

@@ -6,6 +6,7 @@ The CLIs use these factories today; FastAPI dependencies will use the same ones.
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import timedelta
 from pathlib import Path
 
 import httpx
@@ -13,7 +14,11 @@ from google import genai
 
 from book_agent.adapters.google_books import GoogleBooksSearch
 from book_agent.adapters.open_library import OpenLibraryWorks, user_agent
+from book_agent.adapters.sqlite_store import SqliteSearchCache, SqliteStore
+from book_agent.agent_run import DEFAULT_AGENT_PROMPT
+from book_agent.api.services import ApiServices, utc_now
 from book_agent.config import Settings
+from book_agent.demo_profiles import SAMPLES_DIR, load_presets
 from book_agent.domain.models import Profile
 from book_agent.embedding_index import load_store, save_store
 from book_agent.library_enrichment import DEFAULT_ENRICHMENT_PATH, load_enrichment
@@ -23,7 +28,14 @@ from book_agent.llm.gemini import GeminiClient
 from book_agent.llm.gemini_embeddings import GeminiEmbedder
 from book_agent.llm.retrying import RetryingLLM
 from book_agent.ports import BookSearch, WorkDescriptions, WorkResolver
-from book_agent.work_keys import CachedWorkResolver, WorkKeyCache, coverage, save_cache
+from book_agent.work_keys import (
+    DEFAULT_CACHE_PATH,
+    CachedWorkResolver,
+    WorkKeyCache,
+    coverage,
+    load_cache,
+    save_cache,
+)
 
 OPEN_LIBRARY_TIMEOUT_S = 10
 
@@ -160,3 +172,41 @@ def build_library_retriever(
         embedder,
         save_queries=lambda store: save_store(store, paths.queries),
     )
+
+
+@asynccontextmanager
+async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
+    """The demo API's services (D-043): store, presets, catalog clients and the LLM.
+
+    The work key cache is read-only here: no file is written by API requests.
+    """
+    store = SqliteStore(settings.demo_db_path)
+    now = utc_now()
+    store.purge_expired(now)
+    presets = load_presets(SAMPLES_DIR, settings.owner_profile_path, now)
+    async with AsyncExitStack() as stack:
+        http = await stack.enter_async_context(httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S))
+        works: WorkResolver | None = None
+        open_library = build_open_library_http(settings)
+        if open_library is not None:
+            await stack.enter_async_context(open_library)
+            works = CachedWorkResolver(
+                build_work_resolver(open_library), load_cache(DEFAULT_CACHE_PATH)
+            )
+        try:
+            yield ApiServices(
+                profiles=store,
+                search_cache=SqliteSearchCache(store),
+                books=build_book_search(settings, http),
+                llm=build_llm(settings),
+                prompt=DEFAULT_AGENT_PROMPT,
+                works=works,
+                presets=presets,
+                profile_ttl=timedelta(days=settings.profile_ttl_days),
+            )
+        finally:
+            store.close()
+
+
+def cors_origins(settings: Settings) -> list[str]:
+    return [o.strip() for o in settings.frontend_origins.split(",") if o.strip()]
