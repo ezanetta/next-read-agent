@@ -33,10 +33,10 @@ validator, the tools or an adapter change in a way that affects results, so new 
 to a new folder instead of mixing with runs of the old code. Prompt changes don't need
 it: they have their own versions.
 
-1: round 1 (F-011), up to commit d8715a8.
+1: round 1 (F-011), up to commit 3f950f7.
 2: Google Books retries (D-027), forced submit and the notice at 2 turns left (D-028),
    " - " subtitles and combined volumes in title matching (D-029). Round 2 (F-013), up
-   to commit fd42982.
+   to commit 52f19aa.
 3: one retry on LLM server errors (D-030), interleaved run order (D-031)."""
 
 System = Literal["baseline", "agent"]
@@ -97,6 +97,10 @@ class EvalRecord(BaseModel, frozen=True):
     iterations: int = 0  # agent turns; 0 for the baseline
     submissions: int = 0  # validated submissions (the baseline's one reply counts as one)
     repair_turn_used: bool = False
+    # Library retrieval (D-041): titles shown to the agent, most related first, and the
+    # error when retrieval was attempted and failed. Empty for prompts without retrieval.
+    retrieved: list[str] = []
+    retrieval_error: str | None = None
 
 
 def profile_sha256(profile: Profile) -> str:
@@ -114,6 +118,12 @@ class RecordStore:
 
     def exists(self, case_set: str, config: RunConfig, case_id: str, run_index: int) -> bool:
         return self.path(case_set, config, case_id, run_index).exists()
+
+    def load(
+        self, case_set: str, config: RunConfig, case_id: str, run_index: int
+    ) -> EvalRecord | None:
+        path = self.path(case_set, config, case_id, run_index)
+        return EvalRecord.model_validate_json(path.read_bytes()) if path.exists() else None
 
     def save(self, record: EvalRecord) -> Path:
         path = self.path(record.case_set, record.config, record.case_id, record.run_index)

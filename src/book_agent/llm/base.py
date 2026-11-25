@@ -262,6 +262,27 @@ class LLMClient(Protocol):
         ...
 
 
+class Embedder(Protocol):
+    """Turns texts into vectors with one embedding model (D-041).
+
+    `model` and `dimensions` identify the vector space: vectors from different models
+    or sizes can't be compared, so caches store them with every vector.
+    """
+
+    @property
+    def model(self) -> str: ...
+
+    @property
+    def dimensions(self) -> int: ...
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        """One vector per text, in order. Any task formatting is already in the text.
+
+        Raises LLMRateLimitError, LLMServerError, LLMNetworkError or LLMError on failure.
+        """
+        ...
+
+
 # --- Helpers for adapters ---------------------------------------------------
 
 

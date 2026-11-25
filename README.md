@@ -68,7 +68,7 @@ flowchart LR
 - **The validator** reports violations and unknowns, never a silent pass (D-002). "Already read" works at the level of works, not editions. Title variants and ISBNs come first, then Open Library work keys, then an LLM same-work judge for translations (D-011, D-012).
 - **The acceptance policy** is a pure function. It rejects violations and books it can't verify. The model gets a tool error listing each problem and replaces only the rejected books (D-014).
 
-More: [ARCHITECTURE.md](docs/ARCHITECTURE.md) (components and patterns), [DECISIONS.md](docs/DECISIONS.md) (39 design decisions), [FINDINGS.md](docs/FINDINGS.md) (17 real failures).
+More: [ARCHITECTURE.md](docs/ARCHITECTURE.md) (components and patterns), [DECISIONS.md](docs/DECISIONS.md) (42 design decisions), [FINDINGS.md](docs/FINDINGS.md) (22 findings).
 
 ## Results
 
@@ -108,11 +108,12 @@ A selection. Each one links to the full entry: what happened, how it was detecte
 - **Small error rates compound across steps ([F-012](docs/FINDINGS.md#f-012--the-8-agent-failures-in-f-011-transient-503s-and-late-submission-2026-11-19), [F-014](docs/FINDINGS.md#f-014--the-4-llm_error-runs-in-f-013-transient-gemini-503s-clustered-in-time-2026-11-22)).** A 1.6% Google Books 503 rate failed 4 runs in 39 (10%), because a run makes about 10 requests and one failed validation lookup stops it. Retries in a decorator fixed that. Gemini 503s later clustered in time, so the report now gives an acceptance rate that leaves out outages.
 - **A parser that silently dropped constraints ([F-009](docs/FINDINGS.md#f-009--the-request-parser-drops-soft-constraints-it-cant-turn-into-filters-2026-11-18), [F-010](docs/FINDINGS.md#f-010--request_parser_v2-equal-score-cheaper-errors-2026-11-18)).** `request_parser_v1` removed "between 200 and 400 pages" because it couldn't express the minimum. v2 scored the same 21/23, but its errors were harmless repeats, not lost constraints. Equal accuracy hid errors of very different cost.
 - **Keeping prompt examples out of the eval set ([D-035](docs/DECISIONS.md#d-035--judge_v2-independent-criteria-concrete-connections-form-mismatch-is-a-no-2026-11-23)).** A check of the judge's examples against the calibration sample found "nothing by Brandon Sanderson" and "around 700 pages", taken from eval requests. That's the evaluation leaking into the prompt, so they were replaced.
+- **RAG over the reader's library didn't add variety ([F-022](docs/FINDINGS.md#f-022--agent_v4-library-retrieval-meets-4-of-7-thresholds-and-misses-the-diversity-goal-2026-11-25)).** agent_v4 embeds the reader's books and shows the agent the 8 most related to each request, so reasons would cite relevant books instead of the same favorites. The agent followed it (83% of citations), acceptance and cost held, but the diversity goal set in advance was missed: 38 distinct books cited against 36, and 4 reused across cases against 6. Retrieval brought its own hub books, ignored negation ("nothing from Sanderson" retrieved Sanderson) and filled the list when nothing was similar. A negative result, kept as recorded. agent_v3 stays the default.
 - **Class imbalance hid a blind spot ([F-017](docs/FINDINGS.md#f-017--judge_v3-passes-the-held-out-thresholds-but-the-no-vs-rest-threshold-cant-see-a-judge-that-never-says-no-2026-11-24)).** The judge passed a pre-registered 85% threshold on spotting bad reasons with 90%, while never saying "no" on the held-out half. Bad reasons are rare, so a judge that never says no would score the same. Rare classes need recall, not overall agreement. The thresholds stayed as recorded, and the caveat goes with the numbers.
 
 ## Limitations and next steps
 
-- **Retrieval is a live Google Books search.** The plan is a catalog (Goodbooks-10k enriched once with Google Books) in Postgres + pgvector: about 50 candidates by SQL filters and vector similarity, and the LLM reranks. It's cheaper and faster than live search, with no rate limits.
+- **Candidate retrieval is a live Google Books search.** Two spikes chose the catalog for a later step: Open Library's CC0 dumps, which cover 69–81% of the library and the Spanish cases, while Goodbooks-10k stops in 2017 and missed 7 of 13 cases ([F-018](docs/FINDINGS.md), [F-019](docs/FINDINGS.md), [D-040](docs/DECISIONS.md)). The embedding pipeline built for library retrieval is generic enough to reuse.
 - **Only Gemini is implemented.** The `LLMClient` contract is provider-neutral, and a Claude adapter is next, so results can be compared across providers.
 - **No API or UI yet.** FastAPI serves only a health check. Next: the recommendation endpoint, rate limits for a public demo, and a small React UI.
 - **Quality isn't a hard rule.** An author exclusion ("nothing by X") is only a soft preference ([B-001](docs/BACKLOG.md)). The judge can't see the cited books' descriptions ([B-002](docs/BACKLOG.md)).
@@ -132,7 +133,7 @@ uv run python -m book_agent.cli agent "algo corto y liviano" --language es
 uv run python -m book_agent.cli baseline "a dystopia under 400 pages"
 ```
 
-Add `--verbose` to the agent for a trace of each turn. Checks: `uv run pytest` (live API tests are excluded; run them with `-m live`), `uv run ruff check .`, `uv run pyright`.
+Add `--verbose` to the agent for a trace of each turn. The library-retrieval variant (agent_v4, F-022) needs its index first: `uv run python -m book_agent.cli library --yes`, then `agent --prompt agent_v4`. Checks: `uv run pytest` (live API tests are excluded; run them with `-m live`), `uv run ruff check .`, `uv run pyright`.
 
 ### Running the evals
 

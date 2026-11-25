@@ -6,7 +6,8 @@ import pytest
 import respx
 
 from book_agent.adapters.open_library import BASE_URL, OpenLibraryWorks, user_agent
-from book_agent.ports import WorkLookupError, WorkResolver
+from book_agent.domain.works import WorkInfo
+from book_agent.ports import WorkDescriptions, WorkLookupError, WorkResolver
 
 ISBN = "9789871165070"  # La metamorfosis, from the real Goodreads export
 ISBN_URL = f"{BASE_URL}/isbn/{ISBN}.json"
@@ -121,3 +122,51 @@ def test_user_agent_names_the_app_its_version_and_the_contact() -> None:
     agent = user_agent("someone@example.com")
     assert agent.startswith("book-agent/")
     assert agent.endswith(" (someone@example.com)")
+
+
+WORK_URL = f"{BASE_URL}/works/OL498556W.json"
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "A man wakes up as  an insect.",
+        {"type": "/type/text", "value": "A man wakes up as  an insect."},
+    ],
+)
+async def test_work_info_reads_both_description_shapes(
+    works: OpenLibraryWorks, respx_mock: respx.MockRouter, description: object
+) -> None:
+    body = {"description": description, "subjects": [f"s{i}" for i in range(20)]}
+    respx_mock.get(WORK_URL).mock(return_value=httpx.Response(200, json=body))
+    info = await works.work_info("/works/OL498556W")
+    assert info is not None and info.description == "A man wakes up as an insect."
+    assert info.subjects == tuple(f"s{i}" for i in range(15))
+    described: WorkDescriptions = works  # pyright checks the Protocol here
+    assert described is works
+
+
+async def test_work_info_without_description(
+    works: OpenLibraryWorks, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get(WORK_URL).mock(return_value=httpx.Response(200, json={"title": "X"}))
+    assert await works.work_info("/works/OL498556W") == WorkInfo()
+
+
+async def test_unknown_work_is_none(works: OpenLibraryWorks, respx_mock: respx.MockRouter) -> None:
+    respx_mock.get(WORK_URL).mock(return_value=httpx.Response(404))
+    assert await works.work_info("/works/OL498556W") is None
+
+
+@pytest.mark.parametrize("key", ["OL498556W", "/works/../books/x", "/books/OL1M"])
+async def test_work_info_rejects_other_keys(works: OpenLibraryWorks, key: str) -> None:
+    with pytest.raises(WorkLookupError, match="not a work key"):
+        await works.work_info(key)
+
+
+async def test_work_info_server_error_raises(
+    works: OpenLibraryWorks, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get(WORK_URL).mock(return_value=httpx.Response(503))
+    with pytest.raises(WorkLookupError, match="503"):
+        await works.work_info("/works/OL498556W")

@@ -4,9 +4,11 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from book_agent.domain.library import RelatedBook
 from book_agent.domain.models import CatalogBook
-from book_agent.domain.works import SameWorkAnswer, SameWorkVerdict, WorkRef
+from book_agent.domain.works import SameWorkAnswer, SameWorkVerdict, WorkInfo, WorkRef
 from book_agent.llm.base import (
+    LLMError,
     LLMResponse,
     Message,
     StopReason,
@@ -85,6 +87,75 @@ class FakeWorkResolver:
         if isbn13 in self.failing:
             raise WorkLookupError("Open Library returned HTTP 503")
         return self.works.get(isbn13)
+
+
+class FakeWorkDescriptions:
+    """WorkDescriptions backed by a work key -> WorkInfo table. Keys in `failing` raise."""
+
+    def __init__(
+        self, works: dict[str, WorkInfo] | None = None, failing: set[str] | None = None
+    ) -> None:
+        self.works = dict(works or {})
+        self.failing = set(failing or set())
+        self.lookups: list[str] = []
+
+    async def work_info(self, work_key: str) -> WorkInfo | None:
+        self.lookups.append(work_key)
+        if work_key in self.failing:
+            raise WorkLookupError("Open Library returned HTTP 503")
+        return self.works.get(work_key)
+
+
+class FakeEmbedder:
+    """Embedder with deterministic bag-of-words vectors: texts that share words are
+    similar, so retrieval tests read naturally. `fail` makes every call raise.
+
+    Records each call's texts.
+    """
+
+    def __init__(self, *, dimensions: int = 64, model: str = "fake-embedding", fail: bool = False):
+        self._dimensions = dimensions
+        self._model = model
+        self.fail = fail
+        self.calls: list[list[str]] = []
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def dimensions(self) -> int:
+        return self._dimensions
+
+    async def embed(self, texts: Sequence[str]) -> list[list[float]]:
+        self.calls.append(list(texts))
+        if self.fail:
+            raise LLMError("embedding failed")
+        return [self._vector(t) for t in texts]
+
+    def _vector(self, text: str) -> list[float]:
+        vector = [0.0] * self._dimensions
+        for word in _words(text) - _STOPWORDS:
+            vector[sum(map(ord, word)) % self._dimensions] += 1.0
+        return vector
+
+
+_STOPWORDS = {"title", "text", "task", "search", "result", "query", "by", "subjects", "a", "the"}
+
+
+class FakeLibraryRetriever:
+    """LibraryRetriever that returns fixed books, or raises LLMError when `fail` is set."""
+
+    def __init__(self, books: list[RelatedBook] | None = None, *, fail: bool = False) -> None:
+        self.books = list(books or [])
+        self.fail = fail
+        self.queries: list[str] = []
+
+    async def related_books(self, query: str) -> list[RelatedBook]:
+        self.queries.append(query)
+        if self.fail:
+            raise LLMError("embedding failed")
+        return list(self.books)
 
 
 class FakeSameWorkJudge:

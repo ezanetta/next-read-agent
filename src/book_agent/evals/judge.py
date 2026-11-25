@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from book_agent.domain.models import Book, Profile
 from book_agent.domain.recommendations import Filters
+from book_agent.evals.backups import back_up
 from book_agent.evals.pacing import QuotaExhausted
 from book_agent.evals.records import EvalRecord, RecordStore
 from book_agent.files import write_atomic
@@ -420,6 +421,14 @@ def plan_books(
     return planned
 
 
+def retried_errors(
+    plan: Iterable[PlannedBook], store: JudgmentStore, case_set: str, judge: JudgeConfig
+) -> int:
+    """How many planned books already have a stored judgment, which can only be an error."""
+    stored = store.judged(case_set, judge)
+    return sum(ref_of(p.record, p.item_index) in stored for p in plan)
+
+
 async def run_judge(
     plan: list[PlannedBook],
     *,
@@ -430,13 +439,19 @@ async def run_judge(
     store: JudgmentStore,
     git_commit: str | None,
     progress: Callable[[int, int, PlannedBook], None] | None = None,
+    backup: Path | None = None,
 ) -> JudgeSummary:
     """Judge each planned book and save its record's file after each. A quota stop ends
-    the loop: finished judgments stay, and a rerun resumes."""
+    the loop: finished judgments stay, and a rerun resumes.
+
+    A book whose stored judgment is an error gets judged again; with `backup`, the file
+    holding the error is copied there first, once per file (D-042).
+    """
     prompt = JUDGE_PROMPTS.get(judge.prompt_id)
     if prompt is None:
         raise ValueError(f"unknown judge prompt {judge.prompt_id!r}")
     summary = JudgeSummary()
+    backed_up: set[Path] = set()
     for number, planned in enumerate(plan, start=1):
         if progress is not None:
             progress(number, len(plan), planned)
@@ -457,6 +472,11 @@ async def run_judge(
             git_commit=git_commit,
             judged_at=datetime.now(UTC),
         )
+        replaced = [j for j in file.judgments if j.item_index == planned.item_index]
+        path = store.path(case_set, judge, record.config.id, record.case_id, record.run_index)
+        if backup is not None and replaced and path not in backed_up:
+            back_up(path, store.records.root, backup)
+            backed_up.add(path)
         file.judgments = [j for j in file.judgments if j.item_index != planned.item_index]
         file.judgments.append(judgment)
         store.save(file)

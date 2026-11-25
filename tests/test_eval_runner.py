@@ -5,15 +5,16 @@ from pathlib import Path
 import pytest
 
 from book_agent.config import get_settings
+from book_agent.domain.library import RelatedBook
 from book_agent.domain.recommendations import Filters, Recommendation
 from book_agent.evals import __main__ as evals_cli
 from book_agent.evals.cases import LoadedCases, RecommendCaseSet, load_recommend_cases
 from book_agent.evals.pacing import QuotaExhausted
 from book_agent.evals.records import RecordStore, RunConfig
 from book_agent.evals.runner import GitState, RunSummary, estimate_requests, plan_runs, run_plan
-from book_agent.llm.base import LLMResponse, ToolCallPart
-from book_agent.prompts import agent_v2
-from tests.fakes import FakeLLM, text_response, tool_call_response
+from book_agent.llm.base import LLMResponse, LLMServerError, ToolCallPart
+from book_agent.prompts import agent_v2, agent_v4
+from tests.fakes import FakeLibraryRetriever, FakeLLM, text_response, tool_call_response
 from tests.library_data import CLEAN_THREE, PROFILE, catalog
 
 BASELINE = RunConfig(system="baseline", prompt_id="baseline_v1", model="fake-model")
@@ -213,3 +214,71 @@ def test_cli_prints_the_plan_and_needs_yes(
     assert "Estimated LLM requests: min 6, typical 18" in out
     assert out.rstrip().endswith("Add --yes to start.")
     assert not (tmp_path / "r").exists()  # nothing ran, nothing written
+
+
+async def test_agent_v4_records_what_retrieval_showed(tmp_path: Path) -> None:
+    loaded = load_recommend_cases("set_v1", write_cases(tmp_path, CASES))
+    store = RecordStore(tmp_path / "results")
+    config = AGENT.model_copy(update={"prompt_id": "agent_v4"})
+    retriever = FakeLibraryRetriever(
+        [RelatedBook(title="Ficciones", author="Borges", rating=None, description=None)]
+    )
+    await run_plan(
+        plan_runs(loaded, config, 1, store), loaded, config, prompt=agent_v4.PROMPT,
+        profile=PROFILE, llm=FakeLLM([submit(), interpreted("a classic"), submit()]),
+        books=catalog(), works=None, store=store, git=GIT, retriever=retriever,
+    )  # fmt: skip
+    retrieved = {r.case_id: r.retrieved for r in store.load_all("set_v1")}
+    assert retrieved == {"library-only": [], "a-classic": ["Ficciones"]}  # no text, no retrieval
+
+
+async def test_reruns_replace_infrastructure_failures_and_back_up_the_old_files(
+    tmp_path: Path,
+) -> None:
+    outage = LLMServerError("Gemini API error 503 UNAVAILABLE", status=503)
+    store, _ = await run(tmp_path, AGENT, [outage, interpreted("a classic"), submit()])
+    loaded = load_recommend_cases("set_v1", tmp_path / "cases")
+    failed = store.load("set_v1", AGENT, "library-only", 1)
+    assert failed is not None and failed.error_kind == "llm_error"
+    judgment = (
+        store.root / "set_v1" / "judgments" / "judge_v3-m" / AGENT.id / "library-only__run1.json"
+    )
+    judgment.parent.mkdir(parents=True)
+    judgment.write_text("{}")
+
+    assert plan_runs(loaded, AGENT, 1, store).to_run == []  # by default, recorded is done
+    plan = plan_runs(loaded, AGENT, 1, store, rerun_infrastructure=True)
+    assert [(p.case.id, p.replaces) for p in plan.to_run] == [("library-only", "llm_error")]
+    assert plan.already_recorded == 1  # a-classic was accepted: it stays
+
+    backup = tmp_path / "results" / "_backups" / "set_v1" / "20261124T000000Z"
+    summary = await run_plan(
+        plan, loaded, AGENT, prompt=agent_v2.PROMPT, profile=PROFILE, llm=FakeLLM([submit()]),
+        books=catalog(), works=None, store=store, git=GIT, backup=backup,
+    )  # fmt: skip
+    assert (summary.done, summary.replaced) == (1, 1)
+    rerun = store.load("set_v1", AGENT, "library-only", 1)
+    assert rerun is not None and rerun.error_kind is None
+    old = backup / "set_v1" / AGENT.id / "library-only__run1.json"
+    assert "llm_error" in old.read_text()
+    assert not judgment.exists()
+    assert (backup / judgment.relative_to(store.root)).read_text() == "{}"
+    assert len(store.load_all("set_v1")) == 2  # backups are never read as records
+
+
+async def test_reruns_need_a_backup_folder(tmp_path: Path) -> None:
+    outage = LLMServerError("503", status=503)
+    store, _ = await run(tmp_path, AGENT, [outage, interpreted("a classic"), submit()])
+    loaded = load_recommend_cases("set_v1", tmp_path / "cases")
+    plan = plan_runs(loaded, AGENT, 1, store, rerun_infrastructure=True)
+    with pytest.raises(ValueError, match="backup"):
+        await run_plan(
+            plan, loaded, AGENT, prompt=agent_v2.PROMPT, profile=PROFILE, llm=FakeLLM([]),
+            books=catalog(), works=None, store=store, git=GIT,
+        )  # fmt: skip
+
+
+async def test_rejections_and_other_errors_are_not_rerun(tmp_path: Path) -> None:
+    store, _ = await run(tmp_path, BASELINE, [text_response("not json"), text_response("Sure!")])
+    loaded = load_recommend_cases("set_v1", tmp_path / "cases")
+    assert plan_runs(loaded, BASELINE, 1, store, rerun_infrastructure=True).to_run == []

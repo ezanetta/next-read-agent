@@ -21,6 +21,8 @@ class Settings(BaseSettings):
     # Flash-Lite has the most generous free tier; 3.6/3.8 Flash are for eval comparisons.
     gemini_model: str = "gemini-3.5-flash-lite"
     gemini_thinking_level: GeminiThinkingLevel | None = None  # None = the model's default
+    # Library retrieval (D-041). Changing it re-embeds the library on the next index build.
+    gemini_embedding_model: str = "gemini-embedding-2"
     anthropic_api_key: SecretStr | None = None
     google_books_api_key: SecretStr | None = None
     # Contact details for Open Library's User-Agent (an email or a project URL). Never

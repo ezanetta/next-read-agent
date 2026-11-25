@@ -279,3 +279,192 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **How it was detected:** Reading the held-out 3×3 table after the thresholds passed: the judge's "no" row was empty while the user's "no" column had 2 books.
 - **Fix:** The calibration report shows recall and precision per verdict for each criterion, on both halves, so a rare class can't hide behind overall agreement again. judge_v3 is frozen as the judge with these caveats (D-039). The held-out half is not used for further iteration (D-034).
 - **How it was verified:** Tests build a judge that never says no and check that its recall on no shows 0/2 even though split-at-no agreement stays high.
+
+## F-018 · Goodbooks-10k spike: the catalog misses most of this reader's library and the eval's hard cases (2026-11-24)
+
+- **What happened:** A spike before designing milestone B (a catalog with retrieval), to check the plan's assumption that Goodbooks-10k is a good base catalog. Dataset at commit `6dd165b` of `zygmuntz/goodbooks-10k`: `books.csv`, `book_tags.csv`, `tags.csv` and the 10,000 Goodreads XML files (`books_xml.zip`). Downloaded into `data/goodbooks/` (gitignored). No Gemini calls.
+- **License:** The repository is CC BY-SA 4.0 (attribution, share-alike for anything derived). The metadata was extracted from the Goodreads API's XML. Goodreads' current terms forbid automated collection and redistribution of their content. **Rule: the dataset and anything derived from it are never committed.** A download script fetches the pinned files and checks their SHA-256.
+- **What the dataset has without enrichment** (10,000 books):
+
+  | Field | Complete | Note |
+  | --- | --- | --- |
+  | `goodreads_book_id`, `work_id`, title, authors, ratings | 100% | `work_id` groups editions (D-011) |
+  | Original publication year | 100% | ends in 2017 |
+  | Description (XML only) | 97% | median 855 characters, with HTML |
+  | Page count (XML only) | 91% | of the edition in the dataset |
+  | Language | 89% | `eng`/`en-*` 8,726; `spa` 20; other 170 |
+  | ISBN-13 | 94% | exact in the XML; `books.csv` stores it as a float and loses digits |
+  | Tags (top Goodreads shelves) | 100% | about 100 per book, noisy (`to-read`, `favorites`) |
+  | Cover image | 67% | 3,332 are Goodreads' "no photo" placeholder |
+
+- **Coverage of the reader's library (226 books):**
+
+  | | Books | By Goodreads id or ISBN | Plus title + author |
+  | --- | --- | --- | --- |
+  | All | 226 | 39 (17%) | 80 (35%) |
+  | Liked (4 or 5 stars) | 93 | 15 (16%) | 41 (44%) |
+  | Read | 115 | 18 | 47 |
+  | To-read | 109 | 21 | 33 |
+
+  - Title + author also matches translations through `original_title` (*Rayuela* to *Hopscotch*, *La invención de Morel* to *The Invention of Morel*). 2 of its 41 matches are wrong (*Dune* matched *House Harkonnen*; *Guards! Guards!* matched its stage play), so the real total is about 78.
+  - **87 of the 226 books (38%) were first published after 2017**, the dataset's last year. Most of the unmatched books are recent, Spanish or niche.
+  - Only 2 matched books are Spanish editions. 48 library titles look Spanish, and 7 of them match.
+- **Coverage of the eval cases** (rough candidate counts from tags, language, pages and authors; "strict" requires a tag's count to be at least 2% of the book's top tag):
+
+  | Case | Candidates (loose / strict) | Comment |
+  | --- | --- | --- |
+  | library-only | 10,000 | |
+  | kafka-filters (en, ≤200 pages) | 1,143 | |
+  | short-and-light | 750 / 204 | humor, funny or light-reading tags, ≤250 pages |
+  | dystopia-filters (en, ≤400 pages) | 460 / 171 | |
+  | like-east-of-eden | 106 / 4 | family-saga tag; similarity needs embeddings, not tags |
+  | fantasy-no-sanderson (600–800 pages) | 221 / 143 | 116 / 32 with a magic tag |
+  | scifi-not-space | 2,816 / 997 | sci-fi without space tags |
+  | history-nonfiction (≤300 pages) | 353 / 86 | |
+  | borges-stories-es | 4 / 1 Spanish editions | 29 / 3 short-story collections in any language with Latin American tags |
+  | short-light-es (spa, ≤250 pages) | 4 | |
+  | argentine-novel | 10 books with Argentine tags | Only 3 are novels (*El túnel*, *Hopscotch*, *The Invention of Morel*), all on the reader's read or to-read shelves: **0 usable** |
+  | more-claire-keegan | 0 by Keegan | 54 / 7 Irish literary fiction |
+  | litrpg | 2 / 0 | both are comic fantasy, not litRPG |
+
+  The four Spanish cases, the Argentine novel, Claire Keegan and litRPG are 7 of the 13 cases. The catalog has almost nothing for them.
+- **Enrichment cost:**
+  - **Google Books is mostly not needed to fill fields.** The XML already has pages, description, language and ISBN. Google Books would add a store link, and Spanish editions of English works, which the catalog lacks. The validator keeps checking existence live either way.
+  - **Daily quota:** the default commonly reported for the Books API is 1,000 requests per day per project. The project's real limit is on its Quotas page in the Google Cloud console, which this spike couldn't check. At 1,000 per day, one ISBN lookup per book is 10 days for 10,000 books. If the real limit is higher, it's about an hour at a few requests per second.
+  - **Embeddings:** about 2.7 million tokens for 10,000 books (title, authors, description without HTML, top 15 tags; about 270 tokens per book, 2,100 at most), under the 8,192-token input limit. Free-tier embedding limits are only shown in AI Studio. `batchEmbedContents` puts many texts in one request, which helps a requests-per-minute limit but not a tokens-per-minute limit. The Batch API supports embeddings, but its documented quotas cover paid tiers only, so free-tier support is unconfirmed. `gemini-embedding-001` and `gemini-embedding-2` have incompatible vector spaces: pick one and re-embed if it changes.
+- **How it was detected:** Scripts over the downloaded files and the reader's export, using the project's own `titles_match` and `authors_match` for title matching. Live checks: GitHub (license, releases), Goodreads' terms, and the Gemini API docs.
+- **What it implies:**
+  - **Goodbooks-10k is a popularity snapshot of English books up to 2017.** For this reader it can serve as a backlist (popular English fiction, history, fantasy), but not as the whole catalog. Retrieval from it alone would make 7 of the 13 eval cases worse than today's live search.
+  - **Live search stays a tool.** A catalog can add fast, filterable, similarity-based candidates. Recent, Spanish and niche books still need Google Books.
+  - **"Catalog" may mean another source.** Open Library's data dumps are multilingual and not limited to 2017. Their license and description coverage are unverified: worth a second spike before committing to Goodbooks.
+- **Fix:** None; this informs the milestone B design.
+- **How it was verified:** The counts above, from local files only. The spike scripts are throwaway and not committed.
+
+## F-019 · Open Library dumps spike: a license-clean, current catalog that covers this reader, with descriptions as the weak spot (2026-11-24)
+
+- **What happened:** A second catalog spike after F-018, on Open Library's monthly dumps of 2026-10-31: works (4.1 GB compressed), editions (12.6 GB), authors (0.8 GB), reading log and ratings. The files were downloaded in parallel byte ranges (21.5 minutes) and processed in one pass each (7 minutes). Only small extracts were kept in `data/` (gitignored), and the dumps were deleted afterwards. No Gemini calls.
+- **License:** Open Library's FAQ asks that catalog contributions be released under CC0 1.0. The licensing page says the Internet Archive "does not assert any new copyright", with a caveat about existing rights on some contributions. **A public demo can serve data derived from the catalog records.** Descriptions copied in from publishers are the one gray area worth an attribution line. Covers have no monthly dump and no clear license: link to the Covers API, never redistribute.
+- **Size and completeness (whole dump):**
+  - 41.7 million works. 4.7% have a description, 50% have subjects.
+  - 56.9 million editions. 63% have a page count, 64% an ISBN, 87% a language, 97% a year.
+  - Languages by edition: English 32.2 million, German 3.6 million, French 2.8 million, **Spanish 2.0 million**.
+- **A manageable subset by popularity** (reading-log entries plus ratings per work; 13.2 million log rows and 1.1 million ratings over 3.4 million works):
+
+  | Works with at least | Works | Description | Subjects | An edition with pages | An ISBN-13 | A Spanish edition |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | 5 signals | 451,797 | 41% | 85% | 88% | 81% | 24,051 (5%) |
+  | 20 signals | 76,964 | 62% | 88% | 92% | 88% | 10,209 (13%) |
+  | 100 signals | 9,897 | 79% | 91% | 95% | 94% | 3,509 (35%) |
+
+- **How current:** editions per publication year peak in 2021 (2.3 million), then fall: 2023 0.8 million, 2024 0.45 million, 2025 0.21 million, 2026 so far 77,000. Cataloging lags by a year or two, but recent books are there: 30,927 works in the ≥5 subset first appeared in 2020–2024. Goodbooks stops at 2017.
+- **Coverage of the reader's library** (by ISBN through cached work keys, then title + author with the project's matchers; 2 or 3 of the 51 title matches are combined volumes, such as *Magician / Assassin's Apprentice*):
+
+  | Popularity cutoff | All 226 books | Liked (93) |
+  | --- | --- | --- |
+  | none | 207 (92%) | 86 (92%) |
+  | ≥5 | 182 (81%) | 81 (87%) |
+  | ≥20 | 155 (69%) | 71 (76%) |
+  | ≥100 | 97 (43%) | 43 (46%) |
+
+  - Books first published after 2017: 75 of 87 match (Goodbooks: none). Spanish-looking titles: 41 of 48 (Goodbooks: 7).
+  - 151 of the 207 matched works have a description, including 67 of the 93 liked books (72%).
+- **Coverage of the eval cases** (works with ≥5 / ≥20 signals; from subjects, edition languages and median page counts; subjects are noisy, so the counts are rough):
+
+  | Case | Candidates | Goodbooks (F-018) | Comment |
+  | --- | --- | --- | --- |
+  | kafka-filters (English edition, ≤200 pages) | 117,614 / 20,657 | 1,143 | |
+  | short-and-light (≤250 pages, humor) | 9,897 / 2,228 | 204–750 | |
+  | dystopia-filters (English, ≤400 pages) | 432 / 169 | 171–460 | |
+  | like-east-of-eden (family saga) | 113 / 41 | 4–106 | similarity needs embeddings |
+  | fantasy-no-sanderson (600–800 pages) | 632 / 275 | 143–221 | |
+  | scifi-not-space | 10,430 / 2,629 | 997–2,816 | |
+  | history-nonfiction (≤300 pages) | 14,866 / 1,642 | 86–353 | "history" subjects include self-help; needs a stricter filter |
+  | borges-stories-es (Spanish edition + short stories) | 1,078 / 643 | 1–4 | includes translations, which is right for a Spanish request |
+  | short-light-es (Spanish edition, ≤250 pages) | 11,214 / 4,399 | 4 | |
+  | argentine-novel | 146 / 48 with Argentine subjects | 0 usable | *Sobre héroes y tumbas*, Mariana Enríquez and more, beyond the reader's shelves |
+  | more-claire-keegan | 6 by Keegan | 0 | *Walk the Blue Fields*, *Antarctica* and *The Forester's Daughter* aren't in the library |
+  | litrpg | 30 / 10 | 0 | mostly the *Dungeon Crawler Carl* series, which the reader knows; still thin |
+
+- **How it was detected:** Scripts over the dumps and the reader's export, using `titles_match` and `authors_match` from `domain/matching.py`. Live checks: Open Library's dumps, licensing and FAQ pages.
+- **What it implies:**
+  - **Open Library is a viable catalog where Goodbooks wasn't:** a clean license for a public demo, books up to 2025, Spanish editions, and 69–81% of this reader's library at a ≥20 or ≥5 cutoff. Every Spanish case and the Argentine novel go from near zero to hundreds of candidates.
+  - **Descriptions are the weak spot:** 62% at ≥20 signals. The rest would be embedded from title, author and subjects. Filling them from Google Books would take about 29,000 requests at ≥20, about 29 days of the 1,000-per-day quota: not worth it for the whole catalog.
+  - **Embedding cost:** about 77,000 works × about 200 tokens is about 15 million tokens, about 8.5 hours at 30,000 tokens per minute, and over 1,000 requests per day unless texts are batched per request. A local multilingual embedding model would avoid the quota and is worth comparing.
+  - **Page counts and languages are per edition:** a filter must ask "is there an edition that fits", which is what the validator already does with Google Books.
+  - **The library extract is useful now:** Open Library descriptions for 151 library books, at no API cost, feed the proposed library retrieval design.
+- **Fix:** None; this informs milestone B.
+- **How it was verified:** The counts above, from the dump extracts. The extracts were deleted afterwards except a 240 KB file of the library's matched works (`data/openlibrary/library_works.json`). The spike scripts are throwaway and not committed.
+
+## F-020 · The agent_v4 round lost 18 of 39 runs to Gemini overload, and the judge 18 of 63 books (2026-11-24)
+
+- **What happened:** The agent_v4 round (harness 3, D-041) ended with 18 runs stopped by infrastructure: 16 `llm_error` and 2 `interpretation`. p95 run latency was 111 s. judge_v3 then failed on 18 of 63 books. Failures looked clustered by case: short-light-es lost all 3 runs.
+- **Cause: Gemini flash-lite was overloaded, not the agent or retrieval:**
+  - **Every failure is a server or network error after the one retry D-030 allows:** 17 HTTP 503 UNAVAILABLE ("This model is currently experiencing high demand") and 1 `RemoteProtocolError` (a dropped connection) during request interpretation. All 18 judge errors are also 503s after a retry.
+  - **The failure rate grew over the session.** Runs 1, 2 and 3 of every case (interleaved, D-031) lost 4, 3 and 11 runs. 19% of all agent requests (44 of 226) failed on the first attempt, against 3% in F-014. 26 of those succeeded on the retry; 18 failed twice. In the judge run (15:29–15:39), 19 of the 45 successful calls also needed a retry.
+  - **The service was slow, too:** successful calls averaged 6.4 s (p95 27 s, max 77 s), against 2.9 s (p95 4.3 s) in round 2. Calls per run didn't change: 6.4, against 6.3 in round 2. That explains the 111 s p95: slow calls and retry pauses, not more turns.
+  - **Retrieval isn't involved:** 0 retrieval errors. All 31 runs that reached retrieval got their 8 books. The other 8 had no request text (6) or failed at interpretation (2).
+  - **The case clustering is timing:** each case keeps the same position in every pass. short-light-es is the last case of each pass, and its runs started at 14:02, 14:13 and 14:26, inside the worst minutes.
+- **How it was detected:** The report's outcomes, then the records' call lists (error statuses, retries, latencies, start times) and the stored judgments. No live calls.
+- **What it implies:** D-041's count thresholds (distinct books cited, books cited in 3 or more cases) need a complete round. Half a round lowers them mechanically, and the surviving runs aren't a random sample of cases. They aren't evaluated until the round is complete.
+- **Fix:** Rerun only the runs and judgments that an outage stopped, replacing them and backing up the old files (D-042). Running at a quieter time of day is the practical mitigation. One retry stays the policy.
+- **How it was verified:** All 39 records and 63 judgments of the round, read offline.
+
+## F-021 · Library retrieval: negation is ignored, irrelevant books still fill the list, and citations repeat within a case (2026-11-24)
+
+- **What happened:** The per-case listing of retrieved and cited books (D-041) from the agent_v4 round shows three patterns. These are observations from the runs that completed, not an evaluation: D-041's thresholds wait for the complete round (F-020), and nothing changes yet.
+- **Embeddings ignore negation:**
+  - fantasy-no-sanderson ("... but nothing from Brandon Sanderson") retrieved 4 Sanderson books: *Mistborn: The Final Empire*, *The Way of Kings*, *The Well of Ascension*, *The Hero of Ages*. Four reasons then cited Sanderson books as references. No recommended book was by Sanderson, so the exclusion held for the picks, but the reasons lean on the author the reader asked to avoid.
+  - scifi-not-space retrieved *Project Hail Mary* and *The Dark Forest*, both about space.
+  - The vector for "not about X" lies close to X: the query's words drive similarity, and "not" barely moves it.
+- **With nothing similar in the library, retrieval still returns 8 books:** for history-nonfiction, the list was unrelated fiction (*Ficciones*, *The Three-Body Problem*, *Bestiario*...). The agent ignored it: none of its 3 citations came from the list. Top-k has no similarity floor, so "least dissimilar" shows up as "most related".
+- **Repetition within a case:** *Small Things Like These* is cited in 6 reasons for more-claire-keegan (plus *Foster* in 3), and *East of Eden* in 6 for like-east-of-eden. Retrieval puts the obvious reference first in every run, and the agent cites it every time. That's reasonable for one run and monotonous over three. D-041's cross-case reuse measure doesn't see it.
+- **Two more observations (mine, for your review):**
+  - **Hub books:** *Las cosas que perdimos en el fuego* and *Te di ojos y miraste las tinieblas* were retrieved in 7 of the 11 cases with retrieval, whatever the request. Generic descriptions sit close to many queries, so part of "the same favorites" problem moves into retrieval.
+  - **Parser noise reaches the query:** fantasy-no-sanderson got two different lists for the same request. The parsed preference sometimes contains stray newlines (F-010's pattern). After whitespace collapsing, "magic system\n, but" became "system , but", which no longer matches the request text, so the query appended a near-duplicate preference and embedded a slightly different text.
+- **How it was detected:** The report's "Retrieved and cited per case" section and the records' parsed preferences.
+- **Fix:** None yet, by decision. Options for later, not applied: a similarity floor (or "no related books" when nothing is close), stripping negated clauses from the query, preferring variety across runs or against hub books, and normalizing the preference before comparing it with the text.
+- **How it was verified:** The 21 completed records' `retrieved` and `cited_titles` fields, rendered by `citation_report`.
+
+## F-022 · agent_v4 (library retrieval) meets 4 of 7 thresholds and misses the diversity goal (2026-11-25)
+
+- **What happened:** The agent_v4 round on recommend_v1 is complete: 39 of 39 runs, with the 18 outage runs of F-020 rerun (D-042). Compared with round 2's agent_v3 records against D-041's thresholds, set before the run:
+
+  | Measure | agent_v3 (round 2) | agent_v4 | Threshold | Result |
+  | --- | --- | --- | --- | --- |
+  | Citations from the retrieved 8 | n/a | 84/101 (83%) | at least 60% | met |
+  | Accepted, outages excluded | 33/35 | 39/39 | at most 3 runs fewer | met |
+  | `cites_library` rejections | 4 | 4 | no more | met |
+  | Input tokens per run | 25,553 | +2,485 | reported | as expected |
+  | Library books cited in 3 or more cases | 6 | 4 | at most 3 | missed |
+  | Distinct library books cited | 36 | 38 | at least 45 | missed |
+  | judge_v3 `reason_quality` no | 2/103 | 3/115 | no higher share | missed by one book |
+  | judge_v3 `fits_request` no | 4/86 | 8/97 | no higher share | missed |
+
+  **4 of the 7 thresholds are met, and the diversity goal, the point of D-041, is missed.**
+- **Caveats:**
+  - **Two commits:** the report warns that the runs come from two git commits. They differ only in the eval tooling for reruns and backups (D-042): the agent, prompts, validator and retrieval are identical.
+  - **Two unjudged books:** 2 of the 117 recommended books still have a judge error, so the judge rows count 115 books.
+- **The model follows retrieval, so diversity is capped by what retrieval returns.** 83% of citations name a retrieved book. The likely causes are the ones F-021 saw on the partial round:
+  - **Hub books:** reuse moved rather than disappeared. Round 2 reused *Las cosas que perdimos en el fuego*, *Dune* and *La metamorfosis*. agent_v4 reuses *Ficciones* (5 cases), *Bestiario*, *Cadáver exquisito* and *Las cosas que perdimos en el fuego* (3 each), books that retrieval returns for many unrelated requests.
+  - **Negation in the query:** "nothing from Brandon Sanderson" retrieves Sanderson, and "not about space" retrieves space books.
+  - **Repetition within a case:** the same top book is retrieved in every run and cited each time (*Small Things Like These*, *East of Eden*), which D-041's measures don't count.
+  - **Retrieval with no similar books:** history-nonfiction gets 8 unrelated books.
+- **The 8 `fits_request` no books (investigation, records and judgments only):**
+
+  | Case | agent_v4 no | agent_v3 no | Recommendations judged no |
+  | --- | --- | --- | --- |
+  | more-claire-keegan | 4 | 3 | *Brooklyn* (Tóibín) ×3, *Last Stories* (Trevor): not by Keegan |
+  | like-east-of-eden | 2 | 1 | *Los divagantes* (Nettel, short stories), *La hija del Caníbal* (Montero, a mystery) |
+  | fantasy-no-sanderson | 1 | 0 | *The Traitor Baru Cormorant*: 400 pages against "around 700" |
+  | history-nonfiction | 1 | 0 | Duras' *El dolor*: the judge calls it fiction; it's an autobiographical text, a debatable call |
+
+  - **Mostly the same failures as agent_v3:** 6 of the 8 are in the two cases where agent_v3 also got no verdicts, with the same pattern. Brooklyn and Last Stories are the same Irish fill-ins agent_v3 recommended for "more Claire Keegan" (F-008's judgment call). agent_v3 also answered East of Eden with a short Spanish-language book.
+  - **Anchoring to the retrieved books isn't visible:** the reasons cite retrieved books, as asked, but no recommendation is pulled toward a retrieved book's neighborhood in a way that breaks the request.
+    - Keegan: the misses are the same as agent_v3's.
+    - East of Eden: the reasons cite only *East of Eden* itself.
+    - history-nonfiction: the cited book wasn't among the retrieved ones.
+    - Fantasy is the only arguable case: the miss is justified by a retrieved Sanderson book (*The Hero of Ages*, "political intrigue"), but the problem is its length, which no library book suggests.
+  - **Verdict: noise, not a retrieval effect.** 4 more books out of about 90, concentrated in cases that already failed, is within run-to-run noise (F-013). The data doesn't support the anchoring hypothesis, though 8 books can't rule out a small effect.
+- **How it was detected:** `evals report` with the citation section and judge_v3 scores. The investigation used the stored records and judgments only.
+- **Fix:** None, by D-041: agent_v4 isn't tuned against this round, and agent_v3 stays the default. The retrieval changes these causes suggest are in the backlog (B-003), as a new version to be measured on its own.
+- **How it was verified:** The report and the records. The threshold numbers were recomputed from the records (38 distinct, 4 reused, 84/101 retrieved, 3/115, 8/97).

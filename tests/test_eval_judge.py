@@ -16,6 +16,7 @@ from book_agent.evals.judge import (
     judgeable_items,
     parse_judgment,
     plan_books,
+    retried_errors,
     run_judge,
 )
 from book_agent.evals.pacing import QuotaExhausted
@@ -173,3 +174,18 @@ async def test_an_unknown_judge_prompt_is_refused(tmp_path: Path) -> None:
             profiles=profiles, llm=FakeLLM([]), store=JudgmentStore(RecordStore(tmp_path)),
             git_commit=None,
         )  # fmt: skip
+
+
+async def test_retrying_an_error_backs_up_the_file_first(tmp_path: Path) -> None:
+    store, _, _ = await judge_all(tmp_path, [verdict_reply(), text_response("oops")])
+    plan = plan_books([RECORD], store, "set_v1", JUDGE)
+    assert retried_errors(plan, store, "set_v1", JUDGE) == 1
+    backup = tmp_path / "_backups" / "set_v1" / "stamp"
+    await run_judge(
+        plan, case_set="set_v1", judge=JUDGE, profiles=profiles,
+        llm=FakeLLM([verdict_reply()]), store=store, git_commit="abc", backup=backup,
+    )  # fmt: skip
+    live = store.path("set_v1", JUDGE, AGENT.id, "desert", 1)
+    old = backup / live.relative_to(tmp_path)
+    assert "unreadable reply" in old.read_text() and "unreadable reply" not in live.read_text()
+    assert len(store.load_all("set_v1", JUDGE)) == 1  # the backup is outside the judge folder
