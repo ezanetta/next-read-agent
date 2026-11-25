@@ -133,7 +133,7 @@ uv run python -m book_agent.cli agent "algo corto y liviano" --language es
 uv run python -m book_agent.cli baseline "a dystopia under 400 pages"
 ```
 
-Add `--verbose` to the agent for a trace of each turn. Checks: `uv run pytest` (live API tests are excluded; run them with `-m live`), `uv run ruff check .`, `uv run pyright`.
+Add `--verbose` to the agent for a trace of each turn. The library-retrieval variant (agent_v4, F-022) needs its index first: `uv run python -m book_agent.cli library --yes`, then `agent --prompt agent_v4`. Checks: `uv run pytest` (live API tests are excluded; run them with `-m live`), `uv run ruff check .`, `uv run pyright`.
 
 ### Running the evals
 
