@@ -4,6 +4,7 @@ import { Layout } from "./components/Layout";
 import { AskPage } from "./features/ask/AskPage";
 import { ChoosePage } from "./features/choose/ChoosePage";
 import { LibraryPage } from "./features/library/LibraryPage";
+import { ResultsPage } from "./features/results/ResultsPage";
 
 function Placeholder({ title }: { title: string }) {
   return (
@@ -17,7 +18,7 @@ export const routes: RouteObject[] = [
   { path: "/", element: <ChoosePage /> },
   { path: "/p/:profileId", element: <LibraryPage /> },
   { path: "/p/:profileId/ask", element: <AskPage /> },
-  { path: "/p/:profileId/results/:runId", element: <Placeholder title="Results" /> },
+  { path: "/p/:profileId/results/:runId", element: <ResultsPage /> },
   { path: "/limit", element: <Placeholder title="Demo limit" /> },
 ];
 

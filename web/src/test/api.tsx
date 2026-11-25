@@ -3,6 +3,7 @@ import { render } from "@testing-library/react";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { vi } from "vitest";
 import { routes } from "../App";
+import type { RecommendationResult } from "../api/client";
 
 type Handler = (request: Request) => Response | Promise<Response>;
 
@@ -80,7 +81,7 @@ export function sse(events: object[]): Response {
   return new Response(text, { headers: { "Content-Type": "text/event-stream" } });
 }
 
-export const RESULT = {
+export const RESULT: RecommendationResult = {
   profile_id: "p",
   request: "a short novel",
   books: [1, 2, 3].map((i) => ({

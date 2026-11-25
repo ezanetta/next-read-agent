@@ -1,5 +1,5 @@
-import { type KeyboardEvent, useId, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { type KeyboardEvent, useEffect, useId, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import type { LibraryBook, PickedBook, ProfileSummary } from "../../api/client";
 import { ApiError } from "../../api/errors";
 import { useProfile, useProfileBooks } from "../../api/queries";
@@ -51,6 +51,16 @@ export function LibraryPage() {
   const navigate = useNavigate();
   const [shelf, setShelf] = useState<Shelf>("read");
   const tabsId = useId();
+  const { hash } = useLocation();
+  const loaded = Boolean(books.data);
+
+  // Links from results point at a cited book (#book-...): scroll it into view.
+  useEffect(() => {
+    if (!loaded || !hash) return;
+    document
+      .getElementById(decodeURIComponent(hash.slice(1)))
+      ?.scrollIntoView?.({ block: "center" });
+  }, [loaded, hash]);
 
   const error = profile.error ?? books.error;
   if (error) {
