@@ -2,15 +2,19 @@
 
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
+from pydantic import TypeAdapter
 
-from book_agent.api.routes import books, profiles
+from book_agent.api.routes import books, profiles, recommendations
 from book_agent.api.services import ApiServices
 from book_agent.demo_profiles import ProfileError
+from book_agent.recommendation_stream import RecommendationEvent
 
 ServicesFactory = Callable[[], AbstractAsyncContextManager[ApiServices]]
 
@@ -51,6 +55,7 @@ def create_app(
         )
     app.include_router(books.router)
     app.include_router(profiles.router)
+    app.include_router(recommendations.router)
 
     @app.get("/health", operation_id="health", tags=["health"])
     async def health() -> dict[str, str]:  # pyright: ignore[reportUnusedFunction]
@@ -69,4 +74,29 @@ def create_app(
         )
         return JSONResponse(body, status_code=exc.status_code, headers=exc.headers)
 
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            app.openapi_schema = with_event_schema(
+                get_openapi(
+                    title=app.title,
+                    version=app.version,
+                    description=app.description,
+                    routes=app.routes,
+                )
+            )
+        return app.openapi_schema
+
+    app.openapi = openapi  # pyright: ignore[reportAttributeAccessIssue]
     return app
+
+
+def with_event_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Add the stream's event union to the components, so the UI's types include it: a
+    streamed body isn't a response model FastAPI would publish by itself."""
+    event = TypeAdapter(RecommendationEvent).json_schema(
+        ref_template="#/components/schemas/{model}"
+    )
+    components: dict[str, Any] = schema.setdefault("components", {}).setdefault("schemas", {})
+    components.update(event.pop("$defs", {}))
+    components[recommendations.EVENT_SCHEMA] = event
+    return schema
