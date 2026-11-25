@@ -6,6 +6,7 @@ directly. run_agent_pipeline never raises for model, catalog or parsing problems
 up in AgentRun.error, so an eval run always gets one result per case.
 """
 
+from collections.abc import Collection
 from typing import Literal
 
 from pydantic import BaseModel
@@ -14,7 +15,7 @@ from book_agent.agent import AgentError, AgentFailure, TurnTrace, run_agent
 from book_agent.agent_events import EventSink, RequestInterpreted
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, RecommendationList, ValidationResult
-from book_agent.domain.requests import ResolvedRequest
+from book_agent.domain.requests import FilterName, ResolvedRequest
 from book_agent.domain.validation import WorkMatching
 from book_agent.library_retrieval import query_text
 from book_agent.llm.base import LLMClient, LLMError, Usage
@@ -82,6 +83,7 @@ async def run_agent_pipeline(
     prompt: AgentPrompt = DEFAULT_AGENT_PROMPT,
     retriever: LibraryRetriever | None = None,
     on_event: EventSink | None = None,
+    ignore_filters: Collection[FilterName] = (),
 ) -> AgentRun:
     """Interpret the optional request, merge its filters with `flags`, run the agent.
 
@@ -90,6 +92,7 @@ async def run_agent_pipeline(
     the agent prompt version (system prompt and tool descriptions), agent_v3 by default.
     A prompt that uses retrieval needs `retriever`; requests without text get no retrieval,
     and a failed retrieval falls back to the prompt without related books (D-041).
+    `ignore_filters` drops filters after interpretation: the demo's user removed them (D-045).
     """
     if prompt.uses_retrieval and retriever is None:
         raise ValueError(f"{prompt.prompt_id} needs a library retriever")
@@ -113,7 +116,7 @@ async def run_agent_pipeline(
                 "request_error_kind": resolution.error_kind,
             }
         )
-    resolved = resolution.request
+    resolved = without_filters(resolution.request, ignore_filters)
     run = run.model_copy(update={"request": resolved})
     if on_event is not None:
         on_event(RequestInterpreted(resolved))
@@ -166,3 +169,12 @@ async def run_agent_pipeline(
             "validation": result.validation,
         }
     )
+
+
+def without_filters(request: ResolvedRequest, names: Collection[FilterName]) -> ResolvedRequest:
+    """The request with these filters cleared, whatever their source."""
+    if not names:
+        return request
+    filters = request.filters.model_copy(update=dict.fromkeys(names))
+    sources = {k: v for k, v in request.sources.items() if k not in names}
+    return request.model_copy(update={"filters": filters, "sources": sources})

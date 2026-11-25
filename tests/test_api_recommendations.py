@@ -124,3 +124,29 @@ async def test_the_result_has_no_year_because_the_catalogs_is_the_editions() -> 
     _, body = await stream(script, {"profile_id": "p", "request": "space opera"})
     book = parse(body)[-1]["result"]["books"][0]
     assert "year" not in book and {"pages", "language", "link"} <= set(book)
+
+
+async def test_searches_report_how_many_books_they_found() -> None:
+    script = [interpreted("x"), search("space opera"), submit(CLEAN_THREE)]
+    _, body = await stream(script, {"profile_id": "p", "request": "x"})
+    searching = next(e for e in parse(body) if e["type"] == "searching")
+    assert searching["searches"][0]["found"] == 0  # the fake catalog has no match
+    from book_agent.agent import ToolTrace
+    from book_agent.recommendation_stream import found
+
+    assert found(ToolTrace(name="search_books", arguments={}, outcome="5 books: A; B")) == 5
+    assert found(ToolTrace(name="search_books", arguments={}, outcome="1 book: A")) == 1
+    assert found(ToolTrace(name="search_books", arguments={}, outcome="no results")) == 0
+
+
+async def test_removed_filter_chips_rerun_without_those_filters() -> None:
+    reply = {"preference": "x", "language": "en", "max_pages": 600}
+    script = [text_response(json.dumps(reply)), submit(CLEAN_THREE)]
+    _, body = await stream(
+        script, {"profile_id": "p", "request": "x in English", "ignore_filters": ["language"]}
+    )
+    interpreted_event = parse(body)[1]
+    assert interpreted_event["filters"]["language"] is None
+    assert interpreted_event["filters"]["max_pages"] == 600
+    status, _ = await stream([], {"profile_id": "p", "ignore_filters": ["genre"]})
+    assert status == 422

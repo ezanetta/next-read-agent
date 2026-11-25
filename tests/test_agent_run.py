@@ -164,3 +164,15 @@ async def test_a_failed_retrieval_falls_back_and_is_recorded() -> None:
 async def test_agent_v4_needs_a_retriever() -> None:
     with pytest.raises(ValueError, match="needs a library retriever"):
         await run_agent_pipeline(PROFILE, Filters(), llm=FakeLLM([]), books=catalog(), prompt=V4)
+
+
+async def test_ignored_filters_are_dropped_after_interpretation() -> None:
+    llm = FakeLLM([interpreted("a classic", "en", 300), submit()])
+    run = await run_agent_pipeline(
+        PROFILE, Filters(min_pages=100), request="a classic in English under 300 pages",
+        llm=llm, books=catalog(), ignore_filters=["language", "max_pages"],
+    )  # fmt: skip
+    assert run.request is not None
+    assert run.request.filters == Filters(min_pages=100)
+    assert set(run.request.sources) == {"min_pages"}
+    assert "English" not in llm.requests[1].messages[0].text.split("Constraints:")[-1]

@@ -12,6 +12,7 @@ from book_agent.api.dependencies import Services
 from book_agent.api.schemas import ErrorBody
 from book_agent.demo_profiles import find_profile
 from book_agent.domain.recommendations import Filters
+from book_agent.domain.requests import FilterName
 from book_agent.recommendation_stream import (
     MAX_REQUEST_CHARS,
     RecommendationEvent,
@@ -28,6 +29,9 @@ class RecommendationRequest(BaseModel):
     profile_id: str = Field(min_length=1, max_length=64)
     request: str | None = Field(default=None, max_length=MAX_REQUEST_CHARS)
     filters: Filters = Filters()
+    # Interpreted filters the user removed from the chips: the request runs again without
+    # them, and counts as a run (D-045).
+    ignore_filters: list[FilterName] = Field(default_factory=list[FilterName], max_length=3)
 
 
 @router.post(
@@ -60,6 +64,7 @@ async def stream_recommendation(
         books=services.books,
         works=services.works,
         prompt=services.prompt,
+        ignore_filters=body.ignore_filters,
     )
     return StreamingResponse(
         sse(events),

@@ -93,3 +93,16 @@ async def test_unknown_expired_and_deleted_profiles_are_404() -> None:
         created = (await c.post("/profiles/manual", json=FIVE)).json()
         api.clock = lambda: NOW + timedelta(days=4)
         assert (await c.get(f"/profiles/{created['id']}/books")).status_code == 404
+
+
+async def test_summaries_list_top_authors_and_covers() -> None:
+    books = [
+        {**pick(i), "authors": ["Ishiguro" if i < 3 else f"Author {i}"],
+         "cover_url": f"https://img/{i}.jpg" if i % 2 else None}
+        for i in range(6)
+    ]  # fmt: skip
+    async with client(services()) as c:
+        summary = (await c.post("/profiles/manual", json={"books": books})).json()
+    assert summary["top_authors"][0] == "Ishiguro" and len(summary["top_authors"]) == 3
+    assert summary["cover_urls"][0].startswith("https://covers.openlibrary.org/b/isbn/97800")
+    assert summary["cover_urls"][1:] == ["https://img/1.jpg", "https://img/3.jpg"]

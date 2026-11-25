@@ -8,8 +8,9 @@ Closing the generator early (the client went away) cancels the run.
 
 import asyncio
 import contextlib
+import re
 import secrets
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Collection
 from time import perf_counter
 from typing import Annotated, Literal
 
@@ -34,6 +35,7 @@ from book_agent.domain.recommendations import (
     Unknown,
     ValidationResult,
 )
+from book_agent.domain.requests import FilterName
 from book_agent.llm.base import LLMClient
 from book_agent.ports import BookSearch, WorkResolver
 from book_agent.prompts.agent_prompt import AgentPrompt
@@ -58,6 +60,7 @@ class ProblemView(BaseModel):
 class SearchStep(BaseModel):
     query: str
     outcome: str  # e.g. "5 books: Dune; Hyperion" or "no results"
+    found: int  # how many books the search returned
 
 
 class CitedLibraryBook(BaseModel):
@@ -185,8 +188,10 @@ async def recommendation_events(
     books: BookSearch,
     works: WorkResolver | None,
     prompt: AgentPrompt,
+    ignore_filters: Collection[FilterName] = (),
 ) -> AsyncGenerator[RecommendationEvent]:
-    """Yield the run's events as they happen, ending with `done` or `failed`."""
+    """Yield the run's events as they happen, ending with `done` or `failed`.
+    `ignore_filters` drops interpreted filters the user removed (a rerun, D-045)."""
     queue: asyncio.Queue[RecommendationEvent] = asyncio.Queue()
 
     def sink(event: AgentEvent) -> None:
@@ -205,6 +210,7 @@ async def recommendation_events(
             works=works,
             prompt=prompt,
             on_event=sink,
+            ignore_filters=ignore_filters,
         )
     )
     try:
@@ -341,12 +347,22 @@ def cited_book(stored: StoredProfile, title: str) -> CitedLibraryBook | None:
     return None
 
 
+_FOUND = re.compile(r"^(\d+) books?:")
+
+
 def _searches(trace: TurnTrace) -> list[SearchStep]:
     return [
-        SearchStep(query=str(t.arguments.get("query", "")), outcome=t.outcome)
+        SearchStep(query=str(t.arguments.get("query", "")), outcome=t.outcome, found=found(t))
         for t in trace.tools
         if t.name == SEARCH_BOOKS
     ]
+
+
+def found(tool: ToolTrace) -> int:
+    """Books a search returned, from its outcome ("5 books: ..."); 0 for "no results" and
+    failed searches."""
+    match = _FOUND.match(tool.outcome) if not tool.is_error else None
+    return int(match.group(1)) if match else 0
 
 
 def _submitted_titles(tool: ToolTrace) -> list[str]:

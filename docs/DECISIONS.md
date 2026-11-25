@@ -467,3 +467,17 @@ Significant design decisions: context, options considered, choice, and reason.
   - **Cleaning:** author names lose trailing notes ("V. S. Ramachandran (neurology)"). Work titles lose series notes and bilingual second titles. Original-language titles in Latin script are kept as they are, by the owner's choice.
   - **No `year` in the recommendation result:** the catalog only knows the matched edition's year, and the UI would show it as the book's. Pages and language stay: they describe the matched edition, which is what the link points to.
 - **Reason:** The rules keep selection reproducible. A short, explained exclusion list handles the noise that rules would only catch by also dropping good books. Implied ratings avoid inventing an opinion for a reader who doesn't exist. A field that invites a wrong label is better removed than renamed.
+
+## D-045 · The web UI (C2) and the API additions it needs (2026-11-25)
+
+- **Context:** Milestone C2 is the demo's UI, built from the owner's mockups (kept locally in `docs/design/`, never committed). The mockups need a few things the API didn't return.
+- **Choice:**
+  - **Stack (`web/`):** Vite, React, strict TypeScript, Tailwind CSS v4, React Router (one URL per screen), TanStack Query, `openapi-typescript` + `openapi-fetch` (a client generated from the API's schema), `@microsoft/fetch-event-source` for the POST stream, Vitest + Testing Library (with a mocked `fetch`, no MSW), Biome. npm, with a lockfile.
+  - **Routes:** `/`, `/p/:profileId`, `/p/:profileId/ask`, `/p/:profileId/results/:runId`, `/limit`. Results are kept in `sessionStorage` by run id: a reload in the same tab keeps them, and nothing is stored on the server. The Ask screen navigates to the results on `done`.
+  - **API additions:**
+    - `ProfileSummary` gains `top_authors` and `cover_urls` (3 each), for the sample-reader cards and the cover strip.
+    - `SearchStep` gains `found`, parsed on the server from the search outcome.
+    - `POST /recommendations` gains `ignore_filters`: removing an interpreted filter chip reruns the request without it. It's the user correcting the interpretation (human in the loop), and it counts as a run for the C3 rate limits. The pipeline clears those filters after interpretation. Evals pass none and are unchanged.
+  - **The typed client is generated and committed** (`web/openapi.json`, `web/src/api/schema.d.ts`). The Python CI job checks that the committed schema matches the API, so the UI can't drift from it.
+  - **Links:** "How it works" goes to the README, and "Watch a demo" is hidden until `VITE_DEMO_VIDEO_URL` is set. In dev, a Vite proxy sends `/api` to the local API; in production, `VITE_API_BASE_URL` sets it.
+- **Reason:** A small, mainstream stack whose every piece has one job. Generated types make API changes visible at compile time. Session-only results keep the API stateless, as D-043 designed.
