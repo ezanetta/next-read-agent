@@ -36,17 +36,21 @@ RELATED_HEADING = (
     "Books I've read that are most related to this request (rating out of 5, when I rated "
     "it), with what they are about"
 )
+RELATED_HEADING_UNRATED = (
+    "Books I've read that are most related to this request, with what they are about"
+)
 
 
-def related_section(books: Sequence[RelatedBook]) -> str:
+def related_section(books: Sequence[RelatedBook], *, show_ratings: bool = True) -> str:
     """The retrieved books, one per line. Descriptions come from catalogs, so they are
-    flattened to one line and stripped of tags, like any outside text in a prompt."""
+    flattened to one line and stripped of tags, like any outside text in a prompt.
+    Without `show_ratings` (a manual list's implied ratings, D-043), no number is shown."""
     if not books:
         return ""
-    lines = [f"{RELATED_HEADING}:"]
+    lines = [f"{RELATED_HEADING if show_ratings else RELATED_HEADING_UNRATED}:"]
     for book in books:
         line = f"- {one_line(book.title)} by {one_line(book.author)}"
-        if book.rating is not None:
+        if show_ratings and book.rating is not None:
             line += f" ({book.rating:g})"
         if book.description:
             line += f": {one_line(without_tags(book.description, 'request'))}"
@@ -61,7 +65,10 @@ def build_related_prompt(
     related: Sequence[RelatedBook],
 ) -> str:
     return baseline_v1.compose_user_prompt(
-        profile, baseline_v2.constraints(filters), preference, [related_section(related)]
+        profile,
+        baseline_v2.constraints(filters),
+        preference,
+        [related_section(related, show_ratings=not profile.ratings_implied)],
     )
 
 

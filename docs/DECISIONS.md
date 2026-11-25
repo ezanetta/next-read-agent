@@ -430,3 +430,26 @@ Significant design decisions: context, options considered, choice, and reason.
   - **`evals judge`** already retries books whose judgment failed. Before replacing an errored judgment, it now copies the file to the same kind of backup folder, and its plan says how many books retry an error.
   - **Order:** rerun the runs first, then judge. A replaced run's old judgments are moved aside, so its new books get judged.
 - **Reason:** It keeps the round complete without repeating 21 valid runs, which would use quota and add noise. It follows D-032's line between outages and behavior. Backups keep every replaced file inspectable. Only failures that are outages by D-032's rule get rerun.
+
+## D-043 · The demo API: temporary profiles, cached search, a streamed recommendation (2026-11-25)
+
+- **Context:** Milestone C's demo is for strangers arriving from a CV: no account, usually no Goodreads export. The UI needs an API for profiles, book search, a library view and a recommendation that shows its progress. agent_v3 is the default.
+- **Choice:**
+  - **Routes are thin** (`api/`), and the logic lives in `demo_profiles.py` and `recommendation_stream.py`. Everything is wired once from `wiring.py` in the app's lifespan; tests build the app with fakes. Each operation has an explicit id, and the event union is published in the OpenAPI schema, so TypeScript types can be generated.
+  - **Profiles are temporary:** a random 128-bit id is the only key, and they expire after 3 days (`PROFILE_TTL_DAYS`). Sources: a manual list (5–50 books picked from search), a Goodreads CSV (1 MB, 2,000 rows, at least 5 read books; only the parsed fields are kept, never the file), 5 sample profiles, and the owner's library. Presets have fixed ids and never expire.
+  - **Manual-list books are stored as read, rated 5.0,** so the existing "liked" rule applies. `Profile.ratings_implied` marks such profiles: prompts show those books as "liked" with no number (also in agent_v4's related section), and the UI shows "picked". With the flag off, every prompt is byte-for-byte unchanged, so no prompt version changes and evals (the owner's Goodreads profile) aren't affected. The flag is left out of `profile_sha256` while False, so existing profile hashes don't change.
+  - **Search:** Google Books through the `BookSearch` port, 8 results, cached by normalized query for 7 days, so only misses use the shared quota.
+  - **Covers without quota:** manual-list books keep their search result's cover. Books with an ISBN get an Open Library Covers URL that the browser loads directly (`default=false`, with a placeholder on 404).
+  - **Sample profiles:** 5 categories (classics; science fiction and fantasy; mystery and thriller; Latin American and Spanish literature; popular non-fiction). A script selects about 50 books each from Open Library data by rule: subjects, popularity, ISBN and cover present, at most 3 per author. Ratings come from Open Library averages. The books are verified against Google Books and Open Library, reviewed by the owner, and committed (CC0). No title comes from an LLM.
+  - **The owner's profile is loaded at deploy time** from `OWNER_PROFILE_PATH`, never committed. `cli export-profile` writes it with only title, author, ISBN, rating, shelf and year: no Goodreads id, page count, reviews or notes.
+  - **Recommendation:** `POST /recommendations` streams Server-Sent Events. `run_agent` and `run_agent_pipeline` gain an optional event callback (after each turn, before and after each submission's check). The CLI and evals pass none, so they're unchanged. Event types: `started`, `interpreted`, `searching`, `submitted`, `checking`, `rejected`, `done` (with the 3 books, covers, links, reasons, cited library books and a trace summary), `failed`. A client disconnect cancels the run.
+  - **Stores:** `ProfileStore` and `SearchCache` (and later `UsageCounter`) are Protocols in `ports.py`, implemented with one SQLite file (stdlib `sqlite3`).
+  - **Limits, designed now and implemented in C3:**
+    - Per IP: 5 recommendations an hour and 15 a day, 60 uncached searches a minute, 10 profiles an hour.
+    - Daily caps tied to the free tiers: 50 recommendations and 300 uncached searches, reset at midnight Pacific. A provider's daily-quota error marks the cap reached.
+    - Sizes: request text 500 characters, JSON body 64 KB, the CSV limits above, query 2–100 characters.
+    - CORS from `FRONTEND_ORIGINS`.
+    - A typed 429 `demo_limit` response with `Retry-After`; a `failed` event of kind `demo_limit` mid-stream.
+    - A separate Google Cloud project and key for the demo, so evals and the demo don't share quota.
+- **Hosting constraint (for C3):** SQLite needs a persistent disk and a single instance. The hosting choice must provide both, or the stores get another implementation (such as Postgres) behind the same ports.
+- **Reason:** No accounts and a short life keep personal data minimal. Caching and covers by URL protect the shared quotas. Streaming the agent's existing trace makes its work visible without a second code path. Ports keep storage swappable when hosting is decided.

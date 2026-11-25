@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -108,3 +109,14 @@ def test_a_round_1_record_without_the_field_loads_as_harness_1(tmp_path: Path) -
     path.write_text(json.dumps(data), encoding="utf-8")
     [loaded] = store.load_all("recommend_v1")
     assert loaded.config.harness == 1 and path.parent.name == loaded.config.id
+
+
+def test_the_profile_hash_ignores_ratings_implied_while_false() -> None:
+    from book_agent.domain.models import Profile
+    from book_agent.evals.records import profile_sha256
+    from tests.library_data import PROFILE as LIBRARY
+
+    old_json = Profile.model_dump_json(LIBRARY, exclude={"ratings_implied"})
+    assert profile_sha256(LIBRARY) == hashlib.sha256(old_json.encode("utf-8")).hexdigest()
+    implied = LIBRARY.model_copy(update={"ratings_implied": True})
+    assert profile_sha256(implied) != profile_sha256(LIBRARY)

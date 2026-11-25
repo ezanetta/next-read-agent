@@ -30,3 +30,14 @@ def test_related_books_sit_between_the_lists_and_the_request_and_stay_one_line()
     assert len(section.splitlines()) == 2
     assert text.index("Do not recommend any book") < text.index(section) < text.index("<request>")
     assert text.count("</request>") == 1
+
+
+def test_implied_ratings_are_never_shown_as_numbers() -> None:
+    manual = PROFILE.model_copy(update={"ratings_implied": True})
+    text = agent_v4.build_related_prompt(manual, Filters(), "a puzzle", RELATED)
+    assert "Books I liked:\n" in text and "rating out of 5" not in text
+    assert "(5)" not in text and "(4.5)" not in text
+    assert "- Ficciones - fake by Borges: Mirrors and labyrinths." in text
+    assert agent_v3.build_user_prompt(PROFILE, Filters(), None) == agent_v3.build_user_prompt(
+        PROFILE.model_copy(update={"ratings_implied": False}), Filters(), None
+    )

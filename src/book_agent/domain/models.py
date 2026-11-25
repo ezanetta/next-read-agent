@@ -51,6 +51,10 @@ class Profile(BaseModel):
 
     name: str = Field(min_length=1)
     books: list[Book]
+    # True when the ratings weren't given by the reader: a manual list of picked books is
+    # stored as rated 5.0, so "liked" works as usual, but prompts must not show a number
+    # the reader never gave (D-043). Goodreads profiles, and so evals, leave it False.
+    ratings_implied: bool = False
 
     @property
     def read_books(self) -> list[Book]:
