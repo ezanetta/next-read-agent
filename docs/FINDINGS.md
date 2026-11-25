@@ -424,3 +424,47 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **How it was detected:** The report's "Retrieved and cited per case" section and the records' parsed preferences.
 - **Fix:** None yet, by decision. Options for later, not applied: a similarity floor (or "no related books" when nothing is close), stripping negated clauses from the query, preferring variety across runs or against hub books, and normalizing the preference before comparing it with the text.
 - **How it was verified:** The 21 completed records' `retrieved` and `cited_titles` fields, rendered by `citation_report`.
+
+## F-022 · agent_v4 (library retrieval) meets 4 of 7 thresholds and misses the diversity goal (2026-11-25)
+
+- **What happened:** The agent_v4 round on recommend_v1 is complete: 39 of 39 runs, with the 18 outage runs of F-020 rerun (D-042). Compared with round 2's agent_v3 records against D-041's thresholds, set before the run:
+
+  | Measure | agent_v3 (round 2) | agent_v4 | Threshold | Result |
+  | --- | --- | --- | --- | --- |
+  | Citations from the retrieved 8 | n/a | 84/101 (83%) | at least 60% | met |
+  | Accepted, outages excluded | 33/35 | 39/39 | at most 3 runs fewer | met |
+  | `cites_library` rejections | 4 | 4 | no more | met |
+  | Input tokens per run | 25,553 | +2,485 | reported | as expected |
+  | Library books cited in 3 or more cases | 6 | 4 | at most 3 | missed |
+  | Distinct library books cited | 36 | 38 | at least 45 | missed |
+  | judge_v3 `reason_quality` no | 2/103 | 3/115 | no higher share | missed by one book |
+  | judge_v3 `fits_request` no | 4/86 | 8/97 | no higher share | missed |
+
+  **4 of the 7 thresholds are met, and the diversity goal, the point of D-041, is missed.**
+- **Caveats:**
+  - **Two commits:** the report warns that the runs come from two git commits. They differ only in the eval tooling for reruns and backups (D-042): the agent, prompts, validator and retrieval are identical.
+  - **Two unjudged books:** 2 of the 117 recommended books still have a judge error, so the judge rows count 115 books.
+- **The model follows retrieval, so diversity is capped by what retrieval returns.** 83% of citations name a retrieved book. The likely causes are the ones F-021 saw on the partial round:
+  - **Hub books:** reuse moved rather than disappeared. Round 2 reused *Las cosas que perdimos en el fuego*, *Dune* and *La metamorfosis*. agent_v4 reuses *Ficciones* (5 cases), *Bestiario*, *Cadáver exquisito* and *Las cosas que perdimos en el fuego* (3 each), books that retrieval returns for many unrelated requests.
+  - **Negation in the query:** "nothing from Brandon Sanderson" retrieves Sanderson, and "not about space" retrieves space books.
+  - **Repetition within a case:** the same top book is retrieved in every run and cited each time (*Small Things Like These*, *East of Eden*), which D-041's measures don't count.
+  - **Retrieval with no similar books:** history-nonfiction gets 8 unrelated books.
+- **The 8 `fits_request` no books (investigation, records and judgments only):**
+
+  | Case | agent_v4 no | agent_v3 no | Recommendations judged no |
+  | --- | --- | --- | --- |
+  | more-claire-keegan | 4 | 3 | *Brooklyn* (Tóibín) ×3, *Last Stories* (Trevor): not by Keegan |
+  | like-east-of-eden | 2 | 1 | *Los divagantes* (Nettel, short stories), *La hija del Caníbal* (Montero, a mystery) |
+  | fantasy-no-sanderson | 1 | 0 | *The Traitor Baru Cormorant*: 400 pages against "around 700" |
+  | history-nonfiction | 1 | 0 | Duras' *El dolor*: the judge calls it fiction; it's an autobiographical text, a debatable call |
+
+  - **Mostly the same failures as agent_v3:** 6 of the 8 are in the two cases where agent_v3 also got no verdicts, with the same pattern. Brooklyn and Last Stories are the same Irish fill-ins agent_v3 recommended for "more Claire Keegan" (F-008's judgment call). agent_v3 also answered East of Eden with a short Spanish-language book.
+  - **Anchoring to the retrieved books isn't visible:** the reasons cite retrieved books, as asked, but no recommendation is pulled toward a retrieved book's neighborhood in a way that breaks the request.
+    - Keegan: the misses are the same as agent_v3's.
+    - East of Eden: the reasons cite only *East of Eden* itself.
+    - history-nonfiction: the cited book wasn't among the retrieved ones.
+    - Fantasy is the only arguable case: the miss is justified by a retrieved Sanderson book (*The Hero of Ages*, "political intrigue"), but the problem is its length, which no library book suggests.
+  - **Verdict: noise, not a retrieval effect.** 4 more books out of about 90, concentrated in cases that already failed, is within run-to-run noise (F-013). The data doesn't support the anchoring hypothesis, though 8 books can't rule out a small effect.
+- **How it was detected:** `evals report` with the citation section and judge_v3 scores. The investigation used the stored records and judgments only.
+- **Fix:** None, by D-041: agent_v4 isn't tuned against this round, and agent_v3 stays the default. The retrieval changes these causes suggest are in the backlog (B-003), as a new version to be measured on its own.
+- **How it was verified:** The report and the records. The threshold numbers were recomputed from the records (38 distinct, 4 reused, 84/101 retrieved, 3/115, 8/97).
