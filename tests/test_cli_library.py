@@ -129,3 +129,14 @@ def test_library_without_yes_only_plans(
     out = capsys.readouterr().out
     assert "Retrieval pool:" in out and out.rstrip().endswith("Add --yes to start.")
     assert not (tmp_path / "data").exists()
+
+
+def test_export_profile_writes_only_the_agreed_fields(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    out = tmp_path / "owner.json"
+    code = main(["export-profile", "--out", str(out), "--name", "Demo owner",
+                 "--csv", "tests/fixtures/goodreads_sample.csv"])  # fmt: skip
+    assert code == EXIT_OK and "Keep it out of the repo" in capsys.readouterr().out
+    text = out.read_text()
+    assert '"Demo owner"' in text and "goodreads_id" not in text and '"pages"' not in text

@@ -6,6 +6,7 @@
         [--prompt agent_v1|agent_v2|agent_v3|agent_v4] [--verbose]
     uv run python -m book_agent.cli works [--refresh] [--csv PATH] [--cache PATH]
     uv run python -m book_agent.cli library [--refresh] [--yes] [--csv PATH] [--cache PATH]
+    uv run python -m book_agent.cli export-profile --out PATH [--name NAME] [--csv PATH]
 
 baseline: flags override filters interpreted from the request text, field by field.
 Exit codes: 0 all hard rules passed (unknowns allowed), 1 rule violations, 2 errors.
@@ -25,6 +26,10 @@ library: builds the index agent_v4 retrieves from (D-041). Describes the read bo
 starts only with --yes; reruns continue where they stopped. --refresh describes every
 book again. Run `works` first so Open Library can be used.
 Exit codes: 0 index complete, 2 some books failed or errors.
+
+export-profile: writes the library as the demo's owner profile, loaded at deploy time from
+OWNER_PROFILE_PATH and never committed (D-043): only title, author, ISBNs, rating, shelf
+and year. Exit codes: 0 written, 2 errors.
 """
 
 import argparse
@@ -50,12 +55,14 @@ from book_agent.agent_run import (
 )
 from book_agent.baseline import BaselineResult, run_baseline
 from book_agent.config import Settings, get_settings
+from book_agent.demo_profiles import owner_export
 from book_agent.domain.acceptance import Problem, blocking_problems
 from book_agent.domain.library import MIN_RATING, retrieval_pool
 from book_agent.domain.models import Book, Profile
 from book_agent.domain.recommendations import Check, Filters, Lookup, Unknown, ValidationResult
 from book_agent.domain.requests import FilterName, ResolvedRequest
 from book_agent.embedding_index import VectorStore, load_store, missing, save_store
+from book_agent.files import write_atomic
 from book_agent.library_enrichment import (
     EnrichmentCache,
     book_key,
@@ -114,6 +121,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             else Filters()
         )
         profile = load_goodreads_export(args.csv, profile_name="Me")
+        if args.command == "export-profile":
+            return _export_profile(profile, args.out, args.name)
         settings = get_settings()
         cache = load_cache(args.cache)
         if args.command == "works":
@@ -230,6 +239,13 @@ def _print_progress(done: int, total: int) -> None:
         print(f"\r{format_progress(done, total)}", end="\n" if done == total else "", flush=True)
     elif done % 20 == 0 or done == total:
         print(format_progress(done, total), flush=True)
+
+
+def _export_profile(profile: Profile, out: Path, name: str) -> int:
+    write_atomic(out, owner_export(profile.model_copy(update={"name": name})))
+    print(f"Wrote {len(profile.books)} books to {out}: title, author, ISBNs, rating, shelf, year")
+    print("Keep it out of the repo; point OWNER_PROFILE_PATH at it where the API runs.")
+    return EXIT_OK
 
 
 async def _library(
@@ -659,6 +675,12 @@ def _parser() -> argparse.ArgumentParser:
         "works", parents=[shared], help="resolve the library to work keys and cache them"
     )
     works.add_argument("--refresh", action="store_true", help="look up every ISBN again")
+
+    export = commands.add_parser(
+        "export-profile", parents=[shared], help="write the demo's owner profile (D-043)"
+    )
+    export.add_argument("--out", type=Path, required=True, help="where to write the JSON")
+    export.add_argument("--name", default="The author", help="the profile's display name")
 
     library = commands.add_parser(
         "library", parents=[shared], help="describe and embed the read books for agent_v4"
