@@ -1,25 +1,24 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, type RouteObject, RouterProvider } from "react-router";
-import { Layout } from "./components/Layout";
+import { NotFound, RouteError } from "./components/RouteError";
 import { AskPage } from "./features/ask/AskPage";
 import { ChoosePage } from "./features/choose/ChoosePage";
 import { LibraryPage } from "./features/library/LibraryPage";
+import { DemoLimitPage } from "./features/limit/DemoLimitPage";
 import { ResultsPage } from "./features/results/ResultsPage";
 
-function Placeholder({ title }: { title: string }) {
-  return (
-    <Layout step={1}>
-      <h1 className="text-4xl font-bold">{title}</h1>
-    </Layout>
-  );
-}
-
 export const routes: RouteObject[] = [
-  { path: "/", element: <ChoosePage /> },
-  { path: "/p/:profileId", element: <LibraryPage /> },
-  { path: "/p/:profileId/ask", element: <AskPage /> },
-  { path: "/p/:profileId/results/:runId", element: <ResultsPage /> },
-  { path: "/limit", element: <Placeholder title="Demo limit" /> },
+  {
+    errorElement: <RouteError />,
+    children: [
+      { path: "/", element: <ChoosePage /> },
+      { path: "/p/:profileId", element: <LibraryPage /> },
+      { path: "/p/:profileId/ask", element: <AskPage /> },
+      { path: "/p/:profileId/results/:runId", element: <ResultsPage /> },
+      { path: "/limit", element: <DemoLimitPage /> },
+      { path: "*", element: <NotFound /> },
+    ],
+  },
 ];
 
 export function makeQueryClient(): QueryClient {

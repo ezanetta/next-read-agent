@@ -66,7 +66,7 @@ export function Cover({
           <span className="line-clamp-3 font-display text-sm leading-tight font-bold text-text">
             {title}
           </span>
-          {author && <span className="mt-1 line-clamp-2 text-xs text-text/85">{author}</span>}
+          {author && <span className="mt-1 line-clamp-2 text-xs text-text">{author}</span>}
         </>
       )}
     </div>
