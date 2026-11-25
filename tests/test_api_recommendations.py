@@ -117,3 +117,10 @@ async def test_sse_sends_keepalives_and_closing_it_cancels_the_events() -> None:
     assert await anext(frames) == ": keep-alive\n\n"
     await frames.aclose()  # the client went away
     assert closed.is_set()
+
+
+async def test_the_result_has_no_year_because_the_catalogs_is_the_editions() -> None:
+    script = [interpreted("space opera"), submit(CLEAN_THREE)]
+    _, body = await stream(script, {"profile_id": "p", "request": "space opera"})
+    book = parse(body)[-1]["result"]["books"][0]
+    assert "year" not in book and {"pages", "language", "link"} <= set(book)

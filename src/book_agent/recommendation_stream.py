@@ -75,9 +75,9 @@ class RecommendedBook(BaseModel):
     reason: str
     link: str | None
     cover_url: str | None
-    pages: int | None
-    language: str | None
-    year: int | None
+    pages: int | None  # of the matched edition, which the link points to
+    language: str | None  # of the matched edition
+    # No year: the catalog's is the edition's, not the original publication's (D-044).
     cited: list[CitedLibraryBook]
 
 
@@ -314,7 +314,6 @@ def recommended_book(stored: StoredProfile, item: CheckedRecommendation) -> Reco
         cover_url=cover,
         pages=match.pages if match else None,
         language=match.language if match else None,
-        year=match.year if match else None,
         cited=[c for t in item.cited_titles if (c := cited_book(stored, t)) is not None],
     )
 
