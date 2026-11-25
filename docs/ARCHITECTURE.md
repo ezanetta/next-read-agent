@@ -10,6 +10,7 @@ flowchart TB
         CLI[cli.py]
         EV[evals/__main__.py]
         API[main.py + api/: demo API, D-043]
+        WEB[web/: React UI, D-045]
     end
     W[wiring.py: builds adapters from settings]
     subgraph app[Application]
@@ -62,6 +63,7 @@ flowchart TB
 | LLM adapters | `llm/gemini.py`, `llm/retrying.py` | Gemini translation in pure functions, so it can be tested without network. One retry on 5xx and network errors, in a wrapper (D-027, D-030). The Claude adapter is planned. |
 | Library retrieval | `library_enrichment.py`, `library_retrieval.py`, `embedding_index.py`, `llm/gemini_embeddings.py`, `domain/library.py` | Describes the read books once (Open Library, then Google Books), embeds them, and for each request retrieves the 8 most related ones for agent_v4's prompt. The index is generic, so a catalog can reuse it (D-040, D-041). |
 | Demo API | `api/` (app, routes, schemas), `demo_profiles.py`, `demo_search.py`, `recommendation_stream.py`, `adapters/sqlite_store.py` | Temporary profiles (manual list, Goodreads upload, samples, owner), cached book search, a library view, and a recommendation streamed as Server-Sent Events from the agent's own trace. SQLite behind `ProfileStore` and `SearchCache` (D-043). |
+| Web UI | `web/` (Vite, React, TypeScript, Tailwind) | Choose a library, see it, ask with live progress, read the results. A typed client is generated from the API's OpenAPI schema; the recommendation stream is reduced into steps by a pure reducer (D-045). |
 | Eval harness | `evals/` | Frozen case sets, a resumable runner that records but never scores, reports computed from the records, an LLM judge with a calibration workflow, and a parser eval (D-021 to D-039), plus library citation diversity (D-041). |
 
 ## Request flow
@@ -115,6 +117,8 @@ sequenceDiagram
 | **Graceful degradation** | `run_agent_pipeline`: a failed retrieval falls back to agent_v3's user prompt and is recorded | An embedding outage doesn't stop a recommendation. |
 | **Observer (event sink)** | `agent_events.py`, `run_agent(on_event=...)` | The UI streams progress from the trace the loop already builds; the CLI and evals pass no sink and are unchanged. |
 | **Application factory** | `api/app.create_app(services)` | Tests build the app with fakes; production builds services from settings at startup, not at import. |
+| **Generated, typed API client** | `web/src/api/schema.d.ts` from `openapi.json` (`npm run api:types`, checked in CI) | An API change that breaks the UI fails at compile time, not in the browser. |
+| **Reducer over an event stream** | `web/src/features/ask/progress.ts` | The live steps are a pure function of the events: easy to test, and a reload or retry starts clean. |
 | **Record once, score many times** | `evals/runner.py` vs `evals/report.py` (D-021) | New metrics and judges run over stored runs with no new LLM calls. |
 | **Frozen inputs by hash** | case sets, calibration sample (D-023, D-034) | An eval result can't drift because its inputs changed underneath it. |
 | **Train / held-out split with pre-registered thresholds** | `evals/calibration.py`, D-034 | The judge's agreement on unseen books stays an honest estimate. |
