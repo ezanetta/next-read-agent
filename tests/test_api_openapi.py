@@ -22,7 +22,16 @@ def test_the_event_union_is_in_the_components() -> None:
         "StartedEvent", "InterpretedEvent", "SearchingEvent", "SubmittedEvent",
         "CheckingEvent", "RejectedEvent", "DoneEvent", "FailedEvent",
     }  # fmt: skip
-    for name in ("RecommendationResult", "TraceSummary", "CitedLibraryBook", "ErrorBody"):
+    assert "Body_createGoodreadsProfile" not in components
+    upload = schema()["paths"]["/profiles/goodreads"]["post"]["requestBody"]["content"]
+    assert upload["multipart/form-data"]["schema"]["$ref"].endswith("/GoodreadsUpload")
+    for name in (
+        "RecommendationResult",
+        "TraceSummary",
+        "CitedLibraryBook",
+        "ErrorBody",
+        "GoodreadsUpload",
+    ):
         assert name in components
     refs = json.dumps(schema())
     for target in {r.rsplit("/", 1)[-1] for r in _refs(refs)}:

@@ -1,5 +1,6 @@
 """The demo API app (D-043): routes, CORS, error bodies, and services from wiring."""
 
+import json
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
@@ -76,18 +77,37 @@ def create_app(
 
     def openapi() -> dict[str, Any]:
         if app.openapi_schema is None:
-            app.openapi_schema = with_event_schema(
-                get_openapi(
-                    title=app.title,
-                    version=app.version,
-                    description=app.description,
-                    routes=app.routes,
+            app.openapi_schema = with_readable_names(
+                with_event_schema(
+                    get_openapi(
+                        title=app.title,
+                        version=app.version,
+                        description=app.description,
+                        routes=app.routes,
+                    )
                 )
             )
         return app.openapi_schema
 
     app.openapi = openapi  # pyright: ignore[reportAttributeAccessIssue]
     return app
+
+
+# FastAPI names multipart bodies after the operation; the UI's types read better renamed.
+RENAMED_SCHEMAS = {"Body_createGoodreadsProfile": "GoodreadsUpload"}
+
+
+def with_readable_names(schema: dict[str, Any]) -> dict[str, Any]:
+    """Rename generated component names, and every reference to them."""
+    text = json.dumps(schema)
+    for old, new in RENAMED_SCHEMAS.items():
+        text = text.replace(f'"#/components/schemas/{old}"', f'"#/components/schemas/{new}"')
+    renamed: dict[str, Any] = json.loads(text)
+    components: dict[str, Any] = renamed.get("components", {}).get("schemas", {})
+    for old, new in RENAMED_SCHEMAS.items():
+        if old in components:
+            components[new] = {**components.pop(old), "title": new}
+    return renamed
 
 
 def with_event_schema(schema: dict[str, Any]) -> dict[str, Any]:
