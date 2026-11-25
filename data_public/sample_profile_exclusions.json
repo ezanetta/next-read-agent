@@ -1,0 +1,42 @@
+{
+  "sample-classics": {
+    "/works/OL7711731W": "Self-help (1905), not a classic novel",
+    "/works/OL14877876W": "Poetry collection, not a novel"
+  },
+  "sample-sf-fantasy": {
+    "/works/OL81634W": "Psychological thriller, not science fiction or fantasy",
+    "/works/OL81626W": "Horror, not science fiction or fantasy",
+    "/works/OL3261155W": "Historical romance; the time travel is incidental",
+    "/works/OL18941W": "Literary fiction, not science fiction or fantasy",
+    "/works/OL731644W": "Philosophical novel, not science fiction or fantasy",
+    "/works/OL76835W": "Techno-thriller, not science fiction",
+    "/works/OL46760W": "Memoir, not fiction"
+  },
+  "sample-mystery": {
+    "/works/OL3261155W": "Historical romance, not a mystery or thriller",
+    "/works/OL16809803W": "Literary fiction, not a mystery or thriller",
+    "/works/OL1914022W": "Historical fiction, not a mystery or thriller",
+    "/works/OL3951517W": "Literary fiction, not a mystery or thriller",
+    "/works/OL17837968W": "Science fiction, not a mystery or thriller",
+    "/works/OL15212619W": "Literary fiction, not a mystery or thriller",
+    "/works/OL111482W": "Romance, not a mystery or thriller"
+  },
+  "sample-latin-american": {
+    "/works/OL3454854W": "Jaws is an American novel; tagged Spanish by bad edition data",
+    "/works/OL13707777W": "Inspirational novel with a self-help tone, not representative of Latin American literature",
+    "/works/OL13752345W": "Doubtful fit for a profile shown to strangers"
+  },
+  "sample-nonfiction": {
+    "/works/OL71056W": "Christian apologetics, not popular history or science",
+    "/works/OL15035921W": "Textbook-style study guide",
+    "/works/OL3500788W": "Astrology, not science",
+    "/works/OL1942842W": "Textbook",
+    "/works/OL20406574W": "Law textbook",
+    "/works/OL18443038W": "Self-help"
+  },
+  "rejected-isbns": {
+    "9781411476929": "Belongs to a SparkNotes guide, not to On the Road (Google Books check)",
+    "9781411475595": "Belongs to a SparkNotes guide, not to Hiroshima (Google Books check)",
+    "9781406956399": "Belongs to an unrelated history book, not to North and South (Google Books check)"
+  }
+}

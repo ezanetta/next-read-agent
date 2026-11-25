@@ -118,10 +118,13 @@ def store_temporary(
 
 
 class PresetFile(BaseModel):
-    """A sample profile file: the profile plus a line for the picker."""
+    """A sample profile file: the profile, a line for the picker, covers by book index,
+    and where the books came from."""
 
     description: str
     profile: Profile
+    covers: dict[int, str] = {}
+    provenance: str | None = None
 
 
 def load_presets(
@@ -139,7 +142,7 @@ def load_presets(
             ) from e
         presets[path.stem] = StoredProfile(
             id=path.stem, source="sample", profile=preset.profile,
-            description=preset.description, created_at=now,
+            description=preset.description, covers=preset.covers, created_at=now,
         )  # fmt: skip
     if owner_path is not None:
         owner = Profile.model_validate_json(owner_path.read_bytes())
