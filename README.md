@@ -115,7 +115,7 @@ A selection. Each one links to the full entry: what happened, how it was detecte
 
 - **Candidate retrieval is a live Google Books search.** Two spikes chose the catalog for a later step: Open Library's CC0 dumps, which cover 69–81% of the library and the Spanish cases, while Goodbooks-10k stops in 2017 and missed 7 of 13 cases ([F-018](docs/FINDINGS.md), [F-019](docs/FINDINGS.md), [D-040](docs/DECISIONS.md)). The embedding pipeline built for library retrieval is generic enough to reuse.
 - **Only Gemini is implemented.** The `LLMClient` contract is provider-neutral, and a Claude adapter is next, so results can be compared across providers.
-- **No API or UI yet.** FastAPI serves only a health check. Next: the recommendation endpoint, rate limits for a public demo, and a small React UI.
+- **The demo API exists; the UI and the public limits don't yet.** Next: rate limits and daily caps for a public demo (designed in D-043), sample profiles, and a small React UI.
 - **Quality isn't a hard rule.** An author exclusion ("nothing by X") is only a soft preference ([B-001](docs/BACKLOG.md)). The judge can't see the cited books' descriptions ([B-002](docs/BACKLOG.md)).
 
 ## Running it
@@ -134,6 +134,15 @@ uv run python -m book_agent.cli baseline "a dystopia under 400 pages"
 ```
 
 Add `--verbose` to the agent for a trace of each turn. The library-retrieval variant (agent_v4, F-022) needs its index first: `uv run python -m book_agent.cli library --yes`, then `agent --prompt agent_v4`. Checks: `uv run pytest` (live API tests are excluded; run them with `-m live`), `uv run ruff check .`, `uv run pyright`.
+
+### Running the demo API
+
+```bash
+uv run fastapi dev src/book_agent/main.py          # http://127.0.0.1:8000/docs
+uv run python -m book_agent.api.openapi --out openapi.json   # schema for the UI's TypeScript types
+```
+
+Profiles are temporary (no accounts), search results are cached, and recommendations stream their progress as Server-Sent Events ([D-043](docs/DECISIONS.md)).
 
 ### Running the evals
 
