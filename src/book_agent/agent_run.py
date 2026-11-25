@@ -11,6 +11,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 from book_agent.agent import AgentError, AgentFailure, TurnTrace, run_agent
+from book_agent.agent_events import EventSink, RequestInterpreted
 from book_agent.domain.models import Profile
 from book_agent.domain.recommendations import Filters, RecommendationList, ValidationResult
 from book_agent.domain.requests import ResolvedRequest
@@ -80,6 +81,7 @@ async def run_agent_pipeline(
     works: WorkResolver | None = None,
     prompt: AgentPrompt = DEFAULT_AGENT_PROMPT,
     retriever: LibraryRetriever | None = None,
+    on_event: EventSink | None = None,
 ) -> AgentRun:
     """Interpret the optional request, merge its filters with `flags`, run the agent.
 
@@ -113,6 +115,8 @@ async def run_agent_pipeline(
         )
     resolved = resolution.request
     run = run.model_copy(update={"request": resolved})
+    if on_event is not None:
+        on_event(RequestInterpreted(resolved))
 
     user_prompt = prompt.build_user_prompt(profile, resolved.filters, resolved.preference)
     if prompt.build_related_prompt is not None and retriever is not None and resolved.text:
@@ -136,6 +140,7 @@ async def run_agent_pipeline(
             profile=profile,
             filters=resolved.filters,
             work_matching=WorkMatching(judge=LLMSameWorkJudge(llm), resolver=works),
+            on_event=on_event,
         )
     except AgentError as e:
         return run.model_copy(

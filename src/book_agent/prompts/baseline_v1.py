@@ -59,8 +59,11 @@ def compose_user_prompt(
     unrated_read = [b for b in profile.read_books if id(b) not in rated]
     reading = [b for b in profile.books if b.status is ReadingStatus.CURRENTLY_READING]
 
+    # A manual list has no real ratings: show its books as liked, with no number (D-043).
+    show_ratings = not profile.ratings_implied
+    liked_heading = "Books I liked (rating out of 5)" if show_ratings else "Books I liked"
     sections = [
-        _section("Books I liked (rating out of 5)", liked, with_rating=True),
+        _section(liked_heading, liked, with_rating=show_ratings),
         _section(
             "Books I liked less (avoid recommending similar books)", less_liked, with_rating=True
         ),

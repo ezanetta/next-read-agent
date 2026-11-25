@@ -5,10 +5,12 @@ the Protocol and the port-level exceptions, never the adapter's HTTP library.
 """
 
 from collections.abc import Sequence
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from book_agent.domain.library import RelatedBook
 from book_agent.domain.models import CatalogBook
+from book_agent.domain.profiles import StoredProfile
 from book_agent.domain.works import SameWorkVerdict, WorkInfo, WorkRef
 
 
@@ -104,3 +106,31 @@ class LibraryRetriever(Protocol):
         whether that stops the run.
         """
         ...
+
+
+class ProfileStore(Protocol):
+    """Keeps the demo's temporary profiles (D-043). Fast local storage: calls are sync."""
+
+    def save(self, stored: StoredProfile) -> None: ...
+
+    def get(self, profile_id: str, now: datetime) -> StoredProfile | None:
+        """The profile, or None when it doesn't exist or has expired (then it's deleted)."""
+        ...
+
+    def delete(self, profile_id: str) -> bool:
+        """Delete now; False when there was nothing to delete."""
+        ...
+
+    def purge_expired(self, now: datetime) -> int:
+        """Delete every expired profile; returns how many."""
+        ...
+
+
+class SearchCache(Protocol):
+    """Book search results by normalized query, so repeated searches cost no quota."""
+
+    def get(self, query: str, now: datetime, max_age: timedelta) -> list[CatalogBook] | None:
+        """Cached results younger than `max_age`, or None."""
+        ...
+
+    def put(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None: ...

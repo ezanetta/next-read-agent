@@ -104,7 +104,10 @@ class EvalRecord(BaseModel, frozen=True):
 
 
 def profile_sha256(profile: Profile) -> str:
-    return hashlib.sha256(profile.model_dump_json().encode("utf-8")).hexdigest()
+    """The hash that identifies a library in records. `ratings_implied` is left out while
+    False, so profiles from before that field keep their hash (D-043)."""
+    exclude = None if profile.ratings_implied else {"ratings_implied"}
+    return hashlib.sha256(profile.model_dump_json(exclude=exclude).encode("utf-8")).hexdigest()
 
 
 class RecordStore:

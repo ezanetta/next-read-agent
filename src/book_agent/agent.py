@@ -19,6 +19,13 @@ from time import perf_counter
 
 from pydantic import BaseModel, ValidationError
 
+from book_agent.agent_events import (
+    AgentEvent,
+    EventSink,
+    SubmissionChecked,
+    SubmissionChecking,
+    TurnFinished,
+)
 from book_agent.domain.acceptance import (
     blocking_problems,
     infrastructure_failures,
@@ -179,6 +186,11 @@ class _RunState:
     rejections: list[ValidationResult] = field(default_factory=list[ValidationResult])
     turns: list[TurnTrace] = field(default_factory=list[TurnTrace])
     repair_turn_used: bool = False
+    on_event: EventSink | None = None
+
+    def emit(self, event: AgentEvent) -> None:
+        if self.on_event is not None:
+            self.on_event(event)
 
     def error(
         self,
@@ -222,6 +234,7 @@ class _RunState:
                 llm_retries=response.retries,
             )
         )
+        self.emit(TurnFinished(self.turns[-1]))
 
 
 async def run_agent(
@@ -234,9 +247,10 @@ async def run_agent(
     profile: Profile,
     filters: Filters,
     work_matching: WorkMatching | None = None,
+    on_event: EventSink | None = None,
 ) -> AgentResult:
     messages: list[Message] = [Message.user(user_prompt)]
-    state = _RunState()
+    state = _RunState(on_event=on_event)
 
     limit = MAX_ITERATIONS  # raised to MAX_TURNS when the repair turn is granted
     iteration = 0
@@ -309,9 +323,12 @@ async def run_agent(
                 traces.append(_trace(call, f"invalid arguments: {problems}", is_error=True))
                 continue
 
+            titles = [r.title for r in submitted.recommendations]
+            state.emit(SubmissionChecking(iteration, titles))
             validation = await _validate(
                 submitted, profile, filters, books, work_matching, state.calls
             )
+            state.emit(SubmissionChecked(iteration, validation, is_acceptable(validation)))
             outage = infrastructure_failures(validation)
             if outage:  # the model can't fix an outage: stop instead of asking it to
                 outcome = f"catalog unavailable: {len(outage)} lookups failed"
