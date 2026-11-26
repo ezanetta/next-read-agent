@@ -135,8 +135,21 @@ def test_export_profile_writes_only_the_agreed_fields(
     capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
     out = tmp_path / "owner.json"
-    code = main(["export-profile", "--out", str(out), "--name", "Demo owner",
+    code = main(["export-profile", "--out", str(out), "--name", "Demo owner", "--no-covers",
                  "--csv", "tests/fixtures/goodreads_sample.csv"])  # fmt: skip
     assert code == EXIT_OK and "Keep it out of the repo" in capsys.readouterr().out
     text = out.read_text()
     assert '"Demo owner"' in text and "goodreads_id" not in text and '"pages"' not in text
+
+
+def test_export_profile_with_covers_needs_the_open_library_contact(
+    capsys: pytest.CaptureFixture[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # What CI saw: without OPEN_LIBRARY_CONTACT the export stops before any request.
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    out = tmp_path / "owner.json"
+    code = main(
+        ["export-profile", "--out", str(out), "--csv", "tests/fixtures/goodreads_sample.csv"]
+    )
+    assert code == EXIT_ERROR and "--no-covers" in capsys.readouterr().out
+    assert not out.exists()
