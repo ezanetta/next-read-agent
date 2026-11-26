@@ -5,6 +5,7 @@ from pathlib import Path
 from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.demo_profiles import PresetFile, load_presets
 from book_agent.domain.covers import CachedCover, cover_id_url, cover_key
+from book_agent.domain.models import Book, ReadingStatus
 from tests.api_support import NOW, client, services
 from tests.fakes import FakeCoverFinder
 from tests.library_data import PROFILE
@@ -119,7 +120,10 @@ async def test_an_upload_returns_at_once_and_its_covers_arrive_by_cover_id() -> 
     # Another profile already resolved Book 2: it's known before any request.
     store = api.profiles
     assert isinstance(store, SqliteStore)
-    store.put_cover(cover_key("Book 2", "Author 2"), CachedCover(200, NOW))
+    store.put_cover(
+        cover_key(Book(title="Book 2", author="Author 2", status=ReadingStatus.READ)),
+        CachedCover(cover_id_url(200), NOW),
+    )
     async with client(api) as c:
         created = await c.post("/profiles/goodreads", files={"file": ("export.csv", upload(5))})
         profile_id = created.json()["id"]
@@ -140,7 +144,7 @@ async def test_an_upload_returns_at_once_and_its_covers_arrive_by_cover_id() -> 
         "Book 3": None, "Book 4": None, "Later": cover_id_url(300),
     }  # fmt: skip
     assert all("isbn" not in (url or "") for url in covers.values())
-    assert [t for t, _ in finder.calls][-1] == "Later"  # the to-read shelf goes last
+    assert finder.searched[-1] == "Later"  # the to-read shelf goes last
 
 
 async def test_without_a_cover_queue_nothing_is_pending() -> None:

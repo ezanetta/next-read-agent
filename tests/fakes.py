@@ -44,6 +44,8 @@ class FakeBookSearch:
         self, query: str, *, language: str | None = None, max_results: int = 10
     ) -> list[CatalogBook]:
         self.searches.append((query, language, max_results))
+        if query.startswith("isbn:"):  # Google Books' ISBN search
+            return [b for b in self.books if b.isbn13 == query.removeprefix("isbn:")][:max_results]
         words = _words(query)
         matches = [
             b
@@ -276,31 +278,46 @@ class FakeTime:
         await asyncio.sleep(0)
 
 
+Answer = int | CoverLookupError | None
+
+
 class FakeCoverFinder:
-    """CoverFinder answering from a dict by title: a cover id, None (no cover), or a
-    CoverLookupError to raise. Records each call with the fake time it was made at. With
-    a `gate`, every lookup waits until the test sets it."""
+    """CoverFinder answering from dicts: edition lookups by ISBN, searches by title. Each
+    answer is a cover id, None (no cover), or a CoverLookupError to raise; anything not
+    listed is None. Records each call, and the fake time it was made at. With a `gate`,
+    every lookup waits until the test sets it."""
 
     def __init__(
         self,
-        answers: dict[str, int | CoverLookupError | None],
+        searches: dict[str, Answer] | None = None,
         time: FakeTime | None = None,
         *,
+        editions: dict[str, Answer] | None = None,
         gate: asyncio.Event | None = None,
     ) -> None:
-        self.answers = answers
+        self.searches = searches or {}
+        self.editions = editions or {}
         self.time = time
         self.gate = gate
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str]] = []  # ("edition", isbn) or ("search", title)
         self.call_times: list[float] = []
 
-    async def cover_id(self, title: str, author: str) -> int | None:
+    async def edition_cover_id(self, isbn13: str) -> int | None:
+        return await self._answer(("edition", isbn13), self.editions.get(isbn13))
+
+    async def search_cover_id(self, title: str, author: str) -> int | None:
+        return await self._answer(("search", title), self.searches.get(title))
+
+    async def _answer(self, call: tuple[str, str], answer: Answer) -> int | None:
         if self.gate is not None:
             await self.gate.wait()
-        self.calls.append((title, author))
+        self.calls.append(call)
         if self.time is not None:
             self.call_times.append(self.time.monotonic())
-        answer = self.answers.get(title)
         if isinstance(answer, CoverLookupError):
             raise answer
         return answer
+
+    @property
+    def searched(self) -> list[str]:
+        return [value for kind, value in self.calls if kind == "search"]

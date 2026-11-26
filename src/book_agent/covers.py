@@ -4,10 +4,13 @@
   without a cover wait here; a single worker looks them up one request per second, read
   books first, and saves each cover id URL on the profile as it's found. Concurrent
   uploads share the queue, so they never raise the request rate.
-- `resolve_covers`: the same lookups for a whole profile in one go, for the owner export.
+- `resolve_covers`: the same lookups for a whole profile in one go, for the owner export,
+  and `google_covers`: the export's fallback for books Open Library has no cover for.
 
-Both check the shared cache by normalized title and author first: a book any profile
-already resolved costs no request.
+A lookup is the edition record by ISBN, then (no ISBN, or no cover there) a search by
+title and author: up to two requests, each paced. Both check the shared cache first, by
+ISBN or by normalized title and author, so a book any profile already resolved costs no
+request.
 """
 
 import asyncio
@@ -18,14 +21,31 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from book_agent.domain.covers import SHELF_PRIORITY, CachedCover, cover_id_url, cover_key
-from book_agent.domain.models import Book, Profile
+from book_agent.domain.covers import (
+    SHELF_PRIORITY,
+    CachedCover,
+    book_isbn13,
+    cover_id_url,
+    cover_key,
+    google_cover_key,
+)
+from book_agent.domain.matching import same_work, titles_match
+from book_agent.domain.models import Book, CatalogBook, Profile
 from book_agent.domain.profiles import StoredProfile
-from book_agent.ports import CoverCache, CoverFinder, CoverLookupError, ProfileStore
+from book_agent.ports import (
+    BookSearch,
+    BookSearchError,
+    CoverCache,
+    CoverFinder,
+    CoverLookupError,
+    ProfileStore,
+)
 
 logger = logging.getLogger(__name__)
 
 REQUEST_INTERVAL_S = 1.0
+GOOGLE_BOOKS_INTERVAL_S = 0.7  # under Google Books' 100 requests a minute
+GOOGLE_BOOKS_RESULTS = 5
 MAX_BACKOFF = 32  # after repeated failures, at most one request every 32 s
 
 Sleep = Callable[[float], Awaitable[None]]
@@ -66,30 +86,41 @@ class Pacer:
 
 def cached_url(cache: CoverCache, book: Book, now: datetime) -> str | None:
     """The cover URL when the cache already answers for this book, else None."""
-    cached = cache.get_cover(cover_key(book.title, book.author))
-    if cached is not None and cached.cover_id is not None and cached.fresh(now):
-        return cover_id_url(cached.cover_id)
-    return None
+    cached = cache.get_cover(cover_key(book))
+    return cached.url if cached is not None and cached.fresh(now) else None
 
 
 def _needs_lookup(cache: CoverCache, book: Book, now: datetime) -> bool:
-    cached = cache.get_cover(cover_key(book.title, book.author))
+    cached = cache.get_cover(cover_key(book))
     return cached is None or not cached.fresh(now)
 
 
-async def _look_up(
-    finder: CoverFinder, cache: CoverCache, pacer: Pacer, book: Book, now: Clock
-) -> int | None:
-    """One paced lookup, cached when it finishes. Raises CoverLookupError (not cached)."""
+async def _paced[T](pacer: Pacer, request: Callable[[], Awaitable[T]]) -> T:
+    """One request at the pacer's rate; a CoverLookupError slows the next one down."""
     await pacer.wait()
     try:
-        cover_id = await finder.cover_id(book.title, book.author)
+        result = await request()
     except CoverLookupError:
         pacer.failed()
         raise
     pacer.succeeded()
-    cache.put_cover(cover_key(book.title, book.author), CachedCover(cover_id, now()))
-    return cover_id
+    return result
+
+
+async def _look_up(
+    finder: CoverFinder, cache: CoverCache, pacer: Pacer, book: Book, now: Clock
+) -> str | None:
+    """The book's cover URL: its edition's cover by ISBN, else search by title and author.
+    Each request is paced; the answer is cached. Raises CoverLookupError (not cached)."""
+    cover_id: int | None = None
+    isbn = book_isbn13(book)
+    if isbn:
+        cover_id = await _paced(pacer, lambda: finder.edition_cover_id(isbn))
+    if cover_id is None:
+        cover_id = await _paced(pacer, lambda: finder.search_cover_id(book.title, book.author))
+    url = cover_id_url(cover_id) if cover_id is not None else None
+    cache.put_cover(cover_key(book), CachedCover(url, now()))
+    return url
 
 
 def in_priority_order(profile: Profile) -> list[int]:
@@ -206,13 +237,10 @@ class CoverQueue:
         url = cached_url(self._cache, item.book, self._clock())  # another profile found it
         if url is None and _needs_lookup(self._cache, item.book, self._clock()):
             try:
-                cover_id = await _look_up(
-                    self._finder, self._cache, self._pacer, item.book, self._clock
-                )
+                url = await _look_up(self._finder, self._cache, self._pacer, item.book, self._clock)
             except CoverLookupError as e:
                 logger.warning("cover lookup for %r failed: %s", item.book.title, e)
                 return
-            url = cover_id_url(cover_id) if cover_id is not None else None
         if url is None:
             return
         # Read again after the await: save onto the latest version of the profile.
@@ -251,14 +279,81 @@ async def resolve_covers(
     ]
     for done, index in enumerate(todo, start=1):
         try:
-            cover_id = await _look_up(finder, cache, pacer, profile.books[index], clock)
+            url = await _look_up(finder, cache, pacer, profile.books[index], clock)
         except CoverLookupError:
             report.failed += 1
         else:
             report.looked_up += 1
-            if cover_id is None:
+            if url is None:
                 report.not_found += 1
             else:
-                report.covers[index] = cover_id_url(cover_id)
+                report.covers[index] = url
+        on_progress(done, len(todo))
+    return report
+
+
+def _google_cover(book: Book, results: list[CatalogBook], *, by_isbn: bool) -> str | None:
+    """The first result with a cover that is this book: any result of an ISBN search,
+    else the same work, preferring a matching title (as with Open Library)."""
+    if by_isbn:
+        return next((str(r.cover_url) for r in results if r.cover_url), None)
+    same = [
+        r
+        for r in results
+        if r.cover_url and same_work(book.title, [book.author], r.title, r.authors)
+    ]
+    titled = [r for r in same if titles_match(book.title, r.title)]
+    best = (titled or same)[:1]
+    return str(best[0].cover_url) if best else None
+
+
+async def google_covers(
+    profile: Profile,
+    covers: dict[int, str],
+    books: BookSearch,
+    cache: CoverCache,
+    *,
+    pacer: Pacer | None = None,
+    clock: Clock,
+    on_progress: Callable[[int, int], None] = lambda done, total: None,
+) -> CoverReport:
+    """The owner export's fallback: Google Books covers for the books still without one
+    (D-046). One request per book (by ISBN when there is one, else by title and author),
+    cached under google_cover_key so a rerun spends no quota. Never used for uploads."""
+    pacer = pacer or Pacer(GOOGLE_BOOKS_INTERVAL_S)
+    report = CoverReport(covers=dict(covers))
+    todo: list[int] = []
+    for index in in_priority_order(profile):
+        if index in report.covers:
+            continue
+        cached = cache.get_cover(google_cover_key(profile.books[index]))
+        if cached is not None and cached.fresh(clock()):
+            if cached.url:
+                report.covers[index] = cached.url
+            continue
+        todo.append(index)
+    for done, index in enumerate(todo, start=1):
+        book = profile.books[index]
+        isbn = book_isbn13(book)
+        await pacer.wait()
+        try:
+            if isbn:
+                results = await books.search(f"isbn:{isbn}", max_results=1)
+            else:
+                results = await books.find(
+                    book.title, book.author, max_results=GOOGLE_BOOKS_RESULTS
+                )
+        except BookSearchError:
+            pacer.failed()
+            report.failed += 1
+        else:
+            pacer.succeeded()
+            report.looked_up += 1
+            url = _google_cover(book, results, by_isbn=bool(isbn))
+            cache.put_cover(google_cover_key(book), CachedCover(url, clock()))
+            if url is None:
+                report.not_found += 1
+            else:
+                report.covers[index] = url
         on_progress(done, len(todo))
     return report

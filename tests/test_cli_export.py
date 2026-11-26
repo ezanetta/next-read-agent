@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import HttpUrl
 
 from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.cli import EXIT_OK, export_covers, main
@@ -9,8 +10,8 @@ from book_agent.covers import Pacer
 from book_agent.demo_profiles import load_presets
 from book_agent.domain.covers import cover_id_url
 from tests.api_support import NOW
-from tests.fakes import FakeCoverFinder, FakeTime
-from tests.library_data import PROFILE
+from tests.fakes import FakeBookSearch, FakeCoverFinder, FakeTime
+from tests.library_data import PROFILE, catalog_book
 
 CSV = "Book Id,Title,Author,My Rating,Exclusive Shelf\n" + "\n".join(
     f"{i},Book {i},Author {i},4,read" for i in range(5)
@@ -29,22 +30,35 @@ def test_no_covers_writes_the_owner_file_without_settings_or_requests(
     assert load_presets(tmp_path / "none", out, NOW)["owner"].covers == {}
 
 
-async def test_export_covers_resolves_and_reports_and_a_rerun_uses_the_cache(
+async def test_export_covers_uses_open_library_then_google_books_and_a_rerun_is_free(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     time = FakeTime()
-    titles = [b.title for b in PROFILE.books]
-    finder = FakeCoverFinder({titles[0]: 1, titles[1]: 2}, time)
+    # Dune has an ISBN (its edition's cover), Mistborn is found by search, and Twilight
+    # only on Google Books.
+    dune, mistborn, twilight = PROFILE.books[:3]
+    assert dune.isbn13 and not mistborn.isbn13 and not twilight.isbn13
+    finder = FakeCoverFinder({mistborn.title: 2}, time, editions={dune.isbn13: 1})
+    on_google = catalog_book("g", twilight.title, twilight.author, 300)
+    google = FakeBookSearch(
+        [on_google.model_copy(update={"cover_url": HttpUrl("https://books.google/g.jpg")})]
+    )
     store = SqliteStore(":memory:")
 
-    report = await export_covers(
-        PROFILE, finder, store, pacer=Pacer(sleep=time.sleep, monotonic=time.monotonic)
-    )
+    def pacers() -> dict[str, Pacer]:
+        return {
+            "pacer": Pacer(sleep=time.sleep, monotonic=time.monotonic),
+            "google_pacer": Pacer(0.7, sleep=time.sleep, monotonic=time.monotonic),
+        }
 
-    assert report.covers[0] == cover_id_url(1) and report.covers[1] == cover_id_url(2)
-    assert report.looked_up == len(PROFILE.books)
+    covers = await export_covers(PROFILE, finder, store, google, **pacers())
+
+    assert covers[0] == cover_id_url(1) and covers[1] == cover_id_url(2)
+    assert covers[2] == "https://books.google/g.jpg"
     out = capsys.readouterr().out
-    assert f"Covers: 2 of {len(PROFILE.books)} books" in out
-    calls = len(finder.calls)
-    again = await export_covers(PROFILE, finder, store, pacer=Pacer(sleep=time.sleep))
-    assert again.covers == report.covers and len(finder.calls) == calls  # all cached
+    assert f"Covers after Open Library: 2 of {len(PROFILE.books)} books" in out
+    assert f"Covers after Google Books: 3 of {len(PROFILE.books)} books" in out
+    requests = (len(finder.calls), len(google.searches) + len(google.finds))
+    again = await export_covers(PROFILE, finder, store, google, **pacers())
+    assert again == covers
+    assert (len(finder.calls), len(google.searches) + len(google.finds)) == requests

@@ -55,9 +55,9 @@ def test_cover_lookups_are_cached_with_their_time_and_survive_reopening(tmp_path
     path = tmp_path / "demo.sqlite3"
     store = SqliteStore(path)
     assert store.get_cover("dune|frank herbert") is None
-    store.put_cover("dune|frank herbert", CachedCover(42, NOW))
+    store.put_cover("dune|frank herbert", CachedCover("https://c/42", NOW))
     store.put_cover("lost|someone", CachedCover(None, NOW))
     store.close()
     reopened = SqliteStore(path)
-    assert reopened.get_cover("dune|frank herbert") == CachedCover(42, NOW)
+    assert reopened.get_cover("dune|frank herbert") == CachedCover("https://c/42", NOW)
     assert reopened.get_cover("lost|someone") == CachedCover(None, NOW)

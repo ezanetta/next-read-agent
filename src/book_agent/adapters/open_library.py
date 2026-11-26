@@ -16,7 +16,7 @@ from importlib.metadata import version
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from book_agent.domain.matching import same_work
+from book_agent.domain.matching import same_work, titles_match
 from book_agent.domain.works import WorkInfo
 from book_agent.ports import CoverLookupError, WorkLookupError
 
@@ -101,12 +101,12 @@ class OpenLibraryWorks:
 # Goodreads appends series notes in brackets: "Guards! Guards! (Discworld #8)". Search
 # without them; same_work ignores them when comparing.
 _BRACKETS = re.compile(r"\s*[(\[][^)\]]*[)\]]")
-_COVER_SEARCH_FIELDS = "title,author_name,cover_i"
+_COVER_SEARCH_FIELDS = "title,author_name,cover_i,editions,editions.title,editions.cover_i"
 _COVER_SEARCH_RESULTS = 5
 
 
 class OpenLibraryCovers:
-    """CoverFinder backed by Open Library search (title and author fields).
+    """CoverFinder backed by Open Library's edition records and search (D-046).
 
     One request per call and no pacing: the caller (CoverQueue, the owner export) paces
     every request, so the rate holds however many callers there are. No retries.
@@ -115,38 +115,65 @@ class OpenLibraryCovers:
     def __init__(self, client: httpx.AsyncClient) -> None:
         self._client = client
 
-    async def cover_id(self, title: str, author: str) -> int | None:
+    async def edition_cover_id(self, isbn13: str) -> int | None:
+        if not isbn13.isdigit():  # also keeps the value safe to put in the path
+            raise CoverLookupError(f"not an ISBN-13: {isbn13!r}")
+        # The edition record (Books API), not the Covers API: only the latter is limited.
+        response = await self._get(f"{BASE_URL}/isbn/{isbn13}.json", {}, follow_redirects=True)
+        if response.status_code == HTTPStatus.NOT_FOUND:
+            return None
+        edition = self._parse(_CoverEdition, response)
+        return next((c for c in edition.covers if c > 0), None)  # -1 marks a deleted cover
+
+    async def search_cover_id(self, title: str, author: str) -> int | None:
         search_title = _BRACKETS.sub("", title).strip() or title
+        response = await self._get(
+            f"{BASE_URL}/search.json",
+            {
+                "title": search_title,
+                "author": author,
+                "fields": _COVER_SEARCH_FIELDS,
+                "limit": _COVER_SEARCH_RESULTS,
+            },
+        )
+        if response.status_code == HTTPStatus.NOT_FOUND:
+            return None
+        results = self._parse(_SearchResults, response)
+        return _search_cover(results, title, author)
+
+    async def _get(
+        self, url: str, params: dict[str, str | int], *, follow_redirects: bool = False
+    ) -> httpx.Response:
         try:
-            response = await self._client.get(
-                f"{BASE_URL}/search.json",
-                params={
-                    "title": search_title,
-                    "author": author,
-                    "fields": _COVER_SEARCH_FIELDS,
-                    "limit": _COVER_SEARCH_RESULTS,
-                },
-            )
+            response = await self._client.get(url, params=params, follow_redirects=follow_redirects)
         except httpx.TimeoutException as e:
             raise CoverLookupError("Open Library request timed out") from e
         except httpx.HTTPError as e:
             raise CoverLookupError(f"Open Library request failed: {type(e).__name__}") from e
-        if response.status_code != HTTPStatus.OK:
+        if response.status_code not in (HTTPStatus.OK, HTTPStatus.NOT_FOUND):
             raise CoverLookupError(f"Open Library returned HTTP {response.status_code}")
+        return response
+
+    @staticmethod
+    def _parse[M: BaseModel](model: type[M], response: httpx.Response) -> M:
         try:
-            results = _SearchResults.model_validate_json(response.content)
+            return model.model_validate_json(response.content)
         except ValidationError as e:
             raise CoverLookupError(
                 f"Unexpected Open Library response: {e.error_count()} errors"
             ) from e
-        return next(
-            (
-                doc.cover_i
-                for doc in results.docs
-                if doc.cover_i and same_work(title, [author], doc.title, doc.author_name)
-            ),
-            None,
-        )
+
+
+def _search_cover(results: "_SearchResults", title: str, author: str) -> int | None:
+    """Among results that are the same work: first, the cover of an edition whose title
+    matches (search returns each work's best-matching edition); else the work's cover,
+    which may come from any edition, a translation included (F-023)."""
+    works = [d for d in results.docs if same_work(title, [author], d.title, d.author_name)]
+    for doc in works:
+        for edition in doc.editions.docs:
+            if edition.cover_i and titles_match(title, edition.title):
+                return edition.cover_i
+    return next((doc.cover_i for doc in works if doc.cover_i), None)
 
 
 # --- API response shapes ---------------------------------------------------
@@ -171,10 +198,24 @@ class _Work(BaseModel):
     subjects: list[str] = []
 
 
+class _CoverEdition(BaseModel):
+    covers: list[int] = []
+
+
+class _SearchEdition(BaseModel):
+    title: str = ""
+    cover_i: int | None = None
+
+
+class _SearchEditions(BaseModel):
+    docs: list[_SearchEdition] = []
+
+
 class _SearchDoc(BaseModel):
     title: str = ""
     author_name: list[str] = []
-    cover_i: int | None = None
+    cover_i: int | None = None  # the work's cover: any edition, translations included
+    editions: _SearchEditions = _SearchEditions()  # the best-matching edition
 
 
 class _SearchResults(BaseModel):

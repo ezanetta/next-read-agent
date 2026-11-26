@@ -30,9 +30,10 @@ Exit codes: 0 index complete, 2 some books failed or errors.
 
 export-profile: writes the library as the demo's owner profile, loaded at deploy time from
 OWNER_PROFILE_PATH and never committed (D-043): only title, author, ISBNs, rating, shelf
-and year, plus cover URLs by Open Library cover id (D-046). Covers are looked up by title
-and author, one request a second, cached in the demo database so a rerun only repeats
-failures; needs OPEN_LIBRARY_CONTACT. --no-covers skips them.
+and year, plus cover URLs (D-046): Open Library first (the edition by ISBN, then search by
+title and author, one request a second), then Google Books for the books still without
+one (one request each). Both are cached in the demo database, so a rerun only repeats
+failures. Needs OPEN_LIBRARY_CONTACT. --no-covers skips them.
 Exit codes: 0 written, 2 errors.
 """
 
@@ -62,7 +63,7 @@ from book_agent.agent_run import (
 from book_agent.api.services import utc_now
 from book_agent.baseline import BaselineResult, run_baseline
 from book_agent.config import Settings, get_settings
-from book_agent.covers import CoverReport, Pacer, resolve_covers
+from book_agent.covers import CoverReport, Pacer, google_covers, resolve_covers
 from book_agent.demo_profiles import owner_export
 from book_agent.domain.acceptance import Problem, blocking_problems
 from book_agent.domain.library import MIN_RATING, retrieval_pool
@@ -259,35 +260,56 @@ def _print_progress(done: int, total: int) -> None:
 
 
 async def _export_profile(profile: Profile, out: Path, name: str, settings: Settings) -> int:
-    http = build_open_library_http(settings)
-    if http is None:
+    open_library = build_open_library_http(settings)
+    if open_library is None:
         print(f"error: {NO_CONTACT}: covers need it (or pass --no-covers)")
         return EXIT_ERROR
     store = SqliteStore(settings.demo_db_path)
     try:
-        async with http:
-            report = await export_covers(profile, OpenLibraryCovers(http), store)
+        async with open_library, httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S) as google:
+            covers = await export_covers(
+                profile, OpenLibraryCovers(open_library), store, build_book_search(settings, google)
+            )
     finally:
         store.close()
-    return _write_owner(profile, out, name, report.covers)
+    return _write_owner(profile, out, name, covers)
 
 
 async def export_covers(
-    profile: Profile, finder: CoverFinder, cache: CoverCache, *, pacer: Pacer | None = None
-) -> CoverReport:
-    """The owner's covers, with a progress line and a summary."""
-    print("Covers: looking up the books the cache doesn't know, one a second (D-046)")
-    report = await resolve_covers(
+    profile: Profile,
+    finder: CoverFinder,
+    cache: CoverCache,
+    books: BookSearch,
+    *,
+    pacer: Pacer | None = None,
+    google_pacer: Pacer | None = None,
+) -> dict[int, str]:
+    """The owner's covers: Open Library first (edition by ISBN, then search), then Google
+    Books for the books still without one (D-046). Prints progress and a summary."""
+    total = len(profile.books)
+    print("Covers: Open Library, for the books the cache doesn't know, one request a second")
+    first = await resolve_covers(
         profile, finder, cache, pacer=pacer, clock=utc_now, on_progress=_print_progress
     )
-    missing = len(profile.books) - len(report.covers)
-    print(
-        f"Covers: {len(report.covers)} of {len(profile.books)} books "
-        f"({report.looked_up} looked up now, {missing} without a cover"
-        + (f", {report.failed} failed: rerun to retry them" if report.failed else "")
-        + ")"
+    print(_cover_summary("Open Library", len(first.covers), total, first))
+    missing = total - len(first.covers)
+    if missing == 0:
+        return first.covers
+    print(f"Covers: Google Books for the {missing} without one (cached: a rerun spends no quota)")
+    second = await google_covers(
+        profile, first.covers, books, cache,
+        pacer=google_pacer, clock=utc_now, on_progress=_print_progress,
+    )  # fmt: skip
+    print(_cover_summary("Google Books", len(second.covers), total, second))
+    return second.covers
+
+
+def _cover_summary(source: str, found: int, total: int, report: CoverReport) -> str:
+    failed = f", {report.failed} failed: rerun to retry them" if report.failed else ""
+    return (
+        f"Covers after {source}: {found} of {total} books "
+        f"({report.looked_up} looked up now, {total - found} without a cover{failed})"
     )
-    return report
 
 
 def _write_owner(profile: Profile, out: Path, name: str, covers: dict[int, str]) -> int:

@@ -142,11 +142,17 @@ class CoverLookupError(Exception):
 
 
 class CoverFinder(Protocol):
-    """Finds a book's cover id from its title and author (D-046)."""
+    """Finds a book's cover id (D-046). One request per call: the caller paces them.
+    Both raise CoverLookupError when the request fails."""
 
-    async def cover_id(self, title: str, author: str) -> int | None:
-        """The cover id of the first search result that is the same work and has a cover,
-        or None when there is none. Raises CoverLookupError when the search fails."""
+    async def edition_cover_id(self, isbn13: str) -> int | None:
+        """The cover id of the edition with this ISBN, or None when the edition is unknown
+        or has no cover."""
+        ...
+
+    async def search_cover_id(self, title: str, author: str) -> int | None:
+        """A cover id for this title and author from search: an edition whose title
+        matches if there is one, else the work's cover, or None."""
         ...
 
 

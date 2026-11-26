@@ -30,9 +30,11 @@ CREATE TABLE IF NOT EXISTS search_cache (
     body TEXT NOT NULL,
     cached_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS cover_cache (
+-- cover_cache held work covers by title and author, some from translations (F-023).
+DROP TABLE IF EXISTS cover_cache;
+CREATE TABLE IF NOT EXISTS cover_lookups (
     key TEXT PRIMARY KEY,
-    cover_id INTEGER,
+    url TEXT,
     checked_at TEXT NOT NULL
 );
 """
@@ -113,17 +115,17 @@ class SqliteStore:
     def get_cover(self, key: str) -> CachedCover | None:
         with self._lock:
             row = self._db.execute(
-                "SELECT cover_id, checked_at FROM cover_cache WHERE key = ?", (key,)
+                "SELECT url, checked_at FROM cover_lookups WHERE key = ?", (key,)
             ).fetchone()
         if row is None:
             return None
-        return CachedCover(cover_id=row[0], checked_at=datetime.fromisoformat(row[1]))
+        return CachedCover(url=row[0], checked_at=datetime.fromisoformat(row[1]))
 
     def put_cover(self, key: str, cover: CachedCover) -> None:
         with self._lock, self._db:
             self._db.execute(
-                "INSERT OR REPLACE INTO cover_cache (key, cover_id, checked_at) VALUES (?, ?, ?)",
-                (key, cover.cover_id, cover.checked_at.isoformat()),
+                "INSERT OR REPLACE INTO cover_lookups (key, url, checked_at) VALUES (?, ?, ?)",
+                (key, cover.url, cover.checked_at.isoformat()),
             )
 
 

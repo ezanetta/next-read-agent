@@ -491,12 +491,16 @@ Significant design decisions: context, options considered, choice, and reason.
   - **Keep ISBN URLs as a fallback while lookups run:** brings the 403s back. Rejected.
   - **Open Library search by title and author, on the server, in the background:** free, works without an ISBN, returns cover ids. Chosen.
 - **Choice:**
+  - **The lookup (revised after the first try, F-023):**
+    1. **With an ISBN:** the cover of that exact edition, from Open Library's edition record (`/isbn/{isbn}.json`, the Books API, not the rate-limited Covers API). The cover is the edition the reader read.
+    2. **Without an ISBN, or the edition has no cover:** search by title and author. Search returns each work's best-matching edition: its cover is used when its title matches the Goodreads title, else the work's cover, which may come from a translation.
+    Each request is paced on its own, so a book can take two.
   - **One `CoverQueue` per server** (`covers.py`): a profile is saved first, so the upload returns at once; its books without a cover are queued. A single worker looks them up one request a second, with our contact header, backing off on failures (up to one every 32 s). Read books go first, since the library opens on that shelf, then currently reading, then to-read. Concurrent uploads share the queue, so they never raise the rate.
-  - **A shared cache** in the demo database, keyed by normalized title and author, for every profile. Cache hits are applied before the profile is saved, so they cost no request and no wait. A missing cover is checked again after 30 days.
-  - **The match:** the first of 5 search results that is the same work (`same_work`) and has a cover. Goodreads series notes are dropped from the search title.
+  - **A shared cache** in the demo database (`cover_lookups`, cover URLs), keyed by ISBN-13 when the book has one, else by normalized title and author, for every profile. It replaced a first table of work covers by title and author, which is dropped. Cache hits are applied before the profile is saved, so they cost no request and no wait. A missing cover is checked again after 30 days.
+  - **The search match:** among 5 results, those that are the same work (`same_work`); Goodreads series notes are dropped from the search title.
   - **No ISBN fallback:** a book with no match keeps the placeholder.
   - **The library view refetches** every 3 s while `covers_pending` (new on `LibraryPage`) is above 0, and says how many are left.
-  - **The owner's profile** gets its covers in `cli export-profile`, through the same lookups and cache. The file becomes a preset file (`description`, `profile`, `covers`), so it loads complete. `--no-covers` skips the lookups.
+  - **The owner's profile** gets its covers in `cli export-profile`, through the same lookups and cache. Books still without one then fall back to **Google Books**: one request each (by ISBN, else by title and author, preferring a matching title), 0.7 s apart, cached apart from Open Library's results so a rerun spends no quota. That's about 51 requests, once. Uploads never use it. The file becomes a preset file (`description`, `profile`, `covers`), so it loads complete. `--no-covers` skips the lookups.
   - Without `OPEN_LIBRARY_CONTACT` there is no queue: books without a known cover show placeholders.
-- **Trade-offs:** Uploaded titles and authors are sent to Open Library from the server; before, the browser sent their ISBNs. Queued lookups live in memory: a restart drops them, and those books keep placeholders until the profile is made again. A 200-book library takes about 3 to 4 minutes to fill on an empty cache.
+- **Trade-offs:** Uploaded titles and authors are sent to Open Library from the server; before, the browser sent their ISBNs. Queued lookups live in memory: a restart drops them, and those books keep placeholders until the profile is made again. A 200-book library takes about 4 to 6 minutes to fill on an empty cache: books with an ISBN whose edition has no cover need two requests.
 - **Reason:** Free, polite, and within Open Library's limits however many people upload, with no quota spent and a fast upload.
