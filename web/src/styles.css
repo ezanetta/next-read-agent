@@ -23,6 +23,8 @@
     color: var(--color-text);
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
+    /* A long single word (a title, an author) breaks instead of overflowing its box. */
+    overflow-wrap: break-word;
   }
 
   h1,

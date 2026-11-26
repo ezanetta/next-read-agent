@@ -36,3 +36,14 @@ export function waitTime(totalSeconds: number): string {
   if (minutes > 0) return `${minutes} min`;
   return `${Math.max(1, Math.round(totalSeconds))} s`;
 }
+
+// Goodreads appends the series to the title: "Guards! Guards! (Discworld #8, City Watch #1)".
+// Only a trailing parenthesis with a "#number" counts, so "(Spanish Edition)" stays.
+const SERIES = /^(.*\S)\s*\(([^()]*#\s*\d[^()]*)\)$/;
+
+/** A title without its series note, and the series (null when there is none). */
+export function splitSeries(title: string): { title: string; series: string | null } {
+  const match = SERIES.exec(title.trim());
+  if (!match?.[1] || !match[2]) return { title, series: null };
+  return { title: match[1], series: match[2].trim() };
+}

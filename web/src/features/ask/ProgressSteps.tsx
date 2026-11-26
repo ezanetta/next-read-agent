@@ -93,7 +93,7 @@ export function ProgressSteps({ progress, elapsed }: { progress: Progress; elaps
             <StepIcon status={step.status} />
             <div className="min-w-0 flex-1">
               <p
-                className={`font-semibold ${step.status === "active" ? "text-accent" : step.status === "pending" ? "text-muted" : "text-text"}`}
+                className={`font-semibold wrap-break-word ${step.status === "active" ? "text-accent" : step.status === "pending" ? "text-muted" : "text-text"}`}
               >
                 {step.title}
                 <span className="sr-only">, {STATUS_LABEL[step.status]}</span>

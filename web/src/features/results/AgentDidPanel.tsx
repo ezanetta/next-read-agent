@@ -67,8 +67,8 @@ export function AgentDidPanel({ trace }: { trace: TraceSummary }) {
             {trace.steps.map((step) => {
               const line = stepLine(step);
               return (
-                <li key={step.iteration}>
-                  <p className="font-semibold">{line.title}</p>
+                <li key={step.iteration} className="min-w-0">
+                  <p className="font-semibold wrap-break-word">{line.title}</p>
                   <p className="text-muted">{line.detail}</p>
                 </li>
               );

@@ -1,5 +1,6 @@
 import type { PickedBook } from "../../api/client";
 import { Cover } from "../../components/Cover";
+import { ui } from "../../components/ui";
 import { MIN_PICKS } from "./picks";
 
 export function PickedGrid({
@@ -26,7 +27,7 @@ export function PickedGrid({
       ) : (
         <ul className="mt-3 grid grid-cols-3 gap-3 sm:grid-cols-6">
           {picks.map((book) => (
-            <li key={book.source_id} className="relative">
+            <li key={book.source_id} className="relative min-w-0">
               <Cover title={book.title} author={book.authors?.[0]} url={book.cover_url} />
               <button
                 type="button"
@@ -37,7 +38,7 @@ export function PickedGrid({
                 ×
               </button>
               {book.cover_url && (
-                <p className="mt-1 line-clamp-2 text-xs text-muted">{book.title}</p>
+                <p className={`${ui.wrap} mt-1 line-clamp-2 text-xs text-muted`}>{book.title}</p>
               )}
             </li>
           ))}

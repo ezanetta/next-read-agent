@@ -8,6 +8,7 @@ import { ErrorState } from "../../components/ErrorState";
 import { Layout } from "../../components/Layout";
 import { PickedBadge, Stars } from "../../components/Stars";
 import { ui } from "../../components/ui";
+import { splitSeries } from "../../lib/format";
 import type { ChooseState } from "../choose/ChoosePage";
 import { presetTitle } from "../choose/SampleReaders";
 import { AgentSeesPanel } from "./AgentSeesPanel";
@@ -165,20 +166,28 @@ export function LibraryPage() {
             <p className="text-muted">No books on this shelf.</p>
           ) : (
             <ul className="grid grid-cols-2 gap-x-6 gap-y-10 sm:grid-cols-3 xl:grid-cols-4">
-              {shown.map((book) => (
-                <li key={`${book.title}|${book.author}`} id={bookAnchor(book.title)}>
-                  <Cover title={book.title} author={book.author} url={book.cover_url} />
-                  <p className="mt-3 font-semibold leading-snug">{book.title}</p>
-                  <p className="text-sm text-muted">{book.author}</p>
-                  <div className="mt-2">
-                    {book.picked ? (
-                      <PickedBadge />
-                    ) : book.rating !== null ? (
-                      <Stars rating={book.rating} />
-                    ) : null}
-                  </div>
-                </li>
-              ))}
+              {shown.map((book) => {
+                const { title, series } = splitSeries(book.title);
+                return (
+                  <li
+                    key={`${book.title}|${book.author}`}
+                    id={bookAnchor(book.title)}
+                    className="min-w-0"
+                  >
+                    <Cover title={title} author={book.author} url={book.cover_url} />
+                    <p className="mt-3 font-semibold leading-snug wrap-break-word">{title}</p>
+                    {series && <p className="text-xs text-muted wrap-break-word">{series}</p>}
+                    <p className="text-sm text-muted wrap-break-word">{book.author}</p>
+                    <div className="mt-2">
+                      {book.picked ? (
+                        <PickedBadge />
+                      ) : book.rating !== null ? (
+                        <Stars rating={book.rating} />
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

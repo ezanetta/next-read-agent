@@ -18,6 +18,10 @@ describe("results", () => {
       "href",
       "/p/p#book-piranesi",
     );
+    // The badge flows inline after the cited title, not on a line of its own.
+    expect(within(first).getByText("Picked").parentElement).toBe(
+      within(first).getByRole("link", { name: "Piranesi" }).parentElement,
+    );
     expect(within(first).getByRole("link", { name: /View on Google Books/ })).toHaveAttribute(
       "href",
       "https://books.example/1",

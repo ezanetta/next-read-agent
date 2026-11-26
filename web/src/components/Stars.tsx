@@ -5,7 +5,11 @@ const POSITIONS = [1, 2, 3, 4, 5] as const;
 export function Stars({ rating }: { rating: number }) {
   const filled = Math.round(rating);
   return (
-    <span role="img" aria-label={`Rated ${rating} out of 5`} className="text-accent">
+    <span
+      role="img"
+      aria-label={`Rated ${rating} out of 5`}
+      className="whitespace-nowrap text-accent"
+    >
       {POSITIONS.map((position) => (
         <span
           key={position}
@@ -21,7 +25,7 @@ export function Stars({ rating }: { rating: number }) {
 
 export function PickedBadge() {
   return (
-    <span className="inline-block rounded-full bg-accent/15 px-3 py-1 text-xs font-semibold text-accent">
+    <span className="inline-block whitespace-nowrap rounded-full align-middle bg-accent/15 px-3 py-1 text-xs font-semibold text-accent">
       Picked
     </span>
   );

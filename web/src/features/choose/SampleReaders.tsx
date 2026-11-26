@@ -55,7 +55,9 @@ export function SampleReaders() {
             >
               <CoverStrip profile={profile} />
               <span className="min-w-0 flex-1">
-                <span className="block font-semibold text-lg">{presetTitle(profile)}</span>
+                <span className="block font-semibold text-lg wrap-break-word">
+                  {presetTitle(profile)}
+                </span>
                 <span className="block text-sm text-muted">
                   {profile.read} books
                   <span className="hidden sm:inline">

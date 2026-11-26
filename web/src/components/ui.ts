@@ -9,4 +9,6 @@ export const ui = {
   panel: "rounded-2xl border border-border bg-surface",
   link: "font-medium text-accent underline underline-offset-4 hover:brightness-110",
   eyebrow: "text-sm font-semibold tracking-widest text-muted uppercase",
+  /** For titles and authors: can shrink inside a flex or grid row, and long words break. */
+  wrap: "min-w-0 wrap-break-word",
 } as const;
