@@ -485,4 +485,13 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **How it was verified:** tests with fakes for the queue's order, pacing, shared cache and failures, the search adapter (series notes dropped, the first same-work result with a cover), the API (the upload returns at once, covers arrive by id, `covers_pending` counts down) and the UI (it refetches until no cover is pending).
 - **Then: wrong editions.** The owner's upload with the fix got covers for 175 of 226 books, 51 none, and some were the wrong edition in another language: *King Sorrow* showed the Portuguese "O Sacrifício". The search's `cover_i` is the **work's** cover, which can come from any edition, translations included.
 - **The second fix (D-046):** a book with an ISBN takes the cover of that exact edition, from Open Library's edition record (the Books API, not the rate-limited Covers API). A book without an ISBN, or whose edition has no cover, still uses search, but prefers the cover of the best-matching edition when its title matches the Goodreads title, and only then the work's cover. The cache moved to a new table keyed by ISBN where there is one, which drops the old results. For the owner's exported profile only, books still without a cover fall back to Google Books, once and cached.
-- **Verified:** tests with fakes (the King Sorrow case: the edition's cover wins and no search is made; a coverless edition falls back to search as two paced requests; a matching edition title beats the work's cover; the Google Books fallback prefers the matching title and spends nothing on a rerun). Not yet measured live: how many of the 226 get a cover, and whether King Sorrow is right.
+- **Verified:** tests with fakes (the King Sorrow case: the edition's cover wins and no search is made; a coverless edition falls back to search as two paced requests; a matching edition title beats the work's cover; the Google Books fallback prefers the matching title and spends nothing on a rerun). Measured live by the owner's `cli export-profile` (2026-11-26):
+
+  | The owner's 226 books | Covers |
+  | --- | --- |
+  | Work covers by title and author (first fix) | 175 |
+  | Open Library: edition by ISBN, then search preferring matching titles | 199 |
+  | plus the export's Google Books fallback | 218 (19 more) |
+  | Still without a cover | 8 |
+
+  *King Sorrow* and the Spanish books show the right editions, checked by the owner in the UI. Uploads stop at the Open Library step (199 for this library) because they never use Google Books.
