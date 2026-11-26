@@ -74,10 +74,9 @@ async def test_a_run_streams_its_progress_and_ends_with_the_result() -> None:
     ]
     first = result["books"][0]
     assert first["link"].startswith("https://books.google.com") and first["reason"]
-    cover = "https://covers.openlibrary.org/b/isbn/9780441013593-M.jpg?default=false"
     assert first["cited"][0] == {
         "title": "Dune (Dune Chronicles, #1)", "author": "Frank Herbert", "rating": 5.0,
-        "picked": False, "shelf": "read", "cover_url": cover,
+        "picked": False, "shelf": "read", "cover_url": None,
     }  # fmt: skip
     trace = result["trace"]
     assert (trace["iterations"], trace["submissions"], len(trace["rejections"])) == (3, 2, 1)

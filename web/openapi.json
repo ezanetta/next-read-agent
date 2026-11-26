@@ -313,7 +313,7 @@
           "profiles"
         ],
         "summary": "List Profile Books",
-        "description": "The library view: every book with cover, rating (none when picked) and shelf.",
+        "description": "The library view: every book with cover, rating (none when picked) and shelf, and\nhow many cover lookups are still queued.",
         "operationId": "listProfileBooks",
         "parameters": [
           {
@@ -629,12 +629,17 @@
             },
             "type": "array",
             "title": "Books"
+          },
+          "covers_pending": {
+            "type": "integer",
+            "title": "Covers Pending"
           }
         },
         "type": "object",
         "required": [
           "profile_id",
-          "books"
+          "books",
+          "covers_pending"
         ],
         "title": "LibraryPage"
       },

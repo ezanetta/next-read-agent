@@ -153,6 +153,8 @@ uv run uvicorn book_agent.main:app --port 8000      # terminal 1: the API
 cd web && npm install && npm run dev                # terminal 2: http://localhost:5173
 ```
 
+Uploaded libraries get their covers in the background: the API looks each book up on Open Library by title and author, one request a second, and the library view fills in as they arrive. That needs `OPEN_LIBRARY_CONTACT` in `.env`; without it, books show colored placeholders ([D-046](docs/DECISIONS.md)).
+
 The UI's API client is generated from the API's schema: after changing the API, run `npm run api:types` in `web/` (CI fails if `web/openapi.json` is stale). UI checks: `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`. In production, `VITE_API_BASE_URL` points the UI at the API, and `VITE_DEMO_VIDEO_URL`, when set, shows the demo-video button ([D-045](docs/DECISIONS.md)).
 
 ### Running the evals

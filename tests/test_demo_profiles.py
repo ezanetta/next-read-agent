@@ -95,32 +95,41 @@ def test_presets_load_samples_and_the_owner(tmp_path: Path) -> None:
         PresetFile(description="Classics", profile=PROFILE).model_dump_json()
     )
     owner = tmp_path / "owner.json"
-    owner.write_text(owner_export(PROFILE))
+    owner.write_text(owner_export(PROFILE, {1: "https://covers.openlibrary.org/b/id/7-M.jpg"}))
     presets = load_presets(samples, owner, NOW)
     assert sorted(presets) == ["owner", "sample-classics"]
     assert presets["owner"].source == "owner" and presets["owner"].expires_at is None
+    assert presets["owner"].covers == {1: "https://covers.openlibrary.org/b/id/7-M.jpg"}
     assert load_presets(tmp_path / "none", None, NOW) == {}
     store = SqliteStore(":memory:")
     assert find_profile("owner", presets, store, NOW) == presets["owner"]
 
 
-def test_covers_prefer_known_ones_then_the_isbn() -> None:
+def test_owner_files_in_the_old_plain_profile_format_ask_for_a_new_export(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "owner.json"
+    owner.write_text(PROFILE.model_dump_json())
+    with pytest.raises(ValueError, match="export-profile"):
+        load_presets(tmp_path / "none", owner, NOW)
+
+
+def test_covers_are_only_known_ones_never_by_isbn() -> None:
+    # Pick 0 has an ISBN: no ISBN cover URL, Open Library rate-limits those (F-023).
     profile, covers = manual_profile([pick(i) for i in range(5)])
     stored = store_temporary(
         SqliteStore(":memory:"), "manual", profile, NOW, covers={2: "https://c/2"}
     )
     assert cover_url(stored, 2) == "https://c/2"
-    assert (
-        cover_url(stored, 0)
-        == "https://covers.openlibrary.org/b/isbn/9780000000002-M.jpg?default=false"
-    )
-    assert cover_url(stored, 1) is None and covers == {}
+    assert cover_url(stored, 0) is None and cover_url(stored, 1) is None and covers == {}
 
 
 def test_the_owner_export_keeps_only_the_agreed_fields() -> None:
-    data = json.loads(owner_export(PROFILE))
-    assert set(data) == {"name", "books"}
-    assert {k for b in data["books"] for k in b} <= {
+    data = json.loads(owner_export(PROFILE, {0: "https://covers.openlibrary.org/b/id/1-M.jpg"}))
+    assert set(data) == {"description", "profile", "covers"}
+    assert set(data["profile"]) == {"name", "books"}
+    assert data["covers"] == {"0": "https://covers.openlibrary.org/b/id/1-M.jpg"}
+    assert {k for b in data["profile"]["books"] for k in b} <= {
         "title",
         "author",
         "isbn",
@@ -129,4 +138,4 @@ def test_the_owner_export_keeps_only_the_agreed_fields() -> None:
         "year",
         "status",
     }
-    assert Profile.model_validate(data).books[0].title == PROFILE.books[0].title
+    assert Profile.model_validate(data["profile"]).books[0].title == PROFILE.books[0].title

@@ -17,8 +17,8 @@ class StoredProfile(BaseModel, frozen=True):
     source: ProfileSource
     profile: Profile
     description: str | None = None  # presets: one line for the picker
-    # Covers known when the profile was made, by book index: a manual list keeps its
-    # search results' covers. Other books get a cover URL from their ISBN.
+    # Cover URLs by book index: a manual list keeps its search results' covers, presets
+    # bring theirs, and the cover queue adds the rest by Open Library cover id (D-046).
     covers: dict[int, str] = {}
     created_at: datetime
     expires_at: datetime | None = None  # None: never (presets)

@@ -5,9 +5,20 @@ import httpx
 import pytest
 import respx
 
-from book_agent.adapters.open_library import BASE_URL, OpenLibraryWorks, user_agent
+from book_agent.adapters.open_library import (
+    BASE_URL,
+    OpenLibraryCovers,
+    OpenLibraryWorks,
+    user_agent,
+)
 from book_agent.domain.works import WorkInfo
-from book_agent.ports import WorkDescriptions, WorkLookupError, WorkResolver
+from book_agent.ports import (
+    CoverFinder,
+    CoverLookupError,
+    WorkDescriptions,
+    WorkLookupError,
+    WorkResolver,
+)
 
 ISBN = "9789871165070"  # La metamorfosis, from the real Goodreads export
 ISBN_URL = f"{BASE_URL}/isbn/{ISBN}.json"
@@ -170,3 +181,72 @@ async def test_work_info_server_error_raises(
     respx_mock.get(WORK_URL).mock(return_value=httpx.Response(503))
     with pytest.raises(WorkLookupError, match="503"):
         await works.work_info("/works/OL498556W")
+
+
+# --- Covers through search (D-046) -------------------------------------------------
+
+SEARCH_URL = f"{BASE_URL}/search.json"
+
+
+def test_covers_implement_the_port(client: httpx.AsyncClient) -> None:
+    finder: CoverFinder = OpenLibraryCovers(client)
+    assert finder is not None
+
+
+async def test_cover_search_drops_the_series_and_takes_the_first_same_work_with_a_cover(
+    client: httpx.AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    route = respx_mock.get(SEARCH_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "docs": [
+                    {"title": "Guards! Guards!", "author_name": ["Terry Pratchett"]},  # no cover
+                    {
+                        "title": "The Science of Discworld",
+                        "author_name": ["Terry Pratchett"],
+                        "cover_i": 1,
+                    },
+                    {"title": "Guards! Guards!", "author_name": ["Terry Pratchett"], "cover_i": 42},
+                ]
+            },
+        )
+    )
+    finder = OpenLibraryCovers(client)
+    title = "Guards! Guards! (Discworld #8, City Watch #1)"
+    cover = await finder.cover_id(title, "Terry Pratchett")
+    assert cover == 42
+    params = route.calls.last.request.url.params
+    assert params["title"] == "Guards! Guards!" and params["author"] == "Terry Pratchett"
+    assert params["fields"] == "title,author_name,cover_i"
+
+
+async def test_cover_search_without_a_matching_cover_is_none(
+    client: httpx.AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get(SEARCH_URL).mock(
+        return_value=httpx.Response(
+            200, json={"docs": [{"title": "Dune", "author_name": ["Ann Other"], "cover_i": 9}]}
+        )
+    )
+    assert await OpenLibraryCovers(client).cover_id("Dune", "Frank Herbert") is None
+
+
+@pytest.mark.parametrize(
+    "response",
+    [httpx.Response(429), httpx.Response(503), httpx.Response(200, content=b"not json")],
+)
+async def test_cover_search_failures_raise(
+    client: httpx.AsyncClient, respx_mock: respx.MockRouter, response: httpx.Response
+) -> None:
+    respx_mock.get(SEARCH_URL).mock(return_value=response)
+    with pytest.raises(CoverLookupError):
+        await OpenLibraryCovers(client).cover_id("Dune", "Frank Herbert")
+
+
+async def test_cover_search_timeouts_raise(
+    client: httpx.AsyncClient, respx_mock: respx.MockRouter
+) -> None:
+    respx_mock.get(SEARCH_URL).mock(side_effect=httpx.ReadTimeout("slow"))
+    with pytest.raises(CoverLookupError, match="timed out"):
+        await OpenLibraryCovers(client).cover_id("Dune", "Frank Herbert")

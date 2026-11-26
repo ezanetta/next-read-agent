@@ -6,7 +6,8 @@
         [--prompt agent_v1|agent_v2|agent_v3|agent_v4] [--verbose]
     uv run python -m book_agent.cli works [--refresh] [--csv PATH] [--cache PATH]
     uv run python -m book_agent.cli library [--refresh] [--yes] [--csv PATH] [--cache PATH]
-    uv run python -m book_agent.cli export-profile --out PATH [--name NAME] [--csv PATH]
+    uv run python -m book_agent.cli export-profile --out PATH [--name NAME] [--no-covers]
+        [--csv PATH]
 
 baseline: flags override filters interpreted from the request text, field by field.
 Exit codes: 0 all hard rules passed (unknowns allowed), 1 rule violations, 2 errors.
@@ -29,7 +30,10 @@ Exit codes: 0 index complete, 2 some books failed or errors.
 
 export-profile: writes the library as the demo's owner profile, loaded at deploy time from
 OWNER_PROFILE_PATH and never committed (D-043): only title, author, ISBNs, rating, shelf
-and year. Exit codes: 0 written, 2 errors.
+and year, plus cover URLs by Open Library cover id (D-046). Covers are looked up by title
+and author, one request a second, cached in the demo database so a rerun only repeats
+failures; needs OPEN_LIBRARY_CONTACT. --no-covers skips them.
+Exit codes: 0 written, 2 errors.
 """
 
 import argparse
@@ -46,6 +50,8 @@ from pathlib import Path
 import httpx
 
 from book_agent.adapters.goodreads import load_goodreads_export
+from book_agent.adapters.open_library import OpenLibraryCovers
+from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.agent import MAX_ITERATIONS, REPAIR_TURNS, AgentFailure, ToolTrace, TurnTrace
 from book_agent.agent_run import (
     AGENT_PROMPTS,
@@ -53,8 +59,10 @@ from book_agent.agent_run import (
     AgentRun,
     run_agent_pipeline,
 )
+from book_agent.api.services import utc_now
 from book_agent.baseline import BaselineResult, run_baseline
 from book_agent.config import Settings, get_settings
+from book_agent.covers import CoverReport, Pacer, resolve_covers
 from book_agent.demo_profiles import owner_export
 from book_agent.domain.acceptance import Problem, blocking_problems
 from book_agent.domain.library import MIN_RATING, retrieval_pool
@@ -74,7 +82,14 @@ from book_agent.library_enrichment import (
 from book_agent.library_retrieval import index_library, library_documents
 from book_agent.llm.base import Embedder, LLMClient, LLMError
 from book_agent.llm.calls import LLMCall
-from book_agent.ports import BookSearch, LibraryRetriever, WorkDescriptions, WorkResolver
+from book_agent.ports import (
+    BookSearch,
+    CoverCache,
+    CoverFinder,
+    LibraryRetriever,
+    WorkDescriptions,
+    WorkResolver,
+)
 from book_agent.prompts.agent_prompt import AgentPrompt
 from book_agent.prompts.user_content import one_line
 from book_agent.wiring import (
@@ -121,9 +136,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             else Filters()
         )
         profile = load_goodreads_export(args.csv, profile_name="Me")
-        if args.command == "export-profile":
-            return _export_profile(profile, args.out, args.name)
+        if args.command == "export-profile" and args.no_covers:
+            return _write_owner(profile, args.out, args.name, {})
         settings = get_settings()
+        if args.command == "export-profile":
+            return asyncio.run(_export_profile(profile, args.out, args.name, settings))
         cache = load_cache(args.cache)
         if args.command == "works":
             return asyncio.run(_works(profile, settings, cache, args.cache, refresh=args.refresh))
@@ -241,9 +258,44 @@ def _print_progress(done: int, total: int) -> None:
         print(format_progress(done, total), flush=True)
 
 
-def _export_profile(profile: Profile, out: Path, name: str) -> int:
-    write_atomic(out, owner_export(profile.model_copy(update={"name": name})))
-    print(f"Wrote {len(profile.books)} books to {out}: title, author, ISBNs, rating, shelf, year")
+async def _export_profile(profile: Profile, out: Path, name: str, settings: Settings) -> int:
+    http = build_open_library_http(settings)
+    if http is None:
+        print(f"error: {NO_CONTACT}: covers need it (or pass --no-covers)")
+        return EXIT_ERROR
+    store = SqliteStore(settings.demo_db_path)
+    try:
+        async with http:
+            report = await export_covers(profile, OpenLibraryCovers(http), store)
+    finally:
+        store.close()
+    return _write_owner(profile, out, name, report.covers)
+
+
+async def export_covers(
+    profile: Profile, finder: CoverFinder, cache: CoverCache, *, pacer: Pacer | None = None
+) -> CoverReport:
+    """The owner's covers, with a progress line and a summary."""
+    print("Covers: looking up the books the cache doesn't know, one a second (D-046)")
+    report = await resolve_covers(
+        profile, finder, cache, pacer=pacer, clock=utc_now, on_progress=_print_progress
+    )
+    missing = len(profile.books) - len(report.covers)
+    print(
+        f"Covers: {len(report.covers)} of {len(profile.books)} books "
+        f"({report.looked_up} looked up now, {missing} without a cover"
+        + (f", {report.failed} failed: rerun to retry them" if report.failed else "")
+        + ")"
+    )
+    return report
+
+
+def _write_owner(profile: Profile, out: Path, name: str, covers: dict[int, str]) -> int:
+    write_atomic(out, owner_export(profile.model_copy(update={"name": name}), covers))
+    print(
+        f"Wrote {len(profile.books)} books to {out}: title, author, ISBNs, rating, shelf, "
+        f"year, and {len(covers)} cover URLs"
+    )
     print("Keep it out of the repo; point OWNER_PROFILE_PATH at it where the API runs.")
     return EXIT_OK
 
@@ -681,6 +733,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     export.add_argument("--out", type=Path, required=True, help="where to write the JSON")
     export.add_argument("--name", default="The author", help="the profile's display name")
+    export.add_argument(
+        "--no-covers", action="store_true", help="skip the cover lookups (no Open Library calls)"
+    )
 
     library = commands.add_parser(
         "library", parents=[shared], help="describe and embed the read books for agent_v4"

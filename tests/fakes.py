@@ -1,5 +1,6 @@
 """In-memory fakes that implement the ports, for tests that should not touch the network."""
 
+import asyncio
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from book_agent.llm.base import (
     ToolSpec,
     Usage,
 )
-from book_agent.ports import WorkLookupError
+from book_agent.ports import CoverLookupError, WorkLookupError
 
 
 def _words(text: str) -> set[str]:
@@ -256,3 +257,50 @@ def tool_call_response(
         usage=usage or Usage(input_tokens=10, output_tokens=5),
         model=model,
     )
+
+
+class FakeTime:
+    """A monotonic clock that only moves when something sleeps: pacing tests run
+    instantly and can still check the gaps between requests."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+        await asyncio.sleep(0)
+
+
+class FakeCoverFinder:
+    """CoverFinder answering from a dict by title: a cover id, None (no cover), or a
+    CoverLookupError to raise. Records each call with the fake time it was made at. With
+    a `gate`, every lookup waits until the test sets it."""
+
+    def __init__(
+        self,
+        answers: dict[str, int | CoverLookupError | None],
+        time: FakeTime | None = None,
+        *,
+        gate: asyncio.Event | None = None,
+    ) -> None:
+        self.answers = answers
+        self.time = time
+        self.gate = gate
+        self.calls: list[tuple[str, str]] = []
+        self.call_times: list[float] = []
+
+    async def cover_id(self, title: str, author: str) -> int | None:
+        if self.gate is not None:
+            await self.gate.wait()
+        self.calls.append((title, author))
+        if self.time is not None:
+            self.call_times.append(self.time.monotonic())
+        answer = self.answers.get(title)
+        if isinstance(answer, CoverLookupError):
+            raise answer
+        return answer

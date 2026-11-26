@@ -4,9 +4,10 @@ from pathlib import Path
 from pydantic import HttpUrl
 
 from book_agent.adapters.sqlite_store import SqliteSearchCache, SqliteStore
+from book_agent.domain.covers import CachedCover
 from book_agent.domain.models import CatalogBook
 from book_agent.domain.profiles import StoredProfile
-from book_agent.ports import ProfileStore, SearchCache
+from book_agent.ports import CoverCache, ProfileStore, SearchCache
 from tests.library_data import PROFILE
 
 NOW = datetime(2026, 11, 25, 12, tzinfo=UTC)
@@ -19,7 +20,8 @@ def stored(profile_id: str, expires_at: datetime | None) -> StoredProfile:
 
 def test_profiles_round_trip_and_expire(tmp_path: Path) -> None:
     store = SqliteStore(tmp_path / "demo" / "demo.sqlite3")
-    _: ProfileStore = store  # pyright checks the Protocol here
+    _: ProfileStore = store  # pyright checks the Protocols here
+    __: CoverCache = store
     store.save(stored("live", NOW + timedelta(days=3)))
     store.save(stored("old", NOW + timedelta(hours=1)))
     assert store.get("live", NOW) == stored("live", NOW + timedelta(days=3))
@@ -47,3 +49,15 @@ def test_search_cache_respects_max_age() -> None:
     assert cache.get("dune", NOW + timedelta(days=6), timedelta(days=7)) == [book]
     assert cache.get("dune", NOW + timedelta(days=8), timedelta(days=7)) is None
     assert cache.get("other", NOW, timedelta(days=7)) is None
+
+
+def test_cover_lookups_are_cached_with_their_time_and_survive_reopening(tmp_path: Path) -> None:
+    path = tmp_path / "demo.sqlite3"
+    store = SqliteStore(path)
+    assert store.get_cover("dune|frank herbert") is None
+    store.put_cover("dune|frank herbert", CachedCover(42, NOW))
+    store.put_cover("lost|someone", CachedCover(None, NOW))
+    store.close()
+    reopened = SqliteStore(path)
+    assert reopened.get_cover("dune|frank herbert") == CachedCover(42, NOW)
+    assert reopened.get_cover("lost|someone") == CachedCover(None, NOW)

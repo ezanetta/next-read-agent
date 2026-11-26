@@ -114,7 +114,8 @@ export interface paths {
     };
     /**
      * List Profile Books
-     * @description The library view: every book with cover, rating (none when picked) and shelf.
+     * @description The library view: every book with cover, rating (none when picked) and shelf, and
+     *     how many cover lookups are still queued.
      */
     get: operations["listProfileBooks"];
     put?: never;
@@ -240,6 +241,8 @@ export interface components {
       profile_id: string;
       /** Books */
       books: components["schemas"]["LibraryBook"][];
+      /** Covers Pending */
+      covers_pending: number;
     };
     /** ManualProfileRequest */
     ManualProfileRequest: {

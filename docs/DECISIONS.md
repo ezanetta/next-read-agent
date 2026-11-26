@@ -481,3 +481,22 @@ Significant design decisions: context, options considered, choice, and reason.
   - **The typed client is generated and committed** (`web/openapi.json`, `web/src/api/schema.d.ts`). The Python CI job checks that the committed schema matches the API, so the UI can't drift from it.
   - **Links:** "How it works" goes to the README, and "Watch a demo" is hidden until `VITE_DEMO_VIDEO_URL` is set. In dev, a Vite proxy sends `/api` to the local API; in production, `VITE_API_BASE_URL` sets it.
 - **Reason:** A small, mainstream stack whose every piece has one job. Generated types make API changes visible at compile time. Session-only results keep the API stateless, as D-043 designed.
+
+## D-046 · Covers by Open Library cover id, resolved in the background by title and author (2026-11-26)
+
+- **Context:** F-023: covers built from ISBNs fail for books without an ISBN or unknown to Open Library, and Open Library rate-limits lookups by ISBN to 100 per IP every 5 minutes. Cover-id URLs aren't limited.
+- **Options considered:**
+  - **Reuse covers from library retrieval's caches:** neither `library_books.json` nor the works cache stores covers, and they cover only the owner's library.
+  - **Google Books thumbnails:** spend the daily quota shared with recommendations and evals. Rejected: no quota on covers.
+  - **Keep ISBN URLs as a fallback while lookups run:** brings the 403s back. Rejected.
+  - **Open Library search by title and author, on the server, in the background:** free, works without an ISBN, returns cover ids. Chosen.
+- **Choice:**
+  - **One `CoverQueue` per server** (`covers.py`): a profile is saved first, so the upload returns at once; its books without a cover are queued. A single worker looks them up one request a second, with our contact header, backing off on failures (up to one every 32 s). Read books go first, since the library opens on that shelf, then currently reading, then to-read. Concurrent uploads share the queue, so they never raise the rate.
+  - **A shared cache** in the demo database, keyed by normalized title and author, for every profile. Cache hits are applied before the profile is saved, so they cost no request and no wait. A missing cover is checked again after 30 days.
+  - **The match:** the first of 5 search results that is the same work (`same_work`) and has a cover. Goodreads series notes are dropped from the search title.
+  - **No ISBN fallback:** a book with no match keeps the placeholder.
+  - **The library view refetches** every 3 s while `covers_pending` (new on `LibraryPage`) is above 0, and says how many are left.
+  - **The owner's profile** gets its covers in `cli export-profile`, through the same lookups and cache. The file becomes a preset file (`description`, `profile`, `covers`), so it loads complete. `--no-covers` skips the lookups.
+  - Without `OPEN_LIBRARY_CONTACT` there is no queue: books without a known cover show placeholders.
+- **Trade-offs:** Uploaded titles and authors are sent to Open Library from the server; before, the browser sent their ISBNs. Queued lookups live in memory: a restart drops them, and those books keep placeholders until the profile is made again. A 200-book library takes about 3 to 4 minutes to fill on an empty cache.
+- **Reason:** Free, polite, and within Open Library's limits however many people upload, with no quota spent and a fast upload.

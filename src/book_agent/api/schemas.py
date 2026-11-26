@@ -74,3 +74,5 @@ class LibraryBook(BaseModel):
 class LibraryPage(BaseModel):
     profile_id: str
     books: list[LibraryBook]
+    # Cover lookups still queued for this profile (D-046): the UI refetches until it's 0.
+    covers_pending: int
