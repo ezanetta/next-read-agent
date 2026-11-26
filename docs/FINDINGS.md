@@ -495,3 +495,10 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
   | Still without a cover | 8 |
 
   *King Sorrow* and the Spanish books show the right editions, checked by the owner in the UI. Uploads stop at the Open Library step (199 for this library) because they never use Google Books.
+
+## F-024 · A test passed locally by making live requests, and failed in CI (2026-11-26)
+
+- **What happened:** After D-046, CI failed `test_export_profile_writes_only_the_agreed_fields`: `export-profile` now looks up covers by default, and without `OPEN_LIBRARY_CONTACT` it stops with exit code 2. Locally the test passed, because `get_settings()` read the developer's `.env`: the test made real Open Library and Google Books requests for the fixture's books.
+- **How it was detected:** the CI run on `main` after the merge.
+- **The fix:** the test passes `--no-covers` (it checks which fields are written). A new `tests/conftest.py` keeps every test that isn't marked `live` from reading `.env` or the settings' environment variables, so tests behave locally as in CI and can't spend quota. A new test covers the export without a contact.
+- **How it was verified:** with the fixture and without the test fix, the test fails locally with CI's assertion (`2 == 0`); with both, the suite passes (932), and the 6 live tests are still collected with `-m live`.
