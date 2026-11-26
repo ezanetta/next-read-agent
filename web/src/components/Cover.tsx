@@ -42,7 +42,9 @@ export function Cover({
   size?: Size;
   showText?: boolean;
 }) {
-  const [failed, setFailed] = useState(false);
+  // The URL that failed, not a flag: when a cover arrives later, the new URL gets a chance.
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const failed = url != null && failedUrl === url;
   const base = `${SIZES[size]} shrink-0 overflow-hidden rounded-md`;
   if (url && !failed) {
     return (
@@ -50,7 +52,7 @@ export function Cover({
         src={url}
         alt=""
         loading="lazy"
-        onError={() => setFailed(true)}
+        onError={() => setFailedUrl(url)}
         className={`${base} bg-surface-2 object-cover`}
       />
     );

@@ -13,6 +13,7 @@ export const api = createClient<paths>({
 export type Schemas = components["schemas"];
 export type ProfileSummary = Schemas["ProfileSummary"];
 export type LibraryBook = Schemas["LibraryBook"];
+export type LibraryPage = Schemas["LibraryPage"];
 export type SearchHit = Schemas["SearchHit"];
 export type PickedBook = Schemas["PickedBook"];
 export type ErrorBody = Schemas["ErrorBody"];

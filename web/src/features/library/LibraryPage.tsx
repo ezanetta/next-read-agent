@@ -87,7 +87,8 @@ export function LibraryPage() {
   }
 
   const summary = profile.data;
-  const all = books.data;
+  const all = books.data.books;
+  const coversPending = books.data.covers_pending;
   const shelves = (Object.keys(SHELF_LABELS) as Shelf[]).filter(
     (s) => s !== "currently_reading" || all.some((b) => b.shelf === s),
   );
@@ -160,7 +161,12 @@ export function LibraryPage() {
         })}
       </div>
 
-      <div className="mt-8 grid gap-10 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <p aria-live="polite" className="mt-4 min-h-5 text-sm text-muted">
+        {coversPending > 0 &&
+          `Finding covers… ${coversPending} left. Books without one keep a colored cover.`}
+      </p>
+
+      <div className="mt-4 grid gap-10 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div id={`${tabsId}-panel`} role="tabpanel" aria-labelledby={`${tabsId}-${shelf}`}>
           {shown.length === 0 ? (
             <p className="text-muted">No books on this shelf.</p>

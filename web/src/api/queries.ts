@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import {
   api,
-  type LibraryBook,
+  type LibraryPage,
   type PickedBook,
   type ProfileSummary,
   type SearchHit,
@@ -53,16 +53,21 @@ export function useProfile(profileId: string) {
   });
 }
 
+/** How often the library refetches while covers are still being looked up (D-046). */
+export const COVER_POLL_MS = 3000;
+
 export function useProfileBooks(profileId: string) {
   return useQuery({
     queryKey: ["profile", profileId, "books"],
-    queryFn: async (): Promise<LibraryBook[]> => {
+    queryFn: async (): Promise<LibraryPage> => {
       const { data, error, response } = await api.GET("/profiles/{profile_id}/books", {
         params: { path: { profile_id: profileId } },
       });
       if (error !== undefined || !data) throw toApiError(response, error);
-      return data.books;
+      return data;
     },
+    // Covers arrive in the background, about one a second: refetch until none is pending.
+    refetchInterval: (query) => (query.state.data?.covers_pending ? COVER_POLL_MS : false),
   });
 }
 
