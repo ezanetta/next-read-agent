@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from book_agent.covers import CoverQueue
 from book_agent.domain.profiles import StoredProfile
 from book_agent.llm.base import LLMClient
 from book_agent.ports import BookSearch, ProfileStore, SearchCache, WorkResolver
@@ -22,6 +23,7 @@ class ApiServices:
     llm: LLMClient
     prompt: AgentPrompt
     works: WorkResolver | None = None
+    covers: CoverQueue | None = None  # None without OPEN_LIBRARY_CONTACT: placeholders
     presets: dict[str, StoredProfile] = field(default_factory=dict[str, StoredProfile])
     profile_ttl: timedelta = timedelta(days=3)
     clock: Callable[[], datetime] = utc_now

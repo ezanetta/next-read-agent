@@ -29,7 +29,7 @@ MIN_READ_BOOKS = 5
 DEFAULT_TTL = timedelta(days=3)
 SAMPLES_DIR = Path("data_public/profiles")
 OWNER_PRESET_ID = "owner"
-COVER_URL = "https://covers.openlibrary.org/b/isbn/{isbn}-M.jpg?default=false"
+OWNER_DESCRIPTION = "The library of the person who built this demo"
 
 
 class ProfileError(ValueError):
@@ -145,10 +145,16 @@ def load_presets(
             description=preset.description, covers=preset.covers, created_at=now,
         )  # fmt: skip
     if owner_path is not None:
-        owner = Profile.model_validate_json(owner_path.read_bytes())
+        try:
+            owner = PresetFile.model_validate_json(owner_path.read_bytes())
+        except ValidationError as e:
+            raise ValueError(
+                f"{owner_path} is not an owner profile ({e.error_count()} errors): "
+                "write it again with `cli export-profile`"
+            ) from e
         presets[OWNER_PRESET_ID] = StoredProfile(
-            id=OWNER_PRESET_ID, source="owner", profile=owner,
-            description="The library of the person who built this demo", created_at=now,
+            id=OWNER_PRESET_ID, source="owner", profile=owner.profile,
+            description=owner.description, covers=owner.covers, created_at=now,
         )  # fmt: skip
     return presets
 
@@ -160,18 +166,21 @@ def find_profile(
 
 
 def cover_url(stored: StoredProfile, index: int) -> str | None:
-    """A known cover for this book, else an Open Library Covers URL from its ISBN."""
-    if index in stored.covers:
-        return stored.covers[index]
-    isbn = stored.profile.books[index].isbn13
-    return COVER_URL.format(isbn=isbn) if isbn and isbn.isdigit() else None
+    """The book's known cover, or None (the UI shows a placeholder). Never a URL by ISBN:
+    Open Library rate-limits those to 100 per IP every 5 minutes (D-046, F-023)."""
+    return stored.covers.get(index)
 
 
-def owner_export(profile: Profile) -> str:
-    """The owner's profile for deploy time: only title, author, ISBNs, rating, shelf and
-    year. No Goodreads id, page count, reviews or notes (the parser never reads those)."""
-    data = profile.model_dump(
-        mode="json",
-        exclude={"ratings_implied": True, "books": {"__all__": {"goodreads_id", "pages"}}},
-    )
+def owner_export(profile: Profile, covers: dict[int, str] | None = None) -> str:
+    """The owner's profile for deploy time, as a preset file with its covers resolved:
+    only title, author, ISBNs, rating, shelf and year per book. No Goodreads id, page
+    count, reviews or notes (the parser never reads those)."""
+    data = {
+        "description": OWNER_DESCRIPTION,
+        "profile": profile.model_dump(
+            mode="json",
+            exclude={"ratings_implied": True, "books": {"__all__": {"goodreads_id", "pages"}}},
+        ),
+        "covers": {str(i): url for i, url in sorted((covers or {}).items())},
+    }
     return json.dumps(data, ensure_ascii=False, indent=1) + "\n"

@@ -13,11 +13,12 @@ import httpx
 from google import genai
 
 from book_agent.adapters.google_books import GoogleBooksSearch
-from book_agent.adapters.open_library import OpenLibraryWorks, user_agent
+from book_agent.adapters.open_library import OpenLibraryCovers, OpenLibraryWorks, user_agent
 from book_agent.adapters.sqlite_store import SqliteSearchCache, SqliteStore
 from book_agent.agent_run import DEFAULT_AGENT_PROMPT
 from book_agent.api.services import ApiServices, utc_now
 from book_agent.config import Settings
+from book_agent.covers import CoverQueue
 from book_agent.demo_profiles import SAMPLES_DIR, load_presets
 from book_agent.domain.models import Profile
 from book_agent.embedding_index import load_store, save_store
@@ -176,7 +177,8 @@ def build_library_retriever(
 
 @asynccontextmanager
 async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
-    """The demo API's services (D-043): store, presets, catalog clients and the LLM.
+    """The demo API's services (D-043): store, presets, catalog clients, the LLM, and the
+    cover queue (D-046) when OPEN_LIBRARY_CONTACT is set.
 
     The work key cache is read-only here: no file is written by API requests.
     """
@@ -187,12 +189,14 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
     async with AsyncExitStack() as stack:
         http = await stack.enter_async_context(httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S))
         works: WorkResolver | None = None
+        covers: CoverQueue | None = None
         open_library = build_open_library_http(settings)
         if open_library is not None:
             await stack.enter_async_context(open_library)
             works = CachedWorkResolver(
                 build_work_resolver(open_library), load_cache(DEFAULT_CACHE_PATH)
             )
+            covers = CoverQueue(OpenLibraryCovers(open_library), store, store, clock=utc_now)
         try:
             yield ApiServices(
                 profiles=store,
@@ -201,10 +205,13 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
                 llm=build_llm(settings),
                 prompt=DEFAULT_AGENT_PROMPT,
                 works=works,
+                covers=covers,
                 presets=presets,
                 profile_ttl=timedelta(days=settings.profile_ttl_days),
             )
         finally:
+            if covers is not None:  # stop the worker before its store closes
+                await covers.aclose()
             store.close()
 
 

@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Protocol
 
+from book_agent.domain.covers import CachedCover
 from book_agent.domain.library import RelatedBook
 from book_agent.domain.models import CatalogBook
 from book_agent.domain.profiles import StoredProfile
@@ -134,3 +135,30 @@ class SearchCache(Protocol):
         ...
 
     def put(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None: ...
+
+
+class CoverLookupError(Exception):
+    """A cover search that couldn't be done (network, rate limit, unexpected response)."""
+
+
+class CoverFinder(Protocol):
+    """Finds a book's cover id (D-046). One request per call: the caller paces them.
+    Both raise CoverLookupError when the request fails."""
+
+    async def edition_cover_id(self, isbn13: str) -> int | None:
+        """The cover id of the edition with this ISBN, or None when the edition is unknown
+        or has no cover."""
+        ...
+
+    async def search_cover_id(self, title: str, author: str) -> int | None:
+        """A cover id for this title and author from search: an edition whose title
+        matches if there is one, else the work's cover, or None."""
+        ...
+
+
+class CoverCache(Protocol):
+    """Cover lookups by cover_key, shared by every profile and the owner export."""
+
+    def get_cover(self, key: str) -> CachedCover | None: ...
+
+    def put_cover(self, key: str, cover: CachedCover) -> None: ...

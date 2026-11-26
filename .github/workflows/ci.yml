@@ -34,3 +34,36 @@ jobs:
       # Live tests are excluded by pytest's addopts ("-m 'not live'"): no API keys in CI.
       - name: Tests
         run: uv run pytest
+
+      # The UI's typed client is generated from this schema (D-045): it must be current.
+      - name: OpenAPI schema is up to date
+        run: uv run python -m book_agent.api.openapi | diff - web/openapi.json
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Types
+        run: npm run typecheck
+
+      - name: Lint and format
+        run: npm run lint
+
+      - name: Tests
+        run: npm test
+
+      - name: Build
+        run: npm run build

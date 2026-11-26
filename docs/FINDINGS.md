@@ -468,3 +468,30 @@ Real-world failures: what happened, how it was detected, the fix, and how it was
 - **How it was detected:** `evals report` with the citation section and judge_v3 scores. The investigation used the stored records and judgments only.
 - **Fix:** None, by D-041: agent_v4 isn't tuned against this round, and agent_v3 stays the default. The retrieval changes these causes suggest are in the backlog (B-003), as a new version to be measured on its own.
 - **How it was verified:** The report and the records. The threshold numbers were recomputed from the records (38 distinct, 4 reused, 84/101 retrieved, 3/115, 8/97).
+
+## F-023 · Goodreads uploads lost most covers: no ISBN, unknown ISBNs, and Open Library's ISBN cover limit (2026-11-26)
+
+- **What happened:** After uploading the owner's Goodreads CSV in the UI, many library books showed the colored placeholder instead of a cover.
+- **How it was detected:** By the owner, trying the UI. Measured from the CSV and the local work key cache, with no live calls. Covers were Open Library Covers URLs built from each book's ISBN (`/b/isbn/{isbn}-M.jpg?default=false`), loaded by the browser:
+
+  | The owner's 226 books | Count | Cover |
+  | --- | --- | --- |
+  | No ISBN in the export (34 read, 15 to-read; mostly Kindle editions) | 49 | never: no URL to build |
+  | An ISBN that Open Library doesn't know | 20 | never: the URL returns 404 |
+  | An ISBN that Open Library knows | 157 | only within the rate limit below |
+
+  **Open Library's Covers API allows 100 lookups by ISBN per IP every 5 minutes, and answers 403 beyond that** ([docs](https://openlibrary.org/dev/docs/api/covers)). Lookups by cover id aren't limited. The library view asked for up to 177 ISBN covers at once, so after about 100 the rest failed, and a reload made it worse. The sample profiles were unaffected: D-044 stored their covers by cover id.
+- **The fix (D-046):** covers are resolved to Open Library cover ids by title and author, on the server, one request a second, and shown by id. No URL by ISBN is built anymore.
+- **How it was verified:** tests with fakes for the queue's order, pacing, shared cache and failures, the search adapter (series notes dropped, the first same-work result with a cover), the API (the upload returns at once, covers arrive by id, `covers_pending` counts down) and the UI (it refetches until no cover is pending).
+- **Then: wrong editions.** The owner's upload with the fix got covers for 175 of 226 books, 51 none, and some were the wrong edition in another language: *King Sorrow* showed the Portuguese "O Sacrifício". The search's `cover_i` is the **work's** cover, which can come from any edition, translations included.
+- **The second fix (D-046):** a book with an ISBN takes the cover of that exact edition, from Open Library's edition record (the Books API, not the rate-limited Covers API). A book without an ISBN, or whose edition has no cover, still uses search, but prefers the cover of the best-matching edition when its title matches the Goodreads title, and only then the work's cover. The cache moved to a new table keyed by ISBN where there is one, which drops the old results. For the owner's exported profile only, books still without a cover fall back to Google Books, once and cached.
+- **Verified:** tests with fakes (the King Sorrow case: the edition's cover wins and no search is made; a coverless edition falls back to search as two paced requests; a matching edition title beats the work's cover; the Google Books fallback prefers the matching title and spends nothing on a rerun). Measured live by the owner's `cli export-profile` (2026-11-26):
+
+  | The owner's 226 books | Covers |
+  | --- | --- |
+  | Work covers by title and author (first fix) | 175 |
+  | Open Library: edition by ISBN, then search preferring matching titles | 199 |
+  | plus the export's Google Books fallback | 218 (19 more) |
+  | Still without a cover | 8 |
+
+  *King Sorrow* and the Spanish books show the right editions, checked by the owner in the UI. Uploads stop at the Open Library step (199 for this library) because they never use Google Books.

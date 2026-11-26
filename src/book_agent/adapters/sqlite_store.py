@@ -1,8 +1,8 @@
-"""SQLite storage for the demo: ProfileStore and SearchCache in one file (D-043).
+"""SQLite storage for the demo: ProfileStore, SearchCache and CoverCache in one file (D-043).
 
 stdlib sqlite3, one connection, one table per port. Needs a persistent disk and a single
 instance; other hosting gets another implementation behind the same ports. Values are
-stored as the models' JSON, so the schema is two tables and nothing to migrate.
+stored as the models' JSON, so the schema is a few tables and nothing to migrate.
 """
 
 import sqlite3
@@ -13,6 +13,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
+from book_agent.domain.covers import CachedCover
 from book_agent.domain.models import CatalogBook
 from book_agent.domain.profiles import StoredProfile
 
@@ -29,11 +30,19 @@ CREATE TABLE IF NOT EXISTS search_cache (
     body TEXT NOT NULL,
     cached_at TEXT NOT NULL
 );
+-- cover_cache held work covers by title and author, some from translations (F-023).
+DROP TABLE IF EXISTS cover_cache;
+CREATE TABLE IF NOT EXISTS cover_lookups (
+    key TEXT PRIMARY KEY,
+    url TEXT,
+    checked_at TEXT NOT NULL
+);
 """
 
 
 class SqliteStore:
-    """ProfileStore and SearchCache over one SQLite database (a file, or ":memory:")."""
+    """ProfileStore, SearchCache and CoverCache over one SQLite database (a file, or
+    ":memory:")."""
 
     def __init__(self, path: Path | str) -> None:
         if isinstance(path, Path):
@@ -99,6 +108,24 @@ class SqliteStore:
             self._db.execute(
                 "INSERT OR REPLACE INTO search_cache (query, body, cached_at) VALUES (?, ?, ?)",
                 (query, _BOOKS.dump_json(list(books)).decode(), now.isoformat()),
+            )
+
+    # --- CoverCache -----------------------------------------------------------------
+
+    def get_cover(self, key: str) -> CachedCover | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT url, checked_at FROM cover_lookups WHERE key = ?", (key,)
+            ).fetchone()
+        if row is None:
+            return None
+        return CachedCover(url=row[0], checked_at=datetime.fromisoformat(row[1]))
+
+    def put_cover(self, key: str, cover: CachedCover) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO cover_lookups (key, url, checked_at) VALUES (?, ?, ?)",
+                (key, cover.url, cover.checked_at.isoformat()),
             )
 
 

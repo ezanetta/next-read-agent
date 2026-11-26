@@ -467,3 +467,40 @@ Significant design decisions: context, options considered, choice, and reason.
   - **Cleaning:** author names lose trailing notes ("V. S. Ramachandran (neurology)"). Work titles lose series notes and bilingual second titles. Original-language titles in Latin script are kept as they are, by the owner's choice.
   - **No `year` in the recommendation result:** the catalog only knows the matched edition's year, and the UI would show it as the book's. Pages and language stay: they describe the matched edition, which is what the link points to.
 - **Reason:** The rules keep selection reproducible. A short, explained exclusion list handles the noise that rules would only catch by also dropping good books. Implied ratings avoid inventing an opinion for a reader who doesn't exist. A field that invites a wrong label is better removed than renamed.
+
+## D-045 · The web UI (C2) and the API additions it needs (2026-11-25)
+
+- **Context:** Milestone C2 is the demo's UI, built from the owner's mockups (kept locally in `docs/design/`, never committed). The mockups need a few things the API didn't return.
+- **Choice:**
+  - **Stack (`web/`):** Vite, React, strict TypeScript, Tailwind CSS v4, React Router (one URL per screen), TanStack Query, `openapi-typescript` + `openapi-fetch` (a client generated from the API's schema), `@microsoft/fetch-event-source` for the POST stream, Vitest + Testing Library (with a mocked `fetch`, no MSW), Biome. npm, with a lockfile.
+  - **Routes:** `/`, `/p/:profileId`, `/p/:profileId/ask`, `/p/:profileId/results/:runId`, `/limit`. Results are kept in `sessionStorage` by run id: a reload in the same tab keeps them, and nothing is stored on the server. The Ask screen navigates to the results on `done`.
+  - **API additions:**
+    - `ProfileSummary` gains `top_authors` and `cover_urls` (3 each), for the sample-reader cards and the cover strip.
+    - `SearchStep` gains `found`, parsed on the server from the search outcome.
+    - `POST /recommendations` gains `ignore_filters`: removing an interpreted filter chip reruns the request without it. It's the user correcting the interpretation (human in the loop), and it counts as a run for the C3 rate limits. The pipeline clears those filters after interpretation. Evals pass none and are unchanged.
+  - **The typed client is generated and committed** (`web/openapi.json`, `web/src/api/schema.d.ts`). The Python CI job checks that the committed schema matches the API, so the UI can't drift from it.
+  - **Links:** "How it works" goes to the README, and "Watch a demo" is hidden until `VITE_DEMO_VIDEO_URL` is set. In dev, a Vite proxy sends `/api` to the local API; in production, `VITE_API_BASE_URL` sets it.
+- **Reason:** A small, mainstream stack whose every piece has one job. Generated types make API changes visible at compile time. Session-only results keep the API stateless, as D-043 designed.
+
+## D-046 · Covers by Open Library cover id, resolved in the background by title and author (2026-11-26)
+
+- **Context:** F-023: covers built from ISBNs fail for books without an ISBN or unknown to Open Library, and Open Library rate-limits lookups by ISBN to 100 per IP every 5 minutes. Cover-id URLs aren't limited.
+- **Options considered:**
+  - **Reuse covers from library retrieval's caches:** neither `library_books.json` nor the works cache stores covers, and they cover only the owner's library.
+  - **Google Books thumbnails:** spend the daily quota shared with recommendations and evals. Rejected: no quota on covers.
+  - **Keep ISBN URLs as a fallback while lookups run:** brings the 403s back. Rejected.
+  - **Open Library search by title and author, on the server, in the background:** free, works without an ISBN, returns cover ids. Chosen.
+- **Choice:**
+  - **The lookup (revised after the first try, F-023):**
+    1. **With an ISBN:** the cover of that exact edition, from Open Library's edition record (`/isbn/{isbn}.json`, the Books API, not the rate-limited Covers API). The cover is the edition the reader read.
+    2. **Without an ISBN, or the edition has no cover:** search by title and author. Search returns each work's best-matching edition: its cover is used when its title matches the Goodreads title, else the work's cover, which may come from a translation.
+    Each request is paced on its own, so a book can take two.
+  - **One `CoverQueue` per server** (`covers.py`): a profile is saved first, so the upload returns at once; its books without a cover are queued. A single worker looks them up one request a second, with our contact header, backing off on failures (up to one every 32 s). Read books go first, since the library opens on that shelf, then currently reading, then to-read. Concurrent uploads share the queue, so they never raise the rate.
+  - **A shared cache** in the demo database (`cover_lookups`, cover URLs), keyed by ISBN-13 when the book has one, else by normalized title and author, for every profile. It replaced a first table of work covers by title and author, which is dropped. Cache hits are applied before the profile is saved, so they cost no request and no wait. A missing cover is checked again after 30 days.
+  - **The search match:** among 5 results, those that are the same work (`same_work`); Goodreads series notes are dropped from the search title.
+  - **No ISBN fallback:** a book with no match keeps the placeholder.
+  - **The library view refetches** every 3 s while `covers_pending` (new on `LibraryPage`) is above 0, and says how many are left.
+  - **The owner's profile** gets its covers in `cli export-profile`, through the same lookups and cache. Books still without one then fall back to **Google Books**: one request each (by ISBN, else by title and author, preferring a matching title), 0.7 s apart, cached apart from Open Library's results so a rerun spends no quota. That's about 51 requests, once. Uploads never use it. The file becomes a preset file (`description`, `profile`, `covers`), so it loads complete. `--no-covers` skips the lookups.
+  - Without `OPEN_LIBRARY_CONTACT` there is no queue: books without a known cover show placeholders.
+- **Trade-offs:** Uploaded titles and authors are sent to Open Library from the server; before, the browser sent their ISBNs. Queued lookups live in memory: a restart drops them, and those books keep placeholders until the profile is made again. A 200-book library takes about 4 to 6 minutes to fill on an empty cache: books with an ISBN whose edition has no cover need two requests.
+- **Reason:** Free, polite, and within Open Library's limits however many people upload, with no quota spent and a fast upload.

@@ -115,7 +115,7 @@ A selection. Each one links to the full entry: what happened, how it was detecte
 
 - **Candidate retrieval is a live Google Books search.** Two spikes chose the catalog for a later step: Open Library's CC0 dumps, which cover 69–81% of the library and the Spanish cases, while Goodbooks-10k stops in 2017 and missed 7 of 13 cases ([F-018](docs/FINDINGS.md), [F-019](docs/FINDINGS.md), [D-040](docs/DECISIONS.md)). The embedding pipeline built for library retrieval is generic enough to reuse.
 - **Only Gemini is implemented.** The `LLMClient` contract is provider-neutral, and a Claude adapter is next, so results can be compared across providers.
-- **The demo API exists; the UI and the public limits don't yet.** Next: rate limits and daily caps for a public demo (designed in D-043), sample profiles, and a small React UI.
+- **The demo runs locally; the public limits don't exist yet.** Next: rate limits and daily caps for a public demo (designed in D-043), then deployment.
 - **Quality isn't a hard rule.** An author exclusion ("nothing by X") is only a soft preference ([B-001](docs/BACKLOG.md)). The judge can't see the cited books' descriptions ([B-002](docs/BACKLOG.md)).
 
 ## Running it
@@ -143,6 +143,19 @@ uv run python -m book_agent.api.openapi --out openapi.json   # schema for the UI
 ```
 
 Profiles are temporary (no accounts), search results are cached, and recommendations stream their progress as Server-Sent Events ([D-043](docs/DECISIONS.md)).
+
+### Running the UI
+
+The web UI (`web/`: Vite, React, TypeScript, Tailwind) talks to the API through a dev proxy. Run the API in one terminal and the UI in another; Node 24 or newer.
+
+```bash
+uv run uvicorn book_agent.main:app --port 8000      # terminal 1: the API
+cd web && npm install && npm run dev                # terminal 2: http://localhost:5173
+```
+
+Uploaded libraries get their covers in the background: the API looks each book up on Open Library, one request a second (the edition by ISBN, else a search by title and author), and the library view fills in as they arrive. That needs `OPEN_LIBRARY_CONTACT` in `.env`; without it, books show colored placeholders ([D-046](docs/DECISIONS.md)).
+
+The UI's API client is generated from the API's schema: after changing the API, run `npm run api:types` in `web/` (CI fails if `web/openapi.json` is stale). UI checks: `npm run typecheck`, `npm run lint`, `npm test`, `npm run build`. In production, `VITE_API_BASE_URL` points the UI at the API, and `VITE_DEMO_VIDEO_URL`, when set, shows the demo-video button ([D-045](docs/DECISIONS.md)).
 
 ### Running the evals
 

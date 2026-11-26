@@ -1,5 +1,6 @@
 """In-memory fakes that implement the ports, for tests that should not touch the network."""
 
+import asyncio
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,7 +19,7 @@ from book_agent.llm.base import (
     ToolSpec,
     Usage,
 )
-from book_agent.ports import WorkLookupError
+from book_agent.ports import CoverLookupError, WorkLookupError
 
 
 def _words(text: str) -> set[str]:
@@ -43,6 +44,8 @@ class FakeBookSearch:
         self, query: str, *, language: str | None = None, max_results: int = 10
     ) -> list[CatalogBook]:
         self.searches.append((query, language, max_results))
+        if query.startswith("isbn:"):  # Google Books' ISBN search
+            return [b for b in self.books if b.isbn13 == query.removeprefix("isbn:")][:max_results]
         words = _words(query)
         matches = [
             b
@@ -256,3 +259,65 @@ def tool_call_response(
         usage=usage or Usage(input_tokens=10, output_tokens=5),
         model=model,
     )
+
+
+class FakeTime:
+    """A monotonic clock that only moves when something sleeps: pacing tests run
+    instantly and can still check the gaps between requests."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+        self.sleeps: list[float] = []
+
+    def monotonic(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+        await asyncio.sleep(0)
+
+
+Answer = int | CoverLookupError | None
+
+
+class FakeCoverFinder:
+    """CoverFinder answering from dicts: edition lookups by ISBN, searches by title. Each
+    answer is a cover id, None (no cover), or a CoverLookupError to raise; anything not
+    listed is None. Records each call, and the fake time it was made at. With a `gate`,
+    every lookup waits until the test sets it."""
+
+    def __init__(
+        self,
+        searches: dict[str, Answer] | None = None,
+        time: FakeTime | None = None,
+        *,
+        editions: dict[str, Answer] | None = None,
+        gate: asyncio.Event | None = None,
+    ) -> None:
+        self.searches = searches or {}
+        self.editions = editions or {}
+        self.time = time
+        self.gate = gate
+        self.calls: list[tuple[str, str]] = []  # ("edition", isbn) or ("search", title)
+        self.call_times: list[float] = []
+
+    async def edition_cover_id(self, isbn13: str) -> int | None:
+        return await self._answer(("edition", isbn13), self.editions.get(isbn13))
+
+    async def search_cover_id(self, title: str, author: str) -> int | None:
+        return await self._answer(("search", title), self.searches.get(title))
+
+    async def _answer(self, call: tuple[str, str], answer: Answer) -> int | None:
+        if self.gate is not None:
+            await self.gate.wait()
+        self.calls.append(call)
+        if self.time is not None:
+            self.call_times.append(self.time.monotonic())
+        if isinstance(answer, CoverLookupError):
+            raise answer
+        return answer
+
+    @property
+    def searched(self) -> list[str]:
+        return [value for kind, value in self.calls if kind == "search"]

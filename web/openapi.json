@@ -1,0 +1,1591 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Book Recommendation Agent",
+    "description": "Demo API: temporary profiles, book search, and streamed recommendations.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/books/search": {
+      "get": {
+        "tags": [
+          "books"
+        ],
+        "summary": "Search Books",
+        "description": "Autocomplete: up to 8 books with covers. Repeated queries come from a cache.",
+        "operationId": "searchBooks",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 100,
+              "title": "Q"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResults"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The query is too short or too long",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Google Books is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profiles/manual": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Create Manual Profile",
+        "description": "A temporary profile from 5-50 books picked through search, all counted as liked.",
+        "operationId": "createManualProfile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ManualProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The profile can't be made from this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profiles/goodreads": {
+      "post": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Create Goodreads Profile",
+        "description": "A temporary profile from a Goodreads export. The file is parsed and discarded.",
+        "operationId": "createGoodreadsProfile",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/GoodreadsUpload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The profile can't be made from this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profiles/presets": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "List Preset Profiles",
+        "description": "The sample profiles, and the owner's library when it's configured.",
+        "operationId": "listPresetProfiles",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProfileSummary"
+                  },
+                  "type": "array",
+                  "title": "Response Listpresetprofiles"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profiles/{profile_id}": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Get Profile",
+        "operationId": "getProfile",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileSummary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "Delete Profile",
+        "description": "Delete a temporary profile now instead of waiting for it to expire.",
+        "operationId": "deleteProfile",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "404": {
+            "description": "No such profile, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Presets can't be deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/profiles/{profile_id}/books": {
+      "get": {
+        "tags": [
+          "profiles"
+        ],
+        "summary": "List Profile Books",
+        "description": "The library view: every book with cover, rating (none when picked) and shelf, and\nhow many cover lookups are still queued.",
+        "operationId": "listProfileBooks",
+        "parameters": [
+          {
+            "name": "profile_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Profile Id"
+            }
+          },
+          {
+            "name": "shelf",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "read",
+                    "to_read",
+                    "currently_reading"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Shelf"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LibraryPage"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/recommendations": {
+      "post": {
+        "tags": [
+          "recommendations"
+        ],
+        "summary": "Stream Recommendation",
+        "description": "Recommend 3 books for a profile, streaming the agent's progress as it happens.",
+        "operationId": "streamRecommendation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecommendationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Server-Sent Events: one `RecommendationEvent` per `data:` line, with the event's `type` as the SSE event name. Ends with `done` or `failed`.",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecommendationEvent"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such profile, or it expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Health",
+        "description": "Liveness probe.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ErrorBody": {
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "invalid_profile",
+              "not_found",
+              "preset",
+              "search_unavailable",
+              "invalid_query"
+            ],
+            "title": "Error"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "title": "ErrorBody",
+        "description": "Every error the API returns on purpose."
+      },
+      "Filters": {
+        "description": "Hard constraints from the request. None means \"no constraint\".\n\nPage bounds are inclusive (D-006, D-026): \"under 400\" is max_pages 400, \"more than\n600\" is min_pages 600.",
+        "properties": {
+          "language": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z]{2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Language"
+          },
+          "max_pages": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Max Pages"
+          },
+          "min_pages": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Min Pages"
+          }
+        },
+        "title": "Filters",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "LibraryBook": {
+        "properties": {
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "author": {
+            "type": "string",
+            "title": "Author"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "shelf": {
+            "type": "string",
+            "enum": [
+              "read",
+              "to_read",
+              "currently_reading"
+            ],
+            "title": "Shelf"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          },
+          "picked": {
+            "type": "boolean",
+            "title": "Picked"
+          },
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "title",
+          "author",
+          "year",
+          "shelf",
+          "rating",
+          "picked",
+          "cover_url"
+        ],
+        "title": "LibraryBook",
+        "description": "One book in the library view."
+      },
+      "LibraryPage": {
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "title": "Profile Id"
+          },
+          "books": {
+            "items": {
+              "$ref": "#/components/schemas/LibraryBook"
+            },
+            "type": "array",
+            "title": "Books"
+          },
+          "covers_pending": {
+            "type": "integer",
+            "title": "Covers Pending"
+          }
+        },
+        "type": "object",
+        "required": [
+          "profile_id",
+          "books",
+          "covers_pending"
+        ],
+        "title": "LibraryPage"
+      },
+      "ManualProfileRequest": {
+        "properties": {
+          "books": {
+            "items": {
+              "$ref": "#/components/schemas/PickedBook"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 5,
+            "title": "Books"
+          }
+        },
+        "type": "object",
+        "required": [
+          "books"
+        ],
+        "title": "ManualProfileRequest"
+      },
+      "PickedBook": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Source Id"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "authors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 10,
+            "title": "Authors"
+          },
+          "isbn13": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 13
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Isbn13"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "title"
+        ],
+        "title": "PickedBook",
+        "description": "A book the user picked from search results (the search response's fields)."
+      },
+      "ProfileSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "goodreads",
+              "sample",
+              "owner"
+            ],
+            "title": "Source"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "books": {
+            "type": "integer",
+            "title": "Books"
+          },
+          "read": {
+            "type": "integer",
+            "title": "Read"
+          },
+          "liked": {
+            "type": "integer",
+            "title": "Liked"
+          },
+          "to_read": {
+            "type": "integer",
+            "title": "To Read"
+          },
+          "ratings_implied": {
+            "type": "boolean",
+            "title": "Ratings Implied"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "top_authors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Top Authors"
+          },
+          "cover_urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Cover Urls"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "source",
+          "description",
+          "books",
+          "read",
+          "liked",
+          "to_read",
+          "ratings_implied",
+          "expires_at",
+          "top_authors",
+          "cover_urls"
+        ],
+        "title": "ProfileSummary"
+      },
+      "RecommendationRequest": {
+        "properties": {
+          "profile_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Profile Id"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/Filters",
+            "default": {}
+          },
+          "ignore_filters": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "language",
+                "max_pages",
+                "min_pages"
+              ]
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Ignore Filters"
+          }
+        },
+        "type": "object",
+        "required": [
+          "profile_id"
+        ],
+        "title": "RecommendationRequest"
+      },
+      "SearchHit": {
+        "properties": {
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "authors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Authors"
+          },
+          "year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Year"
+          },
+          "isbn13": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Isbn13"
+          },
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source_id",
+          "title",
+          "authors",
+          "year",
+          "isbn13",
+          "cover_url"
+        ],
+        "title": "SearchHit",
+        "description": "A book from search, with what the UI needs to show it and to pick it."
+      },
+      "SearchResults": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "books": {
+            "items": {
+              "$ref": "#/components/schemas/SearchHit"
+            },
+            "type": "array",
+            "title": "Books"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query",
+          "books"
+        ],
+        "title": "SearchResults"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      },
+      "CheckingEvent": {
+        "description": "Existence, the reader's library and the filters are being checked.",
+        "properties": {
+          "type": {
+            "const": "checking",
+            "default": "checking",
+            "title": "Type",
+            "type": "string"
+          },
+          "iteration": {
+            "title": "Iteration",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "iteration"
+        ],
+        "title": "CheckingEvent",
+        "type": "object"
+      },
+      "CitedLibraryBook": {
+        "properties": {
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "rating": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rating"
+          },
+          "picked": {
+            "title": "Picked",
+            "type": "boolean"
+          },
+          "shelf": {
+            "enum": [
+              "read",
+              "to_read",
+              "currently_reading"
+            ],
+            "title": "Shelf",
+            "type": "string"
+          },
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
+          }
+        },
+        "required": [
+          "title",
+          "author",
+          "rating",
+          "picked",
+          "shelf",
+          "cover_url"
+        ],
+        "title": "CitedLibraryBook",
+        "type": "object"
+      },
+      "DoneEvent": {
+        "properties": {
+          "type": {
+            "const": "done",
+            "default": "done",
+            "title": "Type",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/RecommendationResult"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "DoneEvent",
+        "type": "object"
+      },
+      "FailedEvent": {
+        "properties": {
+          "type": {
+            "const": "failed",
+            "default": "failed",
+            "title": "Type",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "interpretation",
+              "agent",
+              "unavailable",
+              "demo_limit"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "message"
+        ],
+        "title": "FailedEvent",
+        "type": "object"
+      },
+      "InterpretedEvent": {
+        "properties": {
+          "type": {
+            "const": "interpreted",
+            "default": "interpreted",
+            "title": "Type",
+            "type": "string"
+          },
+          "preference": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preference"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/Filters"
+          },
+          "sources": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Sources",
+            "type": "object"
+          }
+        },
+        "required": [
+          "preference",
+          "filters",
+          "sources"
+        ],
+        "title": "InterpretedEvent",
+        "type": "object"
+      },
+      "ProblemView": {
+        "description": "Why a submitted book was rejected.",
+        "properties": {
+          "book": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Book"
+          },
+          "rule": {
+            "title": "Rule",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "unknown": {
+            "title": "Unknown",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "book",
+          "rule",
+          "message",
+          "unknown"
+        ],
+        "title": "ProblemView",
+        "type": "object"
+      },
+      "RecommendationResult": {
+        "properties": {
+          "profile_id": {
+            "title": "Profile Id",
+            "type": "string"
+          },
+          "request": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request"
+          },
+          "books": {
+            "items": {
+              "$ref": "#/components/schemas/RecommendedBook"
+            },
+            "title": "Books",
+            "type": "array"
+          },
+          "trace": {
+            "$ref": "#/components/schemas/TraceSummary"
+          }
+        },
+        "required": [
+          "profile_id",
+          "request",
+          "books",
+          "trace"
+        ],
+        "title": "RecommendationResult",
+        "type": "object"
+      },
+      "RecommendedBook": {
+        "properties": {
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Link"
+          },
+          "cover_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cover Url"
+          },
+          "pages": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pages"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "cited": {
+            "items": {
+              "$ref": "#/components/schemas/CitedLibraryBook"
+            },
+            "title": "Cited",
+            "type": "array"
+          }
+        },
+        "required": [
+          "title",
+          "author",
+          "reason",
+          "link",
+          "cover_url",
+          "pages",
+          "language",
+          "cited"
+        ],
+        "title": "RecommendedBook",
+        "type": "object"
+      },
+      "RejectedEvent": {
+        "description": "The submission was rejected; the agent tries again while it has turns left.",
+        "properties": {
+          "type": {
+            "const": "rejected",
+            "default": "rejected",
+            "title": "Type",
+            "type": "string"
+          },
+          "iteration": {
+            "title": "Iteration",
+            "type": "integer"
+          },
+          "problems": {
+            "items": {
+              "$ref": "#/components/schemas/ProblemView"
+            },
+            "title": "Problems",
+            "type": "array"
+          }
+        },
+        "required": [
+          "iteration",
+          "problems"
+        ],
+        "title": "RejectedEvent",
+        "type": "object"
+      },
+      "SearchStep": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "found": {
+            "title": "Found",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "query",
+          "outcome",
+          "found"
+        ],
+        "title": "SearchStep",
+        "type": "object"
+      },
+      "SearchingEvent": {
+        "properties": {
+          "type": {
+            "const": "searching",
+            "default": "searching",
+            "title": "Type",
+            "type": "string"
+          },
+          "iteration": {
+            "title": "Iteration",
+            "type": "integer"
+          },
+          "searches": {
+            "items": {
+              "$ref": "#/components/schemas/SearchStep"
+            },
+            "title": "Searches",
+            "type": "array"
+          }
+        },
+        "required": [
+          "iteration",
+          "searches"
+        ],
+        "title": "SearchingEvent",
+        "type": "object"
+      },
+      "StartedEvent": {
+        "properties": {
+          "type": {
+            "const": "started",
+            "default": "started",
+            "title": "Type",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "prompt_id": {
+            "title": "Prompt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "prompt_id"
+        ],
+        "title": "StartedEvent",
+        "type": "object"
+      },
+      "SubmittedEvent": {
+        "properties": {
+          "type": {
+            "const": "submitted",
+            "default": "submitted",
+            "title": "Type",
+            "type": "string"
+          },
+          "iteration": {
+            "title": "Iteration",
+            "type": "integer"
+          },
+          "titles": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Titles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "iteration",
+          "titles"
+        ],
+        "title": "SubmittedEvent",
+        "type": "object"
+      },
+      "TraceStep": {
+        "properties": {
+          "iteration": {
+            "title": "Iteration",
+            "type": "integer"
+          },
+          "searches": {
+            "items": {
+              "$ref": "#/components/schemas/SearchStep"
+            },
+            "title": "Searches",
+            "type": "array"
+          },
+          "submitted": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Submitted",
+            "type": "array"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "iteration",
+          "searches",
+          "submitted",
+          "outcome"
+        ],
+        "title": "TraceStep",
+        "type": "object"
+      },
+      "TraceSummary": {
+        "properties": {
+          "prompt_id": {
+            "title": "Prompt Id",
+            "type": "string"
+          },
+          "iterations": {
+            "title": "Iterations",
+            "type": "integer"
+          },
+          "submissions": {
+            "title": "Submissions",
+            "type": "integer"
+          },
+          "rejections": {
+            "items": {
+              "items": {
+                "$ref": "#/components/schemas/ProblemView"
+              },
+              "type": "array"
+            },
+            "title": "Rejections",
+            "type": "array"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/TraceStep"
+            },
+            "title": "Steps",
+            "type": "array"
+          },
+          "llm_calls": {
+            "title": "Llm Calls",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "duration_s": {
+            "title": "Duration S",
+            "type": "number"
+          }
+        },
+        "required": [
+          "prompt_id",
+          "iterations",
+          "submissions",
+          "rejections",
+          "steps",
+          "llm_calls",
+          "input_tokens",
+          "output_tokens",
+          "duration_s"
+        ],
+        "title": "TraceSummary",
+        "type": "object"
+      },
+      "RecommendationEvent": {
+        "discriminator": {
+          "mapping": {
+            "checking": "#/components/schemas/CheckingEvent",
+            "done": "#/components/schemas/DoneEvent",
+            "failed": "#/components/schemas/FailedEvent",
+            "interpreted": "#/components/schemas/InterpretedEvent",
+            "rejected": "#/components/schemas/RejectedEvent",
+            "searching": "#/components/schemas/SearchingEvent",
+            "started": "#/components/schemas/StartedEvent",
+            "submitted": "#/components/schemas/SubmittedEvent"
+          },
+          "propertyName": "type"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/StartedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/InterpretedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SearchingEvent"
+          },
+          {
+            "$ref": "#/components/schemas/SubmittedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CheckingEvent"
+          },
+          {
+            "$ref": "#/components/schemas/RejectedEvent"
+          },
+          {
+            "$ref": "#/components/schemas/DoneEvent"
+          },
+          {
+            "$ref": "#/components/schemas/FailedEvent"
+          }
+        ]
+      },
+      "GoodreadsUpload": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File",
+            "description": "Goodreads 'Export Library' CSV, up to 1 MB"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "GoodreadsUpload"
+      }
+    }
+  }
+}

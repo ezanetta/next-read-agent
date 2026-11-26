@@ -52,9 +52,11 @@ class ProfileSummary(BaseModel):
     read: int
     liked: int
     to_read: int
-    # True for manual lists: show "picked", never stars (D-043).
+    # True for manual lists and samples: show "picked", never stars (D-043, D-044).
     ratings_implied: bool
     expires_at: datetime | None
+    top_authors: list[str]  # up to 3, most frequent among read books
+    cover_urls: list[str]  # up to 3, of read books with a cover
 
 
 class LibraryBook(BaseModel):
@@ -72,3 +74,5 @@ class LibraryBook(BaseModel):
 class LibraryPage(BaseModel):
     profile_id: str
     books: list[LibraryBook]
+    # Cover lookups still queued for this profile (D-046): the UI refetches until it's 0.
+    covers_pending: int

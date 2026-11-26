@@ -1,8 +1,13 @@
+import asyncio
 from datetime import timedelta
 from pathlib import Path
 
+from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.demo_profiles import PresetFile, load_presets
+from book_agent.domain.covers import CachedCover, cover_id_url, cover_key
+from book_agent.domain.models import Book, ReadingStatus
 from tests.api_support import NOW, client, services
+from tests.fakes import FakeCoverFinder
 from tests.library_data import PROFILE
 
 
@@ -26,7 +31,7 @@ async def test_a_manual_profile_is_created_and_shown_as_picked() -> None:
         assert summary["expires_at"].startswith((NOW + timedelta(days=3)).date().isoformat())
         books = (await c.get(f"/profiles/{summary['id']}/books")).json()["books"]
     assert all(b["picked"] and b["rating"] is None and b["shelf"] == "read" for b in books)
-    assert books[0]["cover_url"].startswith("https://covers.openlibrary.org/b/isbn/9780000000002")
+    assert books[0]["cover_url"] is None  # never a cover URL by ISBN (F-023)
     assert books[1]["cover_url"] == "https://img/1.jpg"
 
 
@@ -93,3 +98,57 @@ async def test_unknown_expired_and_deleted_profiles_are_404() -> None:
         created = (await c.post("/profiles/manual", json=FIVE)).json()
         api.clock = lambda: NOW + timedelta(days=4)
         assert (await c.get(f"/profiles/{created['id']}/books")).status_code == 404
+
+
+async def test_summaries_list_top_authors_and_covers() -> None:
+    books = [
+        {**pick(i), "authors": ["Ishiguro" if i < 3 else f"Author {i}"],
+         "cover_url": f"https://img/{i}.jpg" if i % 2 else None}
+        for i in range(6)
+    ]  # fmt: skip
+    async with client(services()) as c:
+        summary = (await c.post("/profiles/manual", json={"books": books})).json()
+    assert summary["top_authors"][0] == "Ishiguro" and len(summary["top_authors"]) == 3
+    assert summary["cover_urls"] == ["https://img/1.jpg", "https://img/3.jpg", "https://img/5.jpg"]
+
+
+async def test_an_upload_returns_at_once_and_its_covers_arrive_by_cover_id() -> None:
+    gate = asyncio.Event()  # lookups wait until the first page has been checked
+    finder = FakeCoverFinder({"Book 0": 100, "Book 1": None, "Later": 300}, gate=gate)
+    api = services(covers=finder)
+    assert api.covers is not None
+    # Another profile already resolved Book 2: it's known before any request.
+    store = api.profiles
+    assert isinstance(store, SqliteStore)
+    store.put_cover(
+        cover_key(Book(title="Book 2", author="Author 2", status=ReadingStatus.READ)),
+        CachedCover(cover_id_url(200), NOW),
+    )
+    async with client(api) as c:
+        created = await c.post("/profiles/goodreads", files={"file": ("export.csv", upload(5))})
+        profile_id = created.json()["id"]
+        first = (await c.get(f"/profiles/{profile_id}/books")).json()
+        gate.set()
+        await api.covers.join()
+        done = (await c.get(f"/profiles/{profile_id}/books")).json()
+        await api.covers.aclose()
+
+    assert created.status_code == 201
+    covers_now = {b["title"]: b["cover_url"] for b in first["books"]}
+    assert covers_now["Book 2"] == cover_id_url(200) and covers_now["Book 0"] is None
+    assert first["covers_pending"] == 5  # Book 0, 1, 3, 4 and Later: everything but Book 2
+    assert done["covers_pending"] == 0
+    covers = {b["title"]: b["cover_url"] for b in done["books"]}
+    assert covers == {
+        "Book 0": cover_id_url(100), "Book 1": None, "Book 2": cover_id_url(200),
+        "Book 3": None, "Book 4": None, "Later": cover_id_url(300),
+    }  # fmt: skip
+    assert all("isbn" not in (url or "") for url in covers.values())
+    assert finder.searched[-1] == "Later"  # the to-read shelf goes last
+
+
+async def test_without_a_cover_queue_nothing_is_pending() -> None:
+    async with client(services()) as c:
+        created = await c.post("/profiles/goodreads", files={"file": ("export.csv", upload(5))})
+        page = (await c.get(f"/profiles/{created.json()['id']}/books")).json()
+    assert page["covers_pending"] == 0
