@@ -14,7 +14,7 @@ from pathlib import Path
 
 from pydantic import TypeAdapter
 
-from book_agent.domain.covers import CachedCover
+from book_agent.domain.covers import CachedCover, CoverJob, NewCoverJob
 from book_agent.domain.models import CatalogBook
 from book_agent.domain.profiles import StoredProfile
 from book_agent.migrations import apply_sqlite
@@ -135,6 +135,63 @@ class SqliteStore:
                 "INSERT OR REPLACE INTO cover_lookups (key, url, checked_at) VALUES (?, ?, ?)",
                 (key, cover.url, _utc(cover.checked_at)),
             )
+
+    # --- CoverJobStore --------------------------------------------------------------
+
+    async def enqueue(self, profile_id: str, jobs: Sequence[NewCoverJob], now: datetime) -> int:
+        with self._lock, self._db:
+            cursor = self._db.executemany(
+                "INSERT INTO cover_jobs (profile_id, book_index, priority, due_at) "
+                "SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM profiles WHERE id = ?) "
+                "ON CONFLICT (profile_id, book_index) DO NOTHING",
+                [(profile_id, j.book_index, j.priority, _utc(now), profile_id) for j in jobs],
+            )
+        return max(cursor.rowcount, 0)
+
+    async def claim(self, now: datetime, lease: timedelta) -> CoverJob | None:
+        at = _utc(now)
+        with self._lock, self._db:  # one transaction on the only connection: atomic
+            row = self._db.execute(
+                "SELECT j.id, j.profile_id, j.book_index, j.attempts FROM cover_jobs AS j "
+                "JOIN profiles AS p ON p.id = j.profile_id "
+                "WHERE j.due_at <= ? AND (j.leased_until IS NULL OR j.leased_until <= ?) "
+                "AND (p.expires_at IS NULL OR p.expires_at > ?) "
+                "ORDER BY j.priority, j.due_at, j.id LIMIT 1",
+                (at, at, at),
+            ).fetchone()
+            if row is None:
+                return None
+            self._db.execute(
+                "UPDATE cover_jobs SET leased_until = ?, attempts = attempts + 1 WHERE id = ?",
+                (_utc(now + lease), row[0]),
+            )
+        return CoverJob(id=row[0], profile_id=row[1], book_index=row[2], attempts=row[3] + 1)
+
+    async def complete(self, job_id: int) -> None:
+        with self._lock, self._db:
+            self._db.execute("DELETE FROM cover_jobs WHERE id = ?", (job_id,))
+
+    async def fail(self, job_id: int, retry_at: datetime, max_attempts: int) -> bool:
+        with self._lock, self._db:
+            given_up = self._db.execute(
+                "DELETE FROM cover_jobs WHERE id = ? AND attempts >= ?", (job_id, max_attempts)
+            ).rowcount
+            if given_up:
+                return False
+            self._db.execute(
+                "UPDATE cover_jobs SET due_at = ?, leased_until = NULL WHERE id = ?",
+                (_utc(retry_at), job_id),
+            )
+        return True
+
+    async def pending(self, profile_id: str, now: datetime) -> int:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT count(*) FROM cover_jobs AS j JOIN profiles AS p ON p.id = j.profile_id "
+                "WHERE j.profile_id = ? AND (p.expires_at IS NULL OR p.expires_at > ?)",
+                (profile_id, _utc(now)),
+            ).fetchone()
+        return int(row[0])
 
 
 def _utc(moment: datetime) -> str:

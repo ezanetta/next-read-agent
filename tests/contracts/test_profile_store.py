@@ -122,3 +122,11 @@ async def test_saving_again_replaces_the_covers_too(stores: Stores) -> None:
     await stores.profiles.save(profile("p1", covers={2: "https://c/2"}))
     stored = await stores.profiles.get("p1", NOW)
     assert stored is not None and stored.covers == {2: "https://c/2"}
+
+
+async def test_an_expired_profile_and_its_covers_are_never_read_before_purge(
+    stores: Stores,
+) -> None:
+    await stores.profiles.save(profile("p1", covers={0: "https://c/0"}))
+    assert await stores.profiles.get("p1", NOW + TTL) is None  # no purge has run
+    assert await stores.profiles.add_cover("p1", 1, "https://c/1") is False  # gone

@@ -3,6 +3,7 @@
 The CLIs use these factories today; FastAPI dependencies will use the same ones.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -34,11 +35,13 @@ from book_agent.llm.timeouts import TimeoutLLM
 from book_agent.ports import (
     BookSearch,
     CoverCache,
+    CoverJobStore,
     ProfileStore,
     SearchCache,
     WorkDescriptions,
     WorkResolver,
 )
+from book_agent.purge import purge_once, purge_periodically
 from book_agent.work_keys import (
     DEFAULT_CACHE_PATH,
     CachedWorkResolver,
@@ -192,11 +195,12 @@ def build_library_retriever(
 
 @dataclass(frozen=True)
 class Stores:
-    """The demo's stores, one adapter behind all three ports."""
+    """The demo's stores, one adapter behind every store port."""
 
     profiles: ProfileStore
     search: SearchCache
     covers: CoverCache
+    jobs: CoverJobStore
 
 
 @asynccontextmanager
@@ -209,11 +213,13 @@ async def open_stores(settings: Settings) -> AsyncGenerator[Stores]:
             min_size=settings.db_pool_min_size,
             max_size=settings.db_pool_max_size,
         ) as postgres:
-            yield Stores(profiles=postgres, search=SearchCacheView(postgres), covers=postgres)
+            yield Stores(
+                profiles=postgres, search=SearchCacheView(postgres), covers=postgres, jobs=postgres
+            )
         return
     sqlite = SqliteStore(settings.demo_db_path)
     try:
-        yield Stores(profiles=sqlite, search=SearchCacheView(sqlite), covers=sqlite)
+        yield Stores(profiles=sqlite, search=SearchCacheView(sqlite), covers=sqlite, jobs=sqlite)
     finally:
         sqlite.close()
 
@@ -229,7 +235,10 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
     presets = load_presets(SAMPLES_DIR, settings.owner_profile_path, now)
     async with AsyncExitStack() as stack:
         stores = await stack.enter_async_context(open_stores(settings))
-        await stores.profiles.purge_expired(now)
+        await purge_once(stores.profiles, now)
+        purging = asyncio.get_running_loop().create_task(
+            purge_periodically(stores.profiles, interval_s=settings.purge_interval_s, clock=utc_now)
+        )
         http = await stack.enter_async_context(httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S))
         works: WorkResolver | None = None
         covers: CoverQueue | None = None
@@ -240,8 +249,13 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
                 build_work_resolver(open_library), load_cache(DEFAULT_CACHE_PATH)
             )
             covers = CoverQueue(
-                OpenLibraryCovers(open_library), stores.covers, stores.profiles, clock=utc_now
+                OpenLibraryCovers(open_library),
+                stores.covers,
+                stores.profiles,
+                stores.jobs,
+                clock=utc_now,
             )
+            covers.start()  # resumes jobs left from before a restart or scale to zero
         try:
             yield ApiServices(
                 profiles=stores.profiles,
@@ -256,7 +270,10 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
                 run_deadline_s=settings.run_deadline_s,
             )
         finally:
-            if covers is not None:  # stop the worker before the stores close
+            # Stop the background work before the stores close.
+            purging.cancel()
+            await asyncio.gather(purging, return_exceptions=True)
+            if covers is not None:
                 await covers.aclose()
 
 

@@ -5,7 +5,7 @@ the database. The schema comes from the numbered migrations (D-049), applied whe
 store opens. Same behavior as SqliteStore: tests/contracts/ runs both.
 """
 
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Any
@@ -17,7 +17,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 from pydantic import TypeAdapter
 
-from book_agent.domain.covers import CachedCover
+from book_agent.domain.covers import CachedCover, CoverJob, NewCoverJob
 from book_agent.domain.models import CatalogBook
 from book_agent.domain.profiles import StoredProfile
 from book_agent.migrations import apply_postgres
@@ -61,7 +61,9 @@ class PostgresStore:
         finally:
             await pool.close()
 
-    async def _fetchone(self, sql: str, params: Sequence[Any]) -> TupleRow | None:
+    async def _fetchone(
+        self, sql: str, params: Sequence[Any] | Mapping[str, Any]
+    ) -> TupleRow | None:
         async with self._pool.connection() as connection:
             cursor = await connection.execute(sql.encode(), params)
             return await cursor.fetchone()
@@ -176,3 +178,75 @@ class PostgresStore:
             """,
             (key, cover.url, cover.checked_at),
         )
+
+    # --- CoverJobStore --------------------------------------------------------------
+
+    async def enqueue(self, profile_id: str, jobs: Sequence[NewCoverJob], now: datetime) -> int:
+        if not jobs:
+            return 0
+        try:
+            async with self._pool.connection() as connection, connection.transaction():
+                cursor = await connection.execute(
+                    b"""
+                    INSERT INTO cover_jobs (profile_id, book_index, priority, due_at)
+                    SELECT %s, j.book_index, j.priority, %s
+                    FROM unnest(%s::int[], %s::int[]) AS j (book_index, priority)
+                    WHERE EXISTS (SELECT 1 FROM profiles WHERE id = %s)
+                    ON CONFLICT (profile_id, book_index) DO NOTHING
+                    """,
+                    (
+                        profile_id, now, [j.book_index for j in jobs],
+                        [j.priority for j in jobs], profile_id,
+                    ),
+                )  # fmt: skip
+                return cursor.rowcount
+        except ForeignKeyViolation:  # the profile was deleted meanwhile
+            return 0
+
+    async def claim(self, now: datetime, lease: timedelta) -> CoverJob | None:
+        # SKIP LOCKED: concurrent claimers never wait on, or get, the same job.
+        row = await self._fetchone(
+            """
+            UPDATE cover_jobs SET leased_until = %(until)s, attempts = attempts + 1
+            WHERE id = (
+                SELECT j.id FROM cover_jobs AS j JOIN profiles AS p ON p.id = j.profile_id
+                WHERE j.due_at <= %(now)s
+                  AND (j.leased_until IS NULL OR j.leased_until <= %(now)s)
+                  AND (p.expires_at IS NULL OR p.expires_at > %(now)s)
+                ORDER BY j.priority, j.due_at, j.id
+                LIMIT 1
+                FOR UPDATE OF j SKIP LOCKED
+            )
+            RETURNING id, profile_id, book_index, attempts
+            """,
+            {"now": now, "until": now + lease},
+        )
+        if row is None:
+            return None
+        return CoverJob(id=row[0], profile_id=row[1], book_index=row[2], attempts=row[3])
+
+    async def complete(self, job_id: int) -> None:
+        await self._rowcount("DELETE FROM cover_jobs WHERE id = %s", (job_id,))
+
+    async def fail(self, job_id: int, retry_at: datetime, max_attempts: int) -> bool:
+        async with self._pool.connection() as connection, connection.transaction():
+            given_up = await connection.execute(
+                b"DELETE FROM cover_jobs WHERE id = %s AND attempts >= %s", (job_id, max_attempts)
+            )
+            if given_up.rowcount:
+                return False
+            await connection.execute(
+                b"UPDATE cover_jobs SET due_at = %s, leased_until = NULL WHERE id = %s",
+                (retry_at, job_id),
+            )
+        return True
+
+    async def pending(self, profile_id: str, now: datetime) -> int:
+        row = await self._fetchone(
+            """
+            SELECT count(*) FROM cover_jobs AS j JOIN profiles AS p ON p.id = j.profile_id
+            WHERE j.profile_id = %s AND (p.expires_at IS NULL OR p.expires_at > %s)
+            """,
+            (profile_id, now),
+        )
+        return int(row[0]) if row is not None else 0

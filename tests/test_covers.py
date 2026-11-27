@@ -1,17 +1,22 @@
 import asyncio
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from pydantic import HttpUrl
 
+from book_agent.adapters.postgres_store import PostgresStore
 from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.covers import (
+    LEASE,
+    MAX_ATTEMPTS,
     MAX_BACKOFF,
+    RETRY_MAX,
     CoverQueue,
     Pacer,
     google_covers,
     known_covers,
     resolve_covers,
+    retry_delay,
 )
 from book_agent.demo_profiles import store_temporary
 from book_agent.domain.covers import (
@@ -26,6 +31,7 @@ from book_agent.ports import BookSearchError, CoverLookupError
 from tests.api_support import NOW
 from tests.fakes import FakeBookSearch, FakeCoverFinder, FakeTime
 from tests.library_data import catalog_book
+from tests.postgres_support import fresh_schema, needs_postgres
 
 READ, TO_READ, READING = ReadingStatus.READ, ReadingStatus.TO_READ, ReadingStatus.CURRENTLY_READING
 ISBN = "9780000000002"
@@ -48,7 +54,9 @@ def fake_pacer(time: FakeTime, interval_s: float = 1.0) -> Pacer:
 def queue_for(
     finder: FakeCoverFinder, store: SqliteStore, time: FakeTime, interval_s: float = 1.0
 ) -> CoverQueue:
-    return CoverQueue(finder, store, store, pacer=fake_pacer(time, interval_s), clock=lambda: NOW)
+    return CoverQueue(
+        finder, store, store, store, pacer=fake_pacer(time, interval_s), clock=lambda: NOW
+    )
 
 
 def test_the_cache_key_is_the_isbn_or_the_normalized_title_and_author() -> None:
@@ -124,14 +132,14 @@ async def test_read_books_are_looked_up_first_then_reading_then_to_read() -> Non
     stored = await store_temporary(store, "goodreads", profile, NOW)
 
     assert await queue.submit(stored) == 4
-    assert queue.pending(stored.id) == 4
-    await queue.join()
+    assert await queue.pending(stored.id) == 4
+    await queue.run_until_idle()
 
     assert finder.searched == ["B", "D", "C", "A"]
     saved = await store.get(stored.id, NOW)
     assert saved is not None
     assert saved.covers == {i: cover_id_url(i + 1) for i in range(4)}
-    assert queue.pending(stored.id) == 0
+    assert await queue.pending(stored.id) == 0
     await queue.aclose()
 
 
@@ -149,7 +157,7 @@ async def test_concurrent_uploads_share_one_rate_and_one_cache() -> None:
 
     await queue.submit(first)
     await queue.submit(second)
-    await queue.join()
+    await queue.run_until_idle()
 
     # "Shared" was looked up once; the second profile got it from the cache.
     assert sorted(finder.searched) == ["Mine", "Shared", "Yours"]
@@ -176,7 +184,7 @@ async def test_cached_books_are_known_at_once_and_never_queued() -> None:
     assert covers == {0: cover_id_url(5), 2: "https://search/cover.jpg"}
     stored = await store_temporary(store, "manual", profile, NOW, covers=covers)
     assert await queue.submit(stored) == 0  # "Coverless" was checked recently: no request
-    assert queue.pending(stored.id) == 0 and finder.calls == []
+    assert await queue.pending(stored.id) == 0 and finder.calls == []
 
 
 async def test_a_failed_lookup_is_not_cached_and_the_worker_keeps_going() -> None:
@@ -191,7 +199,7 @@ async def test_a_failed_lookup_is_not_cached_and_the_worker_keeps_going() -> Non
         store, "goodreads", library(down, ("Up", READ), ("None", READ)), NOW
     )
     await queue.submit(stored)
-    await queue.join()
+    await queue.run_until_idle()
 
     saved = await store.get(stored.id, NOW)
     assert saved is not None and saved.covers == {1: cover_id_url(3)}
@@ -210,20 +218,107 @@ async def test_a_profile_deleted_while_waiting_costs_no_requests() -> None:
     stored = await store_temporary(store, "goodreads", library(("A", READ)), NOW)
     await queue.submit(stored)
     await store.delete(stored.id)
-    await queue.join()
-    assert finder.calls == [] and queue.pending(stored.id) == 0
+    await queue.run_until_idle()
+    assert finder.calls == [] and await queue.pending(stored.id) == 0
     await queue.aclose()
 
 
-async def test_closing_the_queue_stops_the_worker() -> None:
+async def test_the_background_worker_picks_up_new_jobs_and_stops_cleanly() -> None:
     time = FakeTime()
     store = SqliteStore(":memory:")
     queue = queue_for(FakeCoverFinder({"A": 1}, time), store, time)
-    await queue.submit(await store_temporary(store, "goodreads", library(("A", READ)), NOW))
-    await queue.join()
+    queue.start()
+    stored = await store_temporary(store, "goodreads", library(("A", READ)), NOW)
+    await queue.submit(stored)  # wakes the worker: no polling interval to wait for
+    for _ in range(100):
+        if await queue.pending(stored.id) == 0:
+            break
+        await asyncio.sleep(0.01)
+    saved = await store.get(stored.id, NOW)
+    assert saved is not None and saved.covers == {0: cover_id_url(1)}
     await queue.aclose()
     await queue.aclose()  # twice is fine
     assert all(t.done() for t in asyncio.all_tasks() if t is not asyncio.current_task())
+
+
+class Clock:
+    """A clock the test moves by hand, for retry times and leases."""
+
+    def __init__(self) -> None:
+        self.now = NOW
+
+    def __call__(self) -> datetime:
+        return self.now
+
+
+def queue_on(finder: FakeCoverFinder, store: SqliteStore, clock: Clock) -> CoverQueue:
+    time = finder.time or FakeTime()
+    return CoverQueue(finder, store, store, store, pacer=fake_pacer(time), clock=clock)
+
+
+async def test_a_failed_lookup_is_retried_with_backoff_then_succeeds() -> None:
+    finder = FakeCoverFinder({"A": CoverLookupError("HTTP 503")}, FakeTime())
+    store, clock = SqliteStore(":memory:"), Clock()
+    queue = queue_on(finder, store, clock)
+    stored = await store_temporary(store, "goodreads", library(("A", READ)), NOW)
+    await queue.submit(stored)
+
+    assert await queue.run_until_idle() == 1  # failed; due again in 30 s
+    assert await queue.pending(stored.id) == 1
+    clock.now = NOW + retry_delay(1) - timedelta(seconds=1)
+    assert await queue.run_until_idle() == 0  # not due yet
+    finder.searches["A"] = 9  # Open Library is back
+    clock.now = NOW + retry_delay(1)
+    assert await queue.run_until_idle() == 1
+    saved = await store.get(stored.id, NOW)
+    assert saved is not None and saved.covers == {0: cover_id_url(9)}
+    assert await queue.pending(stored.id) == 0
+    assert retry_delay(2) == 2 * retry_delay(1) and retry_delay(50) == RETRY_MAX
+
+
+async def test_a_lookup_that_keeps_failing_is_given_up_after_max_attempts() -> None:
+    finder = FakeCoverFinder({"A": CoverLookupError("HTTP 503")}, FakeTime())
+    store, clock = SqliteStore(":memory:"), Clock()
+    queue = queue_on(finder, store, clock)
+    stored = await store_temporary(store, "goodreads", library(("A", READ)), NOW)
+    await queue.submit(stored)
+    for _ in range(MAX_ATTEMPTS):
+        assert await queue.run_until_idle() == 1
+        clock.now += RETRY_MAX
+    assert await queue.pending(stored.id) == 0  # given up: the book keeps its placeholder
+    assert await queue.run_until_idle() == 0
+    assert len(finder.calls) == MAX_ATTEMPTS
+    saved = await store.get(stored.id, clock.now)
+    assert saved is not None and saved.covers == {}
+
+
+async def test_a_restarted_server_resumes_the_pending_jobs() -> None:
+    store, clock = SqliteStore(":memory:"), Clock()
+    before = queue_on(FakeCoverFinder({}, FakeTime()), store, clock)
+    stored = await store_temporary(store, "goodreads", library(("A", READ), ("B", TO_READ)), NOW)
+    assert await before.submit(stored) == 2
+    await before.aclose()  # the app scaled to zero before any lookup
+
+    finder = FakeCoverFinder({"A": 1, "B": 2}, FakeTime())
+    after = queue_on(finder, store, clock)  # a new process: nothing in memory
+    assert await after.pending(stored.id) == 2  # counted from the store
+    assert await after.run_until_idle() == 2
+    saved = await store.get(stored.id, NOW)
+    assert saved is not None and saved.covers == {0: cover_id_url(1), 1: cover_id_url(2)}
+
+
+async def test_a_job_claimed_by_a_dead_process_is_done_after_its_lease() -> None:
+    store, clock = SqliteStore(":memory:"), Clock()
+    stored = await store_temporary(store, "goodreads", library(("A", READ)), NOW)
+    queue = queue_on(FakeCoverFinder({"A": 1}, FakeTime()), store, clock)
+    await queue.submit(stored)
+    assert await store.claim(NOW, LEASE) is not None  # claimed, then the process died
+
+    assert await queue.run_until_idle() == 0  # still leased
+    clock.now = NOW + LEASE
+    assert await queue.run_until_idle() == 1
+    saved = await store.get(stored.id, clock.now)
+    assert saved is not None and saved.covers == {0: cover_id_url(1)}
 
 
 async def test_resolve_covers_reports_found_missing_and_failed_books() -> None:
@@ -257,7 +352,7 @@ async def test_the_queue_keeps_the_configured_interval(interval: float) -> None:
             store, "goodreads", library(("A", READ), ("B", READ), ("C", READ)), NOW
         )
     )
-    await queue.join()
+    await queue.run_until_idle()
     assert time.sleeps == [interval, interval]
     await queue.aclose()
 
@@ -314,3 +409,23 @@ async def test_google_cover_failures_are_counted_and_not_cached() -> None:
     )
     assert (report.failed, report.covers) == (1, {})
     assert await store.get_cover(google_cover_key(profile.books[0])) is None
+
+
+@needs_postgres
+async def test_on_postgres_a_restarted_worker_resumes_and_saves_covers() -> None:
+    async with fresh_schema() as conninfo:
+        async with PostgresStore.open(conninfo) as store:
+            stored = await store_temporary(store, "goodreads", library(("A", READ)), NOW)
+            first = CoverQueue(FakeCoverFinder({}), store, store, store, clock=lambda: NOW)
+            assert await first.submit(stored) == 1
+        # The app stopped (scale to zero) and starts again with a new pool.
+        async with PostgresStore.open(conninfo) as store:
+            time = FakeTime()
+            finder = FakeCoverFinder({"A": 5}, time)
+            again = CoverQueue(
+                finder, store, store, store, pacer=fake_pacer(time), clock=lambda: NOW
+            )
+            assert await again.pending(stored.id) == 1
+            assert await again.run_until_idle() == 1
+            saved = await store.get(stored.id, NOW)
+    assert saved is not None and saved.covers == {0: cover_id_url(5)}
