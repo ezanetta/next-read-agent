@@ -504,3 +504,20 @@ Significant design decisions: context, options considered, choice, and reason.
   - Without `OPEN_LIBRARY_CONTACT` there is no queue: books without a known cover show placeholders.
 - **Trade-offs:** Uploaded titles and authors are sent to Open Library from the server; before, the browser sent their ISBNs. Queued lookups live in memory: a restart drops them, and those books keep placeholders until the profile is made again. A 200-book library takes about 4 to 6 minutes to fill on an empty cache: books with an ISBN whose edition has no cover need two requests.
 - **Reason:** Free, polite, and within Open Library's limits however many people upload, with no quota spent and a fast upload.
+
+## D-047 · One replica with scale to zero (2026-11-27)
+
+- **Context:** The API is going to Azure Container Apps with Postgres (C3). The staff review found state that only works in one process: the cover queue, its pending counts and its one-request-a-second pacer (R-001), and per-IP limits designed in D-043 (R-007).
+- **Options considered:** several replicas, which needs that state shared; or one replica, which needs none of it but must survive restarts and scale to zero.
+- **Choice:** at most one replica (`maxReplicas: 1`), scaling to zero when idle.
+- **Reason:** demo traffic fits one replica easily. One process avoids a distributed rate limiter, claiming queue jobs across replicas and a shared Open Library pacer. Scale to zero and restarts still happen, so what must survive them is persisted: the cover queue becomes persistent and resumable (R-001), and nothing else keeps state between requests.
+- **What scaling out would need:** a shared rate limiter (counters in Postgres or Redis), queue jobs claimed with row locks (`SELECT ... FOR UPDATE SKIP LOCKED`), and one pacer for Open Library shared by every replica.
+
+## D-048 · Async store ports; SQLite stays as the local and test adapter (2026-11-27)
+
+- **Context:** `ProfileStore`, `SearchCache` and `CoverCache` were synchronous because SQLite was local and fast (D-043). Postgres is a network call, and these ports are used from async routes and the cover worker (R-002).
+- **Options considered:**
+  - **Keep sync ports and offload calls to threads:** fewer changed lines, but every Postgres call holds a worker thread for a network round trip (the default pool has about 40, shared with everything else), pays a thread switch, and the ports keep describing a network database as cheap local calls.
+  - **Async ports:** a mechanical change (8 methods, about 25 call sites, the tests' `await`s), and Postgres gets a native async driver.
+- **Choice:** the 8 port methods become `async def`. `SqliteStore` implements them by calling SQLite inline, with no thread hop: it's local, fast, and used for development and tests. Postgres uses psycopg 3's async API with a connection pool.
+- **Reason:** the signature tells the truth about the cost, and the event loop never blocks on the network. One shared contract-test suite keeps both adapters behaving the same (R-009).
