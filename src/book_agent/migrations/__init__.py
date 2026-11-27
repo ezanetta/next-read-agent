@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 )
 """
 # Any constant works: it only has to be the same for every process migrating this database.
-_ADVISORY_LOCK = 4_046_049
+MIGRATION_LOCK = 4_046_049
 
 
 def apply_sqlite(db: sqlite3.Connection) -> list[int]:
@@ -75,10 +75,13 @@ def apply_sqlite(db: sqlite3.Connection) -> list[int]:
 
 async def apply_postgres(connection: "AsyncConnection[TupleRow]") -> list[int]:
     """Apply the Postgres migrations not applied yet, in one transaction holding an
-    advisory lock, so two processes starting together can't both migrate."""
+    advisory lock. Two processes starting together (a revision switch): the second waits
+    on the lock, and once the first commits it reads the recorded versions afresh (READ
+    COMMITTED) and applies nothing. The lock is transaction-scoped: released at commit,
+    rollback or a dropped connection, so a crash can't leave it held."""
     applied: list[int] = []
     async with connection.transaction():
-        await connection.execute("SELECT pg_advisory_xact_lock(%s)", (_ADVISORY_LOCK,))
+        await connection.execute("SELECT pg_advisory_xact_lock(%s)", (MIGRATION_LOCK,))
         await connection.execute(SCHEMA_MIGRATIONS)
         cursor = await connection.execute("SELECT version FROM schema_migrations")
         done: set[int] = {int(row[0]) for row in await cursor.fetchall()}

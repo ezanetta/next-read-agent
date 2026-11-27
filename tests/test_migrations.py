@@ -12,7 +12,7 @@ from psycopg.types.json import Jsonb
 from book_agent.adapters.postgres_store import PostgresStore
 from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.domain.profiles import StoredProfile
-from book_agent.migrations import apply_postgres, apply_sqlite, migrations
+from book_agent.migrations import MIGRATION_LOCK, apply_postgres, apply_sqlite, migrations
 from tests.library_data import PROFILE
 from tests.postgres_support import fresh_schema, needs_postgres
 
@@ -127,3 +127,39 @@ async def test_postgres_moves_covers_out_of_profile_bodies() -> None:
         still_inside = await cursor.fetchone()
     assert stored is not None and stored.covers == {0: "https://c/0"}
     assert still_inside == (False,)
+
+
+@needs_postgres
+async def test_concurrent_migration_runs_both_succeed_and_apply_each_version_once() -> None:
+    """Two processes starting at once (a revision switch): the second waits on the
+    advisory lock, then finds the schema up to date."""
+    versions = [m.version for m in migrations("postgres")]
+    async with (
+        fresh_schema() as conninfo,
+        await psycopg.AsyncConnection.connect(conninfo, autocommit=True) as blocker,
+        await psycopg.AsyncConnection.connect(conninfo, autocommit=True) as first,
+        await psycopg.AsyncConnection.connect(conninfo, autocommit=True) as second,
+    ):
+        # Hold the migration lock so both runs start before either can proceed.
+        await blocker.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK,))
+        runs = asyncio.gather(apply_postgres(first), apply_postgres(second))
+        for _ in range(100):  # until both are waiting on the lock
+            cursor = await blocker.execute(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+            )
+            if (await cursor.fetchone()) == (2,):
+                break
+            await asyncio.sleep(0.02)
+        else:
+            raise AssertionError("the two runs never waited on the lock")
+        await blocker.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK,))
+        results = await runs
+
+        cursor = await blocker.execute(
+            "SELECT version, count(*) FROM schema_migrations GROUP BY version ORDER BY version"
+        )
+        recorded = await cursor.fetchall()
+        async with PostgresStore.open(conninfo):  # a third start: nothing left to do
+            pass
+    assert sorted(results, key=len) == [[], versions]  # one migrated, the other waited
+    assert recorded == [(v, 1) for v in versions]
