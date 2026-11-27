@@ -96,11 +96,16 @@ def test_invalid_rows_are_skipped_with_a_warning(caplog: pytest.LogCaptureFixtur
 
     messages = [r.getMessage() for r in caplog.records]
     assert len(messages) == 5
-    assert "did-not-finish" in messages[0]  # unknown exclusive shelf
-    assert "<no title>" in messages[1]  # empty title
-    assert "lots" in messages[2]  # page count that is not a number
-    assert "Out Of Range Rating" in messages[3]  # rating above 5
+    # Row numbers and the reason, never a title or a cell's value (R-006).
+    assert messages[:4] == [
+        "Skipping row 9: unknown exclusive shelf",  # "did-not-finish"
+        "Skipping row 10: invalid title",  # empty title
+        "Skipping row 11: Number of Pages isn't a number",  # "lots"
+        "Skipping row 12: invalid my_rating",  # 6, above 5
+    ]
     assert messages[4] == "Skipped 4 of 11 rows in Goodreads export"
+    for value in ("did-not-finish", "lots", "Abandoned Halfway", "Out Of Range Rating"):
+        assert all(value not in m for m in messages)
 
 
 def test_no_summary_warning_when_nothing_is_skipped(caplog: pytest.LogCaptureFixture) -> None:

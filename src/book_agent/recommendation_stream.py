@@ -38,6 +38,7 @@ from book_agent.domain.recommendations import (
 )
 from book_agent.domain.requests import FilterName
 from book_agent.llm.base import LLMClient
+from book_agent.log_privacy import frames, ref
 from book_agent.ports import BookSearch, WorkResolver
 from book_agent.prompts.agent_prompt import AgentPrompt
 from book_agent.tools import SEARCH_BOOKS
@@ -283,7 +284,10 @@ def outcome(
     try:
         return final_event(stored, task.result(), duration_s)
     except Exception as e:
-        logger.error("recommendation run failed unexpectedly: %s", type(e).__name__)
+        logger.error(
+            "recommendation run failed unexpectedly (profile %s): %s\n%s",
+            ref(stored.id), type(e).__name__, frames(e),
+        )  # fmt: skip
         return FailedEvent(kind="agent", message=UNEXPECTED)
 
 

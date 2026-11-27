@@ -12,6 +12,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
+from book_agent import log_privacy
 from book_agent.api.body_limit import BodySizeLimit
 from book_agent.api.routes import books, profiles, recommendations
 from book_agent.api.services import ApiServices
@@ -34,6 +35,8 @@ def create_app(
 ) -> FastAPI:
     """The app. Tests pass `services` built with fakes; production passes a factory that
     wiring builds from settings, entered when the app starts and closed when it stops."""
+
+    log_privacy.install()  # no titles, queries or profile ids in logs (R-006)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:

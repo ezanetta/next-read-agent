@@ -9,6 +9,8 @@ import logging
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from book_agent.domain.models import Book, Profile, ReadingStatus
 
 logger = logging.getLogger(__name__)
@@ -47,14 +49,28 @@ def parse_goodreads_csv(lines: Iterable[str], profile_name: str) -> Profile:
             books.append(_row_to_book(row))
         except ValueError as e:  # pydantic.ValidationError is a ValueError too
             skipped += 1
-            title = row.get("Title") or "<no title>"
-            logger.warning("Skipping row %d (%r): %s", reader.line_num, title, e)
+            # No title or value: an uploaded library stays out of the logs (R-006).
+            logger.warning("Skipping row %d: %s", reader.line_num, _skip_reason(e))
 
     if skipped:
         total = len(books) + skipped
         logger.warning("Skipped %d of %d rows in Goodreads export", skipped, total)
 
     return Profile(name=profile_name, books=books)
+
+
+class _RowError(ValueError):
+    """A row that can't be read. Its message names the column, never the cell's value."""
+
+
+def _skip_reason(error: ValueError) -> str:
+    """Why a row was skipped: the invalid columns or fields, never their values."""
+    if isinstance(error, _RowError):
+        return str(error)
+    if isinstance(error, ValidationError):
+        fields = sorted({str(e["loc"][0]) for e in error.errors() if e["loc"]})
+        return f"invalid {', '.join(fields)}" if fields else "invalid row"
+    return "invalid row"
 
 
 def _row_to_book(row: Mapping[str, str | None]) -> Book:
@@ -64,9 +80,9 @@ def _row_to_book(row: Mapping[str, str | None]) -> Book:
     shelf = col("Exclusive Shelf")
     status = SHELF_TO_STATUS.get(shelf)
     if status is None:
-        raise ValueError(f"unknown exclusive shelf {shelf!r}")
+        raise _RowError("unknown exclusive shelf")
 
-    rating = _optional_float(col("My Rating"))
+    rating = _optional_float(col("My Rating"), "My Rating")
     return Book(
         goodreads_id=col("Book Id") or None,
         title=col("Title"),
@@ -74,9 +90,9 @@ def _row_to_book(row: Mapping[str, str | None]) -> Book:
         isbn=_clean_isbn(col("ISBN")),
         isbn13=_clean_isbn(col("ISBN13")),
         my_rating=rating or None,  # Goodreads uses 0 (or 0.0) for "not rated"
-        pages=_optional_int(col("Number of Pages")),
-        year=_optional_int(col("Original Publication Year"))
-        or _optional_int(col("Year Published")),
+        pages=_optional_int(col("Number of Pages"), "Number of Pages"),
+        year=_optional_int(col("Original Publication Year"), "Original Publication Year")
+        or _optional_int(col("Year Published"), "Year Published"),
         status=status,
     )
 
@@ -87,11 +103,17 @@ def _clean_isbn(raw: str) -> str | None:
     return cleaned or None
 
 
-def _optional_int(raw: str) -> int | None:
-    """Parse an int, treating an empty cell as None. Raises ValueError on garbage."""
-    return int(raw) if raw else None
+def _optional_int(raw: str, column: str) -> int | None:
+    """Parse an int, treating an empty cell as None. Raises _RowError on garbage."""
+    try:
+        return int(raw) if raw else None
+    except ValueError:
+        raise _RowError(f"{column} isn't a number") from None
 
 
-def _optional_float(raw: str) -> float | None:
-    """Parse a float, treating an empty cell as None. Raises ValueError on garbage."""
-    return float(raw) if raw else None
+def _optional_float(raw: str, column: str) -> float | None:
+    """Parse a float, treating an empty cell as None. Raises _RowError on garbage."""
+    try:
+        return float(raw) if raw else None
+    except ValueError:
+        raise _RowError(f"{column} isn't a number") from None
