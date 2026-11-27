@@ -3,7 +3,8 @@ from pathlib import Path
 
 from pydantic import HttpUrl
 
-from book_agent.adapters.sqlite_store import SqliteSearchCache, SqliteStore
+from book_agent.adapters.search_cache_view import SearchCacheView
+from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.domain.covers import CachedCover
 from book_agent.domain.models import CatalogBook
 from book_agent.domain.profiles import StoredProfile
@@ -41,7 +42,7 @@ async def test_purge_and_delete() -> None:
 
 
 async def test_search_cache_respects_max_age() -> None:
-    cache = SqliteSearchCache(SqliteStore(":memory:"))
+    cache = SearchCacheView(SqliteStore(":memory:"))
     _: SearchCache = cache
     book = CatalogBook(source_id="x", title="Dune", authors=("Frank Herbert",),
                        link=HttpUrl("https://example.com"))  # fmt: skip

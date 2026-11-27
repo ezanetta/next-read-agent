@@ -3,8 +3,12 @@
 import sqlite3
 from pathlib import Path
 
+import psycopg
+
+from book_agent.adapters.postgres_store import PostgresStore
 from book_agent.adapters.sqlite_store import SqliteStore
-from book_agent.migrations import apply_sqlite, migrations
+from book_agent.migrations import apply_postgres, apply_sqlite, migrations
+from tests.postgres_support import fresh_schema, needs_postgres
 
 
 def sqlite_columns(db: sqlite3.Connection) -> dict[str, list[str]]:
@@ -51,3 +55,24 @@ def test_a_database_made_before_migrations_keeps_its_data(tmp_path: Path) -> Non
     assert db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone() == (
         len(migrations("sqlite")),
     )
+
+
+@needs_postgres
+async def test_postgres_ends_with_the_same_tables_and_columns_as_sqlite() -> None:
+    db = sqlite3.connect(":memory:")
+    apply_sqlite(db)
+    async with (
+        fresh_schema() as conninfo,
+        PostgresStore.open(conninfo),  # applies the migrations
+        await psycopg.AsyncConnection.connect(conninfo) as connection,
+    ):
+        cursor = await connection.execute(
+            "SELECT table_name, column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema()"
+        )
+        postgres: dict[str, list[str]] = {}
+        for table, column in await cursor.fetchall():
+            postgres.setdefault(table, []).append(column)
+        again = await apply_postgres(connection)  # already applied: nothing to do
+    assert {t: sorted(c) for t, c in postgres.items()} == sqlite_columns(db)
+    assert again == []

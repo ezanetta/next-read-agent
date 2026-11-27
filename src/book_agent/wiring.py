@@ -14,7 +14,9 @@ from google import genai
 
 from book_agent.adapters.google_books import GoogleBooksSearch
 from book_agent.adapters.open_library import OpenLibraryCovers, OpenLibraryWorks, user_agent
-from book_agent.adapters.sqlite_store import SqliteSearchCache, SqliteStore
+from book_agent.adapters.postgres_store import PostgresStore
+from book_agent.adapters.search_cache_view import SearchCacheView
+from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.agent_run import DEFAULT_AGENT_PROMPT
 from book_agent.api.services import ApiServices, utc_now
 from book_agent.config import Settings
@@ -29,7 +31,14 @@ from book_agent.llm.gemini import GeminiClient
 from book_agent.llm.gemini_embeddings import GeminiEmbedder
 from book_agent.llm.retrying import RetryingLLM
 from book_agent.llm.timeouts import TimeoutLLM
-from book_agent.ports import BookSearch, WorkDescriptions, WorkResolver
+from book_agent.ports import (
+    BookSearch,
+    CoverCache,
+    ProfileStore,
+    SearchCache,
+    WorkDescriptions,
+    WorkResolver,
+)
 from book_agent.work_keys import (
     DEFAULT_CACHE_PATH,
     CachedWorkResolver,
@@ -181,6 +190,34 @@ def build_library_retriever(
     )
 
 
+@dataclass(frozen=True)
+class Stores:
+    """The demo's stores, one adapter behind all three ports."""
+
+    profiles: ProfileStore
+    search: SearchCache
+    covers: CoverCache
+
+
+@asynccontextmanager
+async def open_stores(settings: Settings) -> AsyncGenerator[Stores]:
+    """Postgres when DATABASE_URL is set, else SQLite at DEMO_DB_PATH (D-048). Pending
+    migrations are applied on open (D-049); the pool or the file is closed on exit."""
+    if settings.database_url is not None:
+        async with PostgresStore.open(
+            settings.database_url.get_secret_value(),
+            min_size=settings.db_pool_min_size,
+            max_size=settings.db_pool_max_size,
+        ) as postgres:
+            yield Stores(profiles=postgres, search=SearchCacheView(postgres), covers=postgres)
+        return
+    sqlite = SqliteStore(settings.demo_db_path)
+    try:
+        yield Stores(profiles=sqlite, search=SearchCacheView(sqlite), covers=sqlite)
+    finally:
+        sqlite.close()
+
+
 @asynccontextmanager
 async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
     """The demo API's services (D-043): store, presets, catalog clients, the LLM, and the
@@ -188,11 +225,11 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
 
     The work key cache is read-only here: no file is written by API requests.
     """
-    store = SqliteStore(settings.demo_db_path)
     now = utc_now()
-    await store.purge_expired(now)
     presets = load_presets(SAMPLES_DIR, settings.owner_profile_path, now)
     async with AsyncExitStack() as stack:
+        stores = await stack.enter_async_context(open_stores(settings))
+        await stores.profiles.purge_expired(now)
         http = await stack.enter_async_context(httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S))
         works: WorkResolver | None = None
         covers: CoverQueue | None = None
@@ -202,11 +239,13 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
             works = CachedWorkResolver(
                 build_work_resolver(open_library), load_cache(DEFAULT_CACHE_PATH)
             )
-            covers = CoverQueue(OpenLibraryCovers(open_library), store, store, clock=utc_now)
+            covers = CoverQueue(
+                OpenLibraryCovers(open_library), stores.covers, stores.profiles, clock=utc_now
+            )
         try:
             yield ApiServices(
-                profiles=store,
-                search_cache=SqliteSearchCache(store),
+                profiles=stores.profiles,
+                search_cache=stores.search,
                 books=build_book_search(settings, http),
                 llm=build_llm(settings),
                 prompt=DEFAULT_AGENT_PROMPT,
@@ -217,9 +256,8 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
                 run_deadline_s=settings.run_deadline_s,
             )
         finally:
-            if covers is not None:  # stop the worker before its store closes
+            if covers is not None:  # stop the worker before the stores close
                 await covers.aclose()
-            store.close()
 
 
 def cors_origins(settings: Settings) -> list[str]:

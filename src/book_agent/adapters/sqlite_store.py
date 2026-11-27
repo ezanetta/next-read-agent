@@ -116,16 +116,3 @@ class SqliteStore:
 def _utc(moment: datetime) -> str:
     """Timestamps are stored as UTC ISO text, so comparing the text compares instants."""
     return moment.astimezone(UTC).isoformat()
-
-
-class SqliteSearchCache:
-    """The SearchCache view of a SqliteStore (its get/put names belong to profiles)."""
-
-    def __init__(self, store: SqliteStore) -> None:
-        self._store = store
-
-    async def get(self, query: str, now: datetime, max_age: timedelta) -> list[CatalogBook] | None:
-        return await self._store.get_search(query, now, max_age)
-
-    async def put(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None:
-        await self._store.put_search(query, books, now)

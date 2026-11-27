@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 
 from httpx import ASGITransport, AsyncClient
 
-from book_agent.adapters.sqlite_store import SqliteSearchCache, SqliteStore
+from book_agent.adapters.search_cache_view import SearchCacheView
+from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.agent_run import DEFAULT_AGENT_PROMPT
 from book_agent.api.app import create_app
 from book_agent.api.services import ApiServices
@@ -36,7 +37,7 @@ def services(
         queue = CoverQueue(covers, store, store, pacer=pacer, clock=lambda: NOW)
     return ApiServices(
         profiles=store,
-        search_cache=SqliteSearchCache(store),
+        search_cache=SearchCacheView(store),
         books=books or catalog(),
         llm=FakeLLM(list(script)),
         prompt=DEFAULT_AGENT_PROMPT,

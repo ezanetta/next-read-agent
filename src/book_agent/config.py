@@ -34,7 +34,11 @@ class Settings(BaseSettings):
     # hardcoded: the repo is public. Without it, work-key matching is off.
     open_library_contact: str | None = None
     # The demo API (D-043).
-    demo_db_path: Path = Path("data/demo.sqlite3")  # needs a persistent disk in production
+    demo_db_path: Path = Path("data/demo.sqlite3")  # local development, when no DATABASE_URL
+    # Postgres for the demo's stores (D-048); unset, SQLite at demo_db_path is used.
+    database_url: SecretStr | None = None
+    db_pool_min_size: int = Field(default=1, ge=0, le=10)
+    db_pool_max_size: int = Field(default=4, ge=1, le=20)
     owner_profile_path: Path | None = None  # cli export-profile's file; never committed
     profile_ttl_days: int = Field(default=3, ge=1, le=30)
     frontend_origins: str = ""  # comma-separated origins allowed by CORS
