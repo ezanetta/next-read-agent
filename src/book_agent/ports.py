@@ -118,6 +118,11 @@ class ProfileStore(Protocol):
         """The profile, or None when it doesn't exist or has expired (then it's deleted)."""
         ...
 
+    async def add_cover(self, profile_id: str, index: int, url: str) -> bool:
+        """Set one book's cover without rewriting the profile (R-008). False when the
+        profile doesn't exist (deleted or purged): nothing is stored then."""
+        ...
+
     async def delete(self, profile_id: str) -> bool:
         """Delete now; False when there was nothing to delete."""
         ...

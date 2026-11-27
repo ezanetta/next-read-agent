@@ -248,14 +248,8 @@ class CoverQueue:
                     ref(item.profile_id), item.index, e,  # a CoverLookupError has no user data
                 )  # fmt: skip
                 return
-        if url is None:
-            return
-        # Read again after the await: save onto the latest version of the profile.
-        stored = await self._store.get(item.profile_id, self._clock())
-        if stored is not None:
-            await self._store.save(
-                stored.model_copy(update={"covers": {**stored.covers, item.index: url}})
-            )
+        if url is not None:  # one row, not the whole profile; a deleted one stays deleted
+            await self._store.add_cover(item.profile_id, item.index, url)
 
 
 @dataclass

@@ -1,14 +1,22 @@
 """Numbered SQL migrations (D-049): both dialects in step, applied once, in order."""
 
+import asyncio
+import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from book_agent.adapters.postgres_store import PostgresStore
 from book_agent.adapters.sqlite_store import SqliteStore
+from book_agent.domain.profiles import StoredProfile
 from book_agent.migrations import apply_postgres, apply_sqlite, migrations
+from tests.library_data import PROFILE
 from tests.postgres_support import fresh_schema, needs_postgres
+
+NOW = datetime(2026, 11, 27, 12, tzinfo=UTC)
 
 
 def sqlite_columns(db: sqlite3.Connection) -> dict[str, list[str]]:
@@ -76,3 +84,46 @@ async def test_postgres_ends_with_the_same_tables_and_columns_as_sqlite() -> Non
         again = await apply_postgres(connection)  # already applied: nothing to do
     assert {t: sorted(c) for t, c in postgres.items()} == sqlite_columns(db)
     assert again == []
+
+
+def test_covers_saved_inside_profile_bodies_move_to_their_own_table(tmp_path: Path) -> None:
+    path = tmp_path / "demo.sqlite3"
+    legacy = sqlite3.connect(path)
+    legacy.execute(
+        "CREATE TABLE profiles (id TEXT PRIMARY KEY, body TEXT NOT NULL, expires_at TEXT)"
+    )
+    body = StoredProfile(
+        id="p", source="manual", profile=PROFILE, covers={0: "https://c/0", 2: "https://c/2"},
+        created_at=NOW,
+    ).model_dump_json()  # fmt: skip
+    legacy.execute("INSERT INTO profiles VALUES ('p', ?, NULL)", (body,))
+    legacy.commit()
+    legacy.close()
+
+    store = SqliteStore(path)
+    stored = asyncio.run(store.get("p", NOW))
+    store.close()
+    assert stored is not None and stored.covers == {0: "https://c/0", 2: "https://c/2"}
+    db = sqlite3.connect(path)
+    assert "covers" not in json.loads(db.execute("SELECT body FROM profiles").fetchone()[0])
+
+
+@needs_postgres
+async def test_postgres_moves_covers_out_of_profile_bodies() -> None:
+    body = StoredProfile(
+        id="p", source="manual", profile=PROFILE, covers={0: "https://c/0"}, created_at=NOW
+    ).model_dump(mode="json")
+    move = next(m for m in migrations("postgres") if m.name == "profile_covers")
+    async with (
+        fresh_schema() as conninfo,
+        PostgresStore.open(conninfo) as store,
+        await psycopg.AsyncConnection.connect(conninfo, autocommit=True) as connection,
+    ):
+        # A row as version 1 stored it, covers inside the body; then version 2 again.
+        await connection.execute("INSERT INTO profiles (id, body) VALUES ('p', %s)", (Jsonb(body),))
+        await connection.execute(move.sql.encode())
+        stored = await store.get("p", NOW)
+        cursor = await connection.execute("SELECT body ? 'covers' FROM profiles")
+        still_inside = await cursor.fetchone()
+    assert stored is not None and stored.covers == {0: "https://c/0"}
+    assert still_inside == (False,)

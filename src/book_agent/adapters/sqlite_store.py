@@ -33,6 +33,8 @@ class SqliteStore:
         self._db = sqlite3.connect(str(path), check_same_thread=False)
         self._lock = threading.Lock()
         with self._lock:
+            # Per connection, off by default: deleting a profile deletes its covers.
+            self._db.execute("PRAGMA foreign_keys = ON")
             apply_sqlite(self._db)
 
     def close(self) -> None:
@@ -42,10 +44,17 @@ class SqliteStore:
 
     async def save(self, stored: StoredProfile) -> None:
         expires = _utc(stored.expires_at) if stored.expires_at else None
-        with self._lock, self._db:
+        with self._lock, self._db:  # one transaction: the profile and its covers
             self._db.execute(
-                "INSERT OR REPLACE INTO profiles (id, body, expires_at) VALUES (?, ?, ?)",
-                (stored.id, stored.model_dump_json(), expires),
+                "INSERT INTO profiles (id, body, expires_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (id) DO UPDATE SET body = excluded.body, "
+                "expires_at = excluded.expires_at",
+                (stored.id, stored.model_dump_json(exclude={"covers"}), expires),
+            )
+            self._db.execute("DELETE FROM profile_covers WHERE profile_id = ?", (stored.id,))
+            self._db.executemany(
+                "INSERT INTO profile_covers (profile_id, book_index, url) VALUES (?, ?, ?)",
+                [(stored.id, index, url) for index, url in stored.covers.items()],
             )
 
     async def get(self, profile_id: str, now: datetime) -> StoredProfile | None:
@@ -53,13 +62,28 @@ class SqliteStore:
             row = self._db.execute(
                 "SELECT body FROM profiles WHERE id = ?", (profile_id,)
             ).fetchone()
+            covers = self._db.execute(
+                "SELECT book_index, url FROM profile_covers WHERE profile_id = ?", (profile_id,)
+            ).fetchall()
         if row is None:
             return None
-        stored = StoredProfile.model_validate_json(row[0])
+        stored = StoredProfile.model_validate_json(row[0]).model_copy(
+            update={"covers": dict(covers)}
+        )
         if stored.expired(now):
             await self.delete(profile_id)
             return None
         return stored
+
+    async def add_cover(self, profile_id: str, index: int, url: str) -> bool:
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                "INSERT INTO profile_covers (profile_id, book_index, url) "
+                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM profiles WHERE id = ?) "
+                "ON CONFLICT (profile_id, book_index) DO UPDATE SET url = excluded.url",
+                (profile_id, index, url, profile_id),
+            )
+        return cursor.rowcount > 0
 
     async def delete(self, profile_id: str) -> bool:
         with self._lock, self._db:

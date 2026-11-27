@@ -76,3 +76,49 @@ async def test_expiry_compares_instants_not_clock_readings(stores: Stores) -> No
     assert await stores.profiles.purge_expired(NOW - timedelta(minutes=1)) == 0
     assert await stores.profiles.get("tz", NOW - timedelta(minutes=1)) is not None
     assert await stores.profiles.purge_expired(NOW) == 2
+
+
+# --- Covers (R-008): their own rows, gone with the profile ------------------------------
+
+
+async def test_add_cover_sets_one_cover_and_replaces_it(stores: Stores) -> None:
+    await stores.profiles.save(profile("p1", covers={0: "https://c/0"}))
+    assert await stores.profiles.add_cover("p1", 5, "https://c/5") is True
+    assert await stores.profiles.add_cover("p1", 0, "https://c/0-new") is True
+    stored = await stores.profiles.get("p1", NOW)
+    assert stored is not None and stored.covers == {0: "https://c/0-new", 5: "https://c/5"}
+
+
+async def test_add_cover_never_brings_back_a_missing_profile(stores: Stores) -> None:
+    assert await stores.profiles.add_cover("ghost", 0, "https://c/0") is False
+    await stores.profiles.save(profile("p1"))
+    await stores.profiles.delete("p1")
+    assert await stores.profiles.add_cover("p1", 0, "https://c/0") is False
+    assert await stores.profiles.get("p1", NOW) is None
+
+
+async def test_deleting_a_profile_deletes_its_covers(stores: Stores) -> None:
+    await stores.profiles.save(profile("p1", covers={0: "https://c/0"}))
+    await stores.profiles.add_cover("p1", 1, "https://c/1")
+    await stores.profiles.delete("p1")
+    await stores.profiles.save(profile("p1"))  # same id again: no covers left behind
+    stored = await stores.profiles.get("p1", NOW)
+    assert stored is not None and stored.covers == {}
+
+
+async def test_expired_and_purged_profiles_take_their_covers_with_them(stores: Stores) -> None:
+    for profile_id in ("read", "purged"):
+        await stores.profiles.save(profile(profile_id, covers={0: "https://c/0"}))
+    assert await stores.profiles.get("read", NOW + TTL) is None  # deleted on read
+    assert await stores.profiles.purge_expired(NOW + TTL) == 1
+    for profile_id in ("read", "purged"):
+        await stores.profiles.save(profile(profile_id))
+        stored = await stores.profiles.get(profile_id, NOW)
+        assert stored is not None and stored.covers == {}
+
+
+async def test_saving_again_replaces_the_covers_too(stores: Stores) -> None:
+    await stores.profiles.save(profile("p1", covers={0: "https://c/0", 1: "https://c/1"}))
+    await stores.profiles.save(profile("p1", covers={2: "https://c/2"}))
+    stored = await stores.profiles.get("p1", NOW)
+    assert stored is not None and stored.covers == {2: "https://c/2"}

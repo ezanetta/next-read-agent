@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from psycopg import AsyncConnection
+from psycopg.errors import ForeignKeyViolation
 from psycopg.rows import TupleRow
 from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
@@ -73,23 +74,62 @@ class PostgresStore:
     # --- ProfileStore ---------------------------------------------------------------
 
     async def save(self, stored: StoredProfile) -> None:
-        await self._rowcount(
-            """
-            INSERT INTO profiles (id, body, expires_at) VALUES (%s, %s, %s)
-            ON CONFLICT (id) DO UPDATE SET body = EXCLUDED.body, expires_at = EXCLUDED.expires_at
-            """,
-            (stored.id, Jsonb(stored.model_dump(mode="json")), stored.expires_at),
-        )
+        body = Jsonb(stored.model_dump(mode="json", exclude={"covers"}))
+        async with self._pool.connection() as connection, connection.transaction():
+            await connection.execute(
+                b"""
+                INSERT INTO profiles (id, body, expires_at) VALUES (%s, %s, %s)
+                ON CONFLICT (id) DO UPDATE
+                SET body = EXCLUDED.body, expires_at = EXCLUDED.expires_at
+                """,
+                (stored.id, body, stored.expires_at),
+            )
+            await connection.execute(
+                b"DELETE FROM profile_covers WHERE profile_id = %s", (stored.id,)
+            )
+            if stored.covers:
+                async with connection.cursor() as cursor:
+                    await cursor.executemany(
+                        b"INSERT INTO profile_covers (profile_id, book_index, url) "
+                        b"VALUES (%s, %s, %s)",
+                        [(stored.id, index, url) for index, url in stored.covers.items()],
+                    )
 
     async def get(self, profile_id: str, now: datetime) -> StoredProfile | None:
-        row = await self._fetchone("SELECT body FROM profiles WHERE id = %s", (profile_id,))
+        row = await self._fetchone(
+            """
+            SELECT p.body, COALESCE(
+                jsonb_object_agg(c.book_index, c.url) FILTER (WHERE c.book_index IS NOT NULL),
+                '{}'::jsonb
+            )
+            FROM profiles AS p LEFT JOIN profile_covers AS c ON c.profile_id = p.id
+            WHERE p.id = %s GROUP BY p.id
+            """,
+            (profile_id,),
+        )
         if row is None:
             return None
-        stored = StoredProfile.model_validate(row[0])
+        stored = StoredProfile.model_validate({**row[0], "covers": row[1]})
         if stored.expired(now):
             await self.delete(profile_id)
             return None
         return stored
+
+    async def add_cover(self, profile_id: str, index: int, url: str) -> bool:
+        try:
+            return (
+                await self._rowcount(
+                    """
+                    INSERT INTO profile_covers (profile_id, book_index, url)
+                    SELECT %s, %s, %s WHERE EXISTS (SELECT 1 FROM profiles WHERE id = %s)
+                    ON CONFLICT (profile_id, book_index) DO UPDATE SET url = EXCLUDED.url
+                    """,
+                    (profile_id, index, url, profile_id),
+                )
+                > 0
+            )
+        except ForeignKeyViolation:  # deleted between the check and the insert
+            return False
 
     async def delete(self, profile_id: str) -> bool:
         return await self._rowcount("DELETE FROM profiles WHERE id = %s", (profile_id,)) > 0
