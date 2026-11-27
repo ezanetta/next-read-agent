@@ -14,7 +14,7 @@ import pytest
 from book_agent.adapters.postgres_store import PostgresStore
 from book_agent.adapters.search_cache_view import SearchCacheView
 from book_agent.adapters.sqlite_store import SqliteStore
-from book_agent.ports import CoverCache, ProfileStore, SearchCache
+from book_agent.ports import CoverCache, CoverJobStore, ProfileStore, SearchCache
 from tests.postgres_support import fresh_schema, needs_postgres
 
 
@@ -23,6 +23,7 @@ class Stores:
     profiles: ProfileStore
     search: SearchCache
     covers: CoverCache
+    jobs: CoverJobStore
 
 
 ADAPTERS = ["sqlite", pytest.param("postgres", marks=needs_postgres)]
@@ -33,9 +34,11 @@ async def stores(request: pytest.FixtureRequest) -> AsyncGenerator[Stores]:
     if request.param == "sqlite":
         store = SqliteStore(":memory:")
         try:
-            yield Stores(profiles=store, search=SearchCacheView(store), covers=store)
+            yield Stores(profiles=store, search=SearchCacheView(store), covers=store, jobs=store)
         finally:
             store.close()
     else:
         async with fresh_schema() as conninfo, PostgresStore.open(conninfo) as postgres:
-            yield Stores(profiles=postgres, search=SearchCacheView(postgres), covers=postgres)
+            yield Stores(
+                profiles=postgres, search=SearchCacheView(postgres), covers=postgres, jobs=postgres
+            )

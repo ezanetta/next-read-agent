@@ -59,3 +59,21 @@ class CachedCover:
 
     def fresh(self, now: datetime) -> bool:
         return self.url is not None or now - self.checked_at < NOT_FOUND_MAX_AGE
+
+
+@dataclass(frozen=True)
+class NewCoverJob:
+    """A book to look a cover up for, and how soon (SHELF_PRIORITY)."""
+
+    book_index: int
+    priority: int
+
+
+@dataclass(frozen=True)
+class CoverJob:
+    """A claimed cover job: which book, and how many times it has been claimed."""
+
+    id: int
+    profile_id: str
+    book_index: int
+    attempts: int

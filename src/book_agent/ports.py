@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from book_agent.domain.covers import CachedCover
+from book_agent.domain.covers import CachedCover, CoverJob, NewCoverJob
 from book_agent.domain.library import RelatedBook
 from book_agent.domain.models import CatalogBook
 from book_agent.domain.profiles import StoredProfile
@@ -167,3 +167,36 @@ class CoverCache(Protocol):
     async def get_cover(self, key: str) -> CachedCover | None: ...
 
     async def put_cover(self, key: str, cover: CachedCover) -> None: ...
+
+
+class CoverJobStore(Protocol):
+    """Pending cover lookups, persisted so they survive restarts and scale to zero (R-001).
+
+    A claimed job is leased: if the process dies mid-lookup, the lease expires and the job
+    can be claimed again. Jobs belong to a profile and go with it; a job of an expired
+    profile is never claimed or counted, whether or not purge has run (R-011).
+    """
+
+    async def enqueue(self, profile_id: str, jobs: Sequence[NewCoverJob], now: datetime) -> int:
+        """Add jobs, due now; a book already queued for this profile is skipped. Returns
+        how many were added (0 when the profile doesn't exist)."""
+        ...
+
+    async def claim(self, now: datetime, lease: timedelta) -> CoverJob | None:
+        """The next due, unleased job of a live profile (lowest priority number first, then
+        oldest), leased until now + lease, its attempts counted. None when there is none."""
+        ...
+
+    async def complete(self, job_id: int) -> None:
+        """The job is done (or no longer needed): delete it."""
+        ...
+
+    async def fail(self, job_id: int, retry_at: datetime, max_attempts: int) -> bool:
+        """The lookup failed. With attempts left, release the job until `retry_at` and
+        return True; after `max_attempts`, delete it and return False (the book keeps its
+        placeholder)."""
+        ...
+
+    async def pending(self, profile_id: str, now: datetime) -> int:
+        """Jobs left for this profile (waiting, leased or retrying); 0 once it's expired."""
+        ...
