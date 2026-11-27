@@ -521,3 +521,13 @@ Significant design decisions: context, options considered, choice, and reason.
   - **Async ports:** a mechanical change (8 methods, about 25 call sites, the tests' `await`s), and Postgres gets a native async driver.
 - **Choice:** the 8 port methods become `async def`. `SqliteStore` implements them by calling SQLite inline, with no thread hop: it's local, fast, and used for development and tests. Postgres uses psycopg 3's async API with a connection pool.
 - **Reason:** the signature tells the truth about the cost, and the event loop never blocks on the network. One shared contract-test suite keeps both adapters behaving the same (R-009).
+
+## D-049 · Schema migrations: numbered SQL files per dialect, with a parity test (2026-11-27)
+
+- **Context:** the stores now have two adapters, SQLite (local and tests) and Postgres (production), and their schemas must not drift (D-048). SQLite created its tables inline with `CREATE TABLE IF NOT EXISTS`.
+- **Options considered:**
+  - **Alembic:** the standard, with history and downgrades, but it brings SQLAlchemy, which the project doesn't otherwise use, and its autogenerate needs SQLAlchemy models we don't have; migrations would still be written by hand.
+  - **A minimal runner over numbered SQL files:** about 60 lines, plain SQL a reviewer can read, no new dependency. No downgrades, and each change is written once per dialect.
+- **Choice:** the minimal runner (`book_agent/migrations/`). `sqlite/NNNN_name.sql` and `postgres/NNNN_name.sql` describe the same change; applied versions go to `schema_migrations`, each migration in a transaction with its record, and Postgres takes an advisory lock so two starting processes can't migrate at once. Each store applies pending migrations when it opens.
+- **Against drift:** a test checks that both dialects have the same versions and names, and, with Postgres available, that after migrating both have the same tables and columns. Fixes go forward as a new migration, never by editing an applied one.
+- **Reason:** the schema is a handful of tables with no ORM; plain SQL keeps it explicit and the dependency list short. If the schema grows into dozens of tables or needs downgrades, Alembic becomes worth its weight.

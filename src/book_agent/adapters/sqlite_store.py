@@ -17,28 +17,9 @@ from pydantic import TypeAdapter
 from book_agent.domain.covers import CachedCover
 from book_agent.domain.models import CatalogBook
 from book_agent.domain.profiles import StoredProfile
+from book_agent.migrations import apply_sqlite
 
 _BOOKS = TypeAdapter(list[CatalogBook])
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS profiles (
-    id TEXT PRIMARY KEY,
-    body TEXT NOT NULL,
-    expires_at TEXT
-);
-CREATE TABLE IF NOT EXISTS search_cache (
-    query TEXT PRIMARY KEY,
-    body TEXT NOT NULL,
-    cached_at TEXT NOT NULL
-);
--- cover_cache held work covers by title and author, some from translations (F-023).
-DROP TABLE IF EXISTS cover_cache;
-CREATE TABLE IF NOT EXISTS cover_lookups (
-    key TEXT PRIMARY KEY,
-    url TEXT,
-    checked_at TEXT NOT NULL
-);
-"""
 
 
 class SqliteStore:
@@ -51,8 +32,8 @@ class SqliteStore:
         # One connection shared by the event loop's thread and threadpool handlers.
         self._db = sqlite3.connect(str(path), check_same_thread=False)
         self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+        with self._lock:
+            apply_sqlite(self._db)
 
     def close(self) -> None:
         self._db.close()
