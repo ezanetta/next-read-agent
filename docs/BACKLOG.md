@@ -53,3 +53,8 @@ Ideas worth doing later, with the evidence that motivates them.
 
 - **Motivation:** staff review R-018. `PickCard` imports `bookAnchor` from the library page; the upload says "up to 1 MB" without checking the size first; stored results are cast from `sessionStorage` without a version; the long-title test asserts Tailwind class names.
 - **Idea:** move `bookAnchor` to `lib/`, check `file.size` before uploading, version the storage key, and replace class assertions if a visual test is added.
+
+## B-010 · Profile ids are access keys, and they appear in URLs
+
+- **Motivation:** a temporary profile's random id is its only key (D-043), and the UI puts it in every URL (`/p/:profileId`, `/p/:profileId/results/:runId`). URLs end up in browser history, in shared links and screenshots, and in the `Referer` header of the Google Books links on the results page. The API's access log already hides ids (R-006); the browser doesn't.
+- **Idea:** a `Referrer-Policy: no-referrer` (or `strict-origin`) header and `rel="noreferrer"` on outbound links, which the results page already sets; an explicit "Delete this list" action in the UI (the API has `DELETE /profiles/{id}`); or, if the demo grows, short-lived share tokens separate from the profile id.

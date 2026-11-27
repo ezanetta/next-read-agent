@@ -504,3 +504,32 @@ Significant design decisions: context, options considered, choice, and reason.
   - Without `OPEN_LIBRARY_CONTACT` there is no queue: books without a known cover show placeholders.
 - **Trade-offs:** Uploaded titles and authors are sent to Open Library from the server; before, the browser sent their ISBNs. Queued lookups live in memory: a restart drops them, and those books keep placeholders until the profile is made again. A 200-book library takes about 4 to 6 minutes to fill on an empty cache: books with an ISBN whose edition has no cover need two requests.
 - **Reason:** Free, polite, and within Open Library's limits however many people upload, with no quota spent and a fast upload.
+
+## D-047 · One replica with scale to zero (2026-11-27)
+
+- **Context:** The API is going to Azure Container Apps with Postgres (C3). The staff review found state that only works in one process: the cover queue, its pending counts and its one-request-a-second pacer (R-001), and per-IP limits designed in D-043 (R-007).
+- **Options considered:** several replicas, which needs that state shared; or one replica, which needs none of it but must survive restarts and scale to zero.
+- **Choice:** at most one replica (`maxReplicas: 1`), scaling to zero when idle.
+- **Reason:** demo traffic fits one replica easily. One process avoids a distributed rate limiter, claiming queue jobs across replicas and a shared Open Library pacer. Scale to zero and restarts still happen, so what must survive them is persisted: the cover queue becomes persistent and resumable (R-001), and nothing else keeps state between requests.
+- **What scaling out would need:** a shared rate limiter (counters in Postgres or Redis), queue jobs claimed with row locks (`SELECT ... FOR UPDATE SKIP LOCKED`), and one pacer for Open Library shared by every replica.
+
+## D-048 · Async store ports; SQLite stays as the local and test adapter (2026-11-27)
+
+- **Context:** `ProfileStore`, `SearchCache` and `CoverCache` were synchronous because SQLite was local and fast (D-043). Postgres is a network call, and these ports are used from async routes and the cover worker (R-002).
+- **Options considered:**
+  - **Keep sync ports and offload calls to threads:** fewer changed lines, but every Postgres call holds a worker thread for a network round trip (the default pool has about 40, shared with everything else), pays a thread switch, and the ports keep describing a network database as cheap local calls.
+  - **Async ports:** a mechanical change (8 methods, about 25 call sites, the tests' `await`s), and Postgres gets a native async driver.
+- **Choice:** the 8 port methods become `async def`. `SqliteStore` implements them by calling SQLite inline, with no thread hop: it's local, fast, and used for development and tests. Postgres uses psycopg 3's async API with a connection pool.
+- **Reason:** the signature tells the truth about the cost, and the event loop never blocks on the network. One shared contract-test suite keeps both adapters behaving the same (R-009).
+
+## D-049 · Schema migrations: numbered SQL files per dialect, with a parity test (2026-11-27)
+
+- **Context:** the stores now have two adapters, SQLite (local and tests) and Postgres (production), and their schemas must not drift (D-048). SQLite created its tables inline with `CREATE TABLE IF NOT EXISTS`.
+- **Options considered:**
+  - **Alembic:** the standard, with history and downgrades, but it brings SQLAlchemy, which the project doesn't otherwise use, and its autogenerate needs SQLAlchemy models we don't have; migrations would still be written by hand.
+  - **A minimal runner over numbered SQL files:** about 60 lines, plain SQL a reviewer can read, no new dependency. No downgrades, and each change is written once per dialect.
+- **Choice:** the minimal runner (`book_agent/migrations/`). `sqlite/NNNN_name.sql` and `postgres/NNNN_name.sql` describe the same change; applied versions go to `schema_migrations`, each migration in a transaction with its record, and Postgres takes an advisory lock so two starting processes can't migrate at once. Each store applies pending migrations when it opens.
+- **Against drift:** a test checks that both dialects have the same versions and names, and, with Postgres available, that after migrating both have the same tables and columns. Fixes go forward as a new migration, never by editing an applied one.
+- **Reason:** the schema is a handful of tables with no ORM; plain SQL keeps it explicit and the dependency list short. If the schema grows into dozens of tables or needs downgrades, Alembic becomes worth its weight.
+- **Concurrent starts:** during a Container Apps revision switch, two processes can start at once. The Postgres run holds a transaction-scoped advisory lock: the second process waits, then reads the recorded versions afresh and applies nothing. A test starts two runs against the same lock and checks that both succeed and each version is applied once.
+- **In C3:** migrations will also run as a separate deploy step, before the new revision takes traffic. While the old revision still runs, every migration must stay backward compatible with it: add tables and nullable columns, and drop or rename only in a later migration, once no running revision uses the old shape.

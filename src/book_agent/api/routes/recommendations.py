@@ -54,7 +54,9 @@ async def stream_recommendation(
     body: RecommendationRequest, services: Services
 ) -> StreamingResponse:
     """Recommend 3 books for a profile, streaming the agent's progress as it happens."""
-    stored = find_profile(body.profile_id, services.presets, services.profiles, services.clock())
+    stored = await find_profile(
+        body.profile_id, services.presets, services.profiles, services.clock()
+    )
     if stored is None:
         raise HTTPException(404, detail={"error": "not_found", "message": "profile not found"})
     events = recommendation_events(

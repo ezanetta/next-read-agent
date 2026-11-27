@@ -1,14 +1,15 @@
 """SQLite storage for the demo: ProfileStore, SearchCache and CoverCache in one file (D-043).
 
-stdlib sqlite3, one connection, one table per port. Needs a persistent disk and a single
-instance; other hosting gets another implementation behind the same ports. Values are
-stored as the models' JSON, so the schema is a few tables and nothing to migrate.
+stdlib sqlite3, one connection, one table per port. The port methods are async (D-048)
+but call SQLite inline: it is local and fast, so there is no thread hop. Used for local
+development and tests; production uses the Postgres adapter. Values are stored as the
+models' JSON, so the schema is a few tables.
 """
 
 import sqlite3
 import threading
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydantic import TypeAdapter
@@ -16,28 +17,9 @@ from pydantic import TypeAdapter
 from book_agent.domain.covers import CachedCover
 from book_agent.domain.models import CatalogBook
 from book_agent.domain.profiles import StoredProfile
+from book_agent.migrations import apply_sqlite
 
 _BOOKS = TypeAdapter(list[CatalogBook])
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS profiles (
-    id TEXT PRIMARY KEY,
-    body TEXT NOT NULL,
-    expires_at TEXT
-);
-CREATE TABLE IF NOT EXISTS search_cache (
-    query TEXT PRIMARY KEY,
-    body TEXT NOT NULL,
-    cached_at TEXT NOT NULL
-);
--- cover_cache held work covers by title and author, some from translations (F-023).
-DROP TABLE IF EXISTS cover_cache;
-CREATE TABLE IF NOT EXISTS cover_lookups (
-    key TEXT PRIMARY KEY,
-    url TEXT,
-    checked_at TEXT NOT NULL
-);
-"""
 
 
 class SqliteStore:
@@ -50,51 +32,77 @@ class SqliteStore:
         # One connection shared by the event loop's thread and threadpool handlers.
         self._db = sqlite3.connect(str(path), check_same_thread=False)
         self._lock = threading.Lock()
-        with self._lock, self._db:
-            self._db.executescript(_SCHEMA)
+        with self._lock:
+            # Per connection, off by default: deleting a profile deletes its covers.
+            self._db.execute("PRAGMA foreign_keys = ON")
+            apply_sqlite(self._db)
 
     def close(self) -> None:
         self._db.close()
 
     # --- ProfileStore ---------------------------------------------------------------
 
-    def save(self, stored: StoredProfile) -> None:
-        expires = stored.expires_at.isoformat() if stored.expires_at else None
-        with self._lock, self._db:
+    async def save(self, stored: StoredProfile) -> None:
+        expires = _utc(stored.expires_at) if stored.expires_at else None
+        with self._lock, self._db:  # one transaction: the profile and its covers
             self._db.execute(
-                "INSERT OR REPLACE INTO profiles (id, body, expires_at) VALUES (?, ?, ?)",
-                (stored.id, stored.model_dump_json(), expires),
+                "INSERT INTO profiles (id, body, expires_at) VALUES (?, ?, ?) "
+                "ON CONFLICT (id) DO UPDATE SET body = excluded.body, "
+                "expires_at = excluded.expires_at",
+                (stored.id, stored.model_dump_json(exclude={"covers"}), expires),
+            )
+            self._db.execute("DELETE FROM profile_covers WHERE profile_id = ?", (stored.id,))
+            self._db.executemany(
+                "INSERT INTO profile_covers (profile_id, book_index, url) VALUES (?, ?, ?)",
+                [(stored.id, index, url) for index, url in stored.covers.items()],
             )
 
-    def get(self, profile_id: str, now: datetime) -> StoredProfile | None:
+    async def get(self, profile_id: str, now: datetime) -> StoredProfile | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT body FROM profiles WHERE id = ?", (profile_id,)
             ).fetchone()
+            covers = self._db.execute(
+                "SELECT book_index, url FROM profile_covers WHERE profile_id = ?", (profile_id,)
+            ).fetchall()
         if row is None:
             return None
-        stored = StoredProfile.model_validate_json(row[0])
+        stored = StoredProfile.model_validate_json(row[0]).model_copy(
+            update={"covers": dict(covers)}
+        )
         if stored.expired(now):
-            self.delete(profile_id)
+            await self.delete(profile_id)
             return None
         return stored
 
-    def delete(self, profile_id: str) -> bool:
+    async def add_cover(self, profile_id: str, index: int, url: str) -> bool:
+        with self._lock, self._db:
+            cursor = self._db.execute(
+                "INSERT INTO profile_covers (profile_id, book_index, url) "
+                "SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM profiles WHERE id = ?) "
+                "ON CONFLICT (profile_id, book_index) DO UPDATE SET url = excluded.url",
+                (profile_id, index, url, profile_id),
+            )
+        return cursor.rowcount > 0
+
+    async def delete(self, profile_id: str) -> bool:
         with self._lock, self._db:
             cursor = self._db.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
         return cursor.rowcount > 0
 
-    def purge_expired(self, now: datetime) -> int:
+    async def purge_expired(self, now: datetime) -> int:
         with self._lock, self._db:
             cursor = self._db.execute(
                 "DELETE FROM profiles WHERE expires_at IS NOT NULL AND expires_at <= ?",
-                (now.isoformat(),),
+                (_utc(now),),
             )
         return cursor.rowcount
 
     # --- SearchCache ----------------------------------------------------------------
 
-    def get_search(self, query: str, now: datetime, max_age: timedelta) -> list[CatalogBook] | None:
+    async def get_search(
+        self, query: str, now: datetime, max_age: timedelta
+    ) -> list[CatalogBook] | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT body, cached_at FROM search_cache WHERE query = ?", (query,)
@@ -103,16 +111,16 @@ class SqliteStore:
             return None
         return _BOOKS.validate_json(row[0])
 
-    def put_search(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None:
+    async def put_search(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None:
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO search_cache (query, body, cached_at) VALUES (?, ?, ?)",
-                (query, _BOOKS.dump_json(list(books)).decode(), now.isoformat()),
+                (query, _BOOKS.dump_json(list(books)).decode(), _utc(now)),
             )
 
     # --- CoverCache -----------------------------------------------------------------
 
-    def get_cover(self, key: str) -> CachedCover | None:
+    async def get_cover(self, key: str) -> CachedCover | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT url, checked_at FROM cover_lookups WHERE key = ?", (key,)
@@ -121,22 +129,14 @@ class SqliteStore:
             return None
         return CachedCover(url=row[0], checked_at=datetime.fromisoformat(row[1]))
 
-    def put_cover(self, key: str, cover: CachedCover) -> None:
+    async def put_cover(self, key: str, cover: CachedCover) -> None:
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO cover_lookups (key, url, checked_at) VALUES (?, ?, ?)",
-                (key, cover.url, cover.checked_at.isoformat()),
+                (key, cover.url, _utc(cover.checked_at)),
             )
 
 
-class SqliteSearchCache:
-    """The SearchCache view of a SqliteStore (its get/put names belong to profiles)."""
-
-    def __init__(self, store: SqliteStore) -> None:
-        self._store = store
-
-    def get(self, query: str, now: datetime, max_age: timedelta) -> list[CatalogBook] | None:
-        return self._store.get_search(query, now, max_age)
-
-    def put(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None:
-        self._store.put_search(query, books, now)
+def _utc(moment: datetime) -> str:
+    """Timestamps are stored as UTC ISO text, so comparing the text compares instants."""
+    return moment.astimezone(UTC).isoformat()

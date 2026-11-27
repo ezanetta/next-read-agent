@@ -85,14 +85,14 @@ class Pacer:
         self._next = self._monotonic() + self._interval * self._factor
 
 
-def cached_url(cache: CoverCache, book: Book, now: datetime) -> str | None:
+async def cached_url(cache: CoverCache, book: Book, now: datetime) -> str | None:
     """The cover URL when the cache already answers for this book, else None."""
-    cached = cache.get_cover(cover_key(book))
+    cached = await cache.get_cover(cover_key(book))
     return cached.url if cached is not None and cached.fresh(now) else None
 
 
-def _needs_lookup(cache: CoverCache, book: Book, now: datetime) -> bool:
-    cached = cache.get_cover(cover_key(book))
+async def _needs_lookup(cache: CoverCache, book: Book, now: datetime) -> bool:
+    cached = await cache.get_cover(cover_key(book))
     return cached is None or not cached.fresh(now)
 
 
@@ -120,7 +120,7 @@ async def _look_up(
     if cover_id is None:
         cover_id = await _paced(pacer, lambda: finder.search_cover_id(book.title, book.author))
     url = cover_id_url(cover_id) if cover_id is not None else None
-    cache.put_cover(cover_key(book), CachedCover(url, now()))
+    await cache.put_cover(cover_key(book), CachedCover(url, now()))
     return url
 
 
@@ -130,13 +130,13 @@ def in_priority_order(profile: Profile) -> list[int]:
     return sorted(range(len(books)), key=lambda i: SHELF_PRIORITY[books[i].status])
 
 
-def known_covers(
+async def known_covers(
     profile: Profile, covers: dict[int, str], cache: CoverCache, now: datetime
 ) -> dict[int, str]:
     """`covers` plus every cover the cache already has. Makes no requests."""
     found = dict(covers)
     for index, book in enumerate(profile.books):
-        if index not in found and (url := cached_url(cache, book, now)):
+        if index not in found and (url := await cached_url(cache, book, now)):
             found[index] = url
     return found
 
@@ -177,16 +177,16 @@ class CoverQueue:
         self._pending: Counter[str] = Counter()
         self._seq = 0
 
-    def known(self, profile: Profile, covers: dict[int, str]) -> dict[int, str]:
-        return known_covers(profile, covers, self._cache, self._clock())
+    async def known(self, profile: Profile, covers: dict[int, str]) -> dict[int, str]:
+        return await known_covers(profile, covers, self._cache, self._clock())
 
-    def submit(self, stored: StoredProfile) -> int:
+    async def submit(self, stored: StoredProfile) -> int:
         """Queue the books with no cover that the cache can't answer; returns how many."""
         now = self._clock()
         queued = 0
         for index in in_priority_order(stored.profile):
             book = stored.profile.books[index]
-            if index in stored.covers or not _needs_lookup(self._cache, book, now):
+            if index in stored.covers or not await _needs_lookup(self._cache, book, now):
                 continue
             self._seq += 1
             self._ensure_worker().put_nowait(
@@ -236,10 +236,10 @@ class CoverQueue:
                 self._queue.task_done()
 
     async def _process(self, item: _Item) -> None:
-        if self._store.get(item.profile_id, self._clock()) is None:
+        if await self._store.get(item.profile_id, self._clock()) is None:
             return  # deleted or expired while waiting: don't spend a request
-        url = cached_url(self._cache, item.book, self._clock())  # another profile found it
-        if url is None and _needs_lookup(self._cache, item.book, self._clock()):
+        url = await cached_url(self._cache, item.book, self._clock())  # another profile found it
+        if url is None and await _needs_lookup(self._cache, item.book, self._clock()):
             try:
                 url = await _look_up(self._finder, self._cache, self._pacer, item.book, self._clock)
             except CoverLookupError as e:
@@ -248,14 +248,8 @@ class CoverQueue:
                     ref(item.profile_id), item.index, e,  # a CoverLookupError has no user data
                 )  # fmt: skip
                 return
-        if url is None:
-            return
-        # Read again after the await: save onto the latest version of the profile.
-        stored = self._store.get(item.profile_id, self._clock())
-        if stored is not None:
-            self._store.save(
-                stored.model_copy(update={"covers": {**stored.covers, item.index: url}})
-            )
+        if url is not None:  # one row, not the whole profile; a deleted one stays deleted
+            await self._store.add_cover(item.profile_id, item.index, url)
 
 
 @dataclass
@@ -278,11 +272,11 @@ async def resolve_covers(
     """Every book's cover, in priority order, for the owner export. Cache hits are free;
     a failed lookup is counted and skipped, so a rerun retries only those."""
     pacer = pacer or Pacer()
-    report = CoverReport(covers=known_covers(profile, {}, cache, clock()))
+    report = CoverReport(covers=await known_covers(profile, {}, cache, clock()))
     todo = [
         i
         for i in in_priority_order(profile)
-        if i not in report.covers and _needs_lookup(cache, profile.books[i], clock())
+        if i not in report.covers and await _needs_lookup(cache, profile.books[i], clock())
     ]
     for done, index in enumerate(todo, start=1):
         try:
@@ -333,7 +327,7 @@ async def google_covers(
     for index in in_priority_order(profile):
         if index in report.covers:
             continue
-        cached = cache.get_cover(google_cover_key(profile.books[index]))
+        cached = await cache.get_cover(google_cover_key(profile.books[index]))
         if cached is not None and cached.fresh(clock()):
             if cached.url:
                 report.covers[index] = cached.url
@@ -357,7 +351,7 @@ async def google_covers(
             pacer.succeeded()
             report.looked_up += 1
             url = _google_cover(book, results, by_isbn=bool(isbn))
-            cache.put_cover(google_cover_key(book), CachedCover(url, clock()))
+            await cache.put_cover(google_cover_key(book), CachedCover(url, clock()))
             if url is None:
                 report.not_found += 1
             else:

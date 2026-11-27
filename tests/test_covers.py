@@ -99,7 +99,7 @@ async def test_a_book_with_an_isbn_gets_its_own_editions_cover_without_a_search(
     )  # fmt: skip
     assert report.covers == {0: cover_id_url(7)}
     assert finder.calls == [("edition", ISBN)]
-    assert store.get_cover(f"isbn:{ISBN}") == CachedCover(cover_id_url(7), NOW)
+    assert await store.get_cover(f"isbn:{ISBN}") == CachedCover(cover_id_url(7), NOW)
 
 
 async def test_an_edition_without_a_cover_falls_back_to_search_paced_as_two_requests() -> None:
@@ -121,14 +121,14 @@ async def test_read_books_are_looked_up_first_then_reading_then_to_read() -> Non
     store = SqliteStore(":memory:")
     queue = queue_for(finder, store, time)
     profile = library(("A", TO_READ), ("B", READ), ("C", READING), ("D", READ))
-    stored = store_temporary(store, "goodreads", profile, NOW)
+    stored = await store_temporary(store, "goodreads", profile, NOW)
 
-    assert queue.submit(stored) == 4
+    assert await queue.submit(stored) == 4
     assert queue.pending(stored.id) == 4
     await queue.join()
 
     assert finder.searched == ["B", "D", "C", "A"]
-    saved = store.get(stored.id, NOW)
+    saved = await store.get(stored.id, NOW)
     assert saved is not None
     assert saved.covers == {i: cover_id_url(i + 1) for i in range(4)}
     assert queue.pending(stored.id) == 0
@@ -140,13 +140,15 @@ async def test_concurrent_uploads_share_one_rate_and_one_cache() -> None:
     finder = FakeCoverFinder({"Shared": 10, "Mine": 11, "Yours": 12}, time, editions={ISBN: None})
     store = SqliteStore(":memory:")
     queue = queue_for(finder, store, time)
-    first = store_temporary(
+    first = await store_temporary(
         store, "goodreads", library(("Shared", READ), book("Mine", isbn13=ISBN)), NOW
     )
-    second = store_temporary(store, "goodreads", library(("Shared", READ), ("Yours", READ)), NOW)
+    second = await store_temporary(
+        store, "goodreads", library(("Shared", READ), ("Yours", READ)), NOW
+    )
 
-    queue.submit(first)
-    queue.submit(second)
+    await queue.submit(first)
+    await queue.submit(second)
     await queue.join()
 
     # "Shared" was looked up once; the second profile got it from the cache.
@@ -155,7 +157,7 @@ async def test_concurrent_uploads_share_one_rate_and_one_cache() -> None:
     gaps = [b - a for a, b in zip(finder.call_times, finder.call_times[1:], strict=False)]
     assert gaps and all(gap >= 1.0 for gap in gaps)
     for stored in (first, second):
-        saved = store.get(stored.id, NOW)
+        saved = await store.get(stored.id, NOW)
         assert saved is not None and saved.covers[0] == cover_id_url(10)
     await queue.aclose()
 
@@ -165,15 +167,15 @@ async def test_cached_books_are_known_at_once_and_never_queued() -> None:
     finder = FakeCoverFinder({}, time)
     store = SqliteStore(":memory:")
     known, coverless = book("Known", isbn13=ISBN), book("Coverless")
-    store.put_cover(cover_key(known), CachedCover(cover_id_url(5), NOW))
-    store.put_cover(cover_key(coverless), CachedCover(None, NOW))
+    await store.put_cover(cover_key(known), CachedCover(cover_id_url(5), NOW))
+    await store.put_cover(cover_key(coverless), CachedCover(None, NOW))
     profile = library(known, coverless, ("Picked", READ))
     queue = queue_for(finder, store, time)
 
-    covers = queue.known(profile, {2: "https://search/cover.jpg"})
+    covers = await queue.known(profile, {2: "https://search/cover.jpg"})
     assert covers == {0: cover_id_url(5), 2: "https://search/cover.jpg"}
-    stored = store_temporary(store, "manual", profile, NOW, covers=covers)
-    assert queue.submit(stored) == 0  # "Coverless" was checked recently: no request
+    stored = await store_temporary(store, "manual", profile, NOW, covers=covers)
+    assert await queue.submit(stored) == 0  # "Coverless" was checked recently: no request
     assert queue.pending(stored.id) == 0 and finder.calls == []
 
 
@@ -185,15 +187,17 @@ async def test_a_failed_lookup_is_not_cached_and_the_worker_keeps_going() -> Non
     store = SqliteStore(":memory:")
     queue = queue_for(finder, store, time)
     down = book("Down", isbn13=ISBN)
-    stored = store_temporary(store, "goodreads", library(down, ("Up", READ), ("None", READ)), NOW)
-    queue.submit(stored)
+    stored = await store_temporary(
+        store, "goodreads", library(down, ("Up", READ), ("None", READ)), NOW
+    )
+    await queue.submit(stored)
     await queue.join()
 
-    saved = store.get(stored.id, NOW)
+    saved = await store.get(stored.id, NOW)
     assert saved is not None and saved.covers == {1: cover_id_url(3)}
-    assert store.get_cover(cover_key(down)) is None  # retried next time, no search either
+    assert await store.get_cover(cover_key(down)) is None  # retried next time, no search either
     assert ("search", "Down") not in finder.calls
-    assert store.get_cover(cover_key(book("None"))) == CachedCover(None, NOW)
+    assert await store.get_cover(cover_key(book("None"))) == CachedCover(None, NOW)
     assert time.sleeps[0] == 2.0  # the failure doubled the next gap
     await queue.aclose()
 
@@ -203,9 +207,9 @@ async def test_a_profile_deleted_while_waiting_costs_no_requests() -> None:
     finder = FakeCoverFinder({"A": 1}, time)
     store = SqliteStore(":memory:")
     queue = queue_for(finder, store, time)
-    stored = store_temporary(store, "goodreads", library(("A", READ)), NOW)
-    queue.submit(stored)
-    store.delete(stored.id)
+    stored = await store_temporary(store, "goodreads", library(("A", READ)), NOW)
+    await queue.submit(stored)
+    await store.delete(stored.id)
     await queue.join()
     assert finder.calls == [] and queue.pending(stored.id) == 0
     await queue.aclose()
@@ -215,7 +219,7 @@ async def test_closing_the_queue_stops_the_worker() -> None:
     time = FakeTime()
     store = SqliteStore(":memory:")
     queue = queue_for(FakeCoverFinder({"A": 1}, time), store, time)
-    queue.submit(store_temporary(store, "goodreads", library(("A", READ)), NOW))
+    await queue.submit(await store_temporary(store, "goodreads", library(("A", READ)), NOW))
     await queue.join()
     await queue.aclose()
     await queue.aclose()  # twice is fine
@@ -226,7 +230,7 @@ async def test_resolve_covers_reports_found_missing_and_failed_books() -> None:
     time = FakeTime()
     finder = FakeCoverFinder({"A": 1, "B": None, "C": CoverLookupError("timeout")}, time)
     store = SqliteStore(":memory:")
-    store.put_cover(cover_key(book("D")), CachedCover(cover_id_url(4), NOW))
+    await store.put_cover(cover_key(book("D")), CachedCover(cover_id_url(4), NOW))
     profile = library(("C", TO_READ), ("A", READ), ("B", READ), ("D", READ))
     progress: list[tuple[int, int]] = []
 
@@ -239,7 +243,7 @@ async def test_resolve_covers_reports_found_missing_and_failed_books() -> None:
     assert (report.looked_up, report.not_found, report.failed) == (2, 1, 1)
     assert finder.searched == ["A", "B", "C"]  # read first; D was cached
     assert progress == [(1, 3), (2, 3), (3, 3)]
-    assert known_covers(profile, {}, store, NOW) == report.covers  # a rerun starts here
+    assert await known_covers(profile, {}, store, NOW) == report.covers  # a rerun starts here
 
 
 @pytest.mark.parametrize("interval", [0.5, 2.0])
@@ -248,8 +252,10 @@ async def test_the_queue_keeps_the_configured_interval(interval: float) -> None:
     finder = FakeCoverFinder({"A": 1, "B": 2, "C": 3}, time)
     store = SqliteStore(":memory:")
     queue = queue_for(finder, store, time, interval_s=interval)
-    queue.submit(
-        store_temporary(store, "goodreads", library(("A", READ), ("B", READ), ("C", READ)), NOW)
+    await queue.submit(
+        await store_temporary(
+            store, "goodreads", library(("A", READ), ("B", READ), ("C", READ)), NOW
+        )
     )
     await queue.join()
     assert time.sleeps == [interval, interval]
@@ -307,4 +313,4 @@ async def test_google_cover_failures_are_counted_and_not_cached() -> None:
         profile, {}, Down(), store, pacer=fake_pacer(FakeTime()), clock=lambda: NOW
     )
     assert (report.failed, report.covers) == (1, {})
-    assert store.get_cover(google_cover_key(profile.books[0])) is None
+    assert await store.get_cover(google_cover_key(profile.books[0])) is None

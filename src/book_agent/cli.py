@@ -52,7 +52,6 @@ import httpx
 
 from book_agent.adapters.goodreads import load_goodreads_export
 from book_agent.adapters.open_library import OpenLibraryCovers
-from book_agent.adapters.sqlite_store import SqliteStore
 from book_agent.agent import MAX_ITERATIONS, REPAIR_TURNS, AgentFailure, ToolTrace, TurnTrace
 from book_agent.agent_run import (
     AGENT_PROMPTS,
@@ -106,6 +105,7 @@ from book_agent.wiring import (
     build_work_descriptions,
     build_work_resolver,
     catalog_services,
+    open_stores,
 )
 from book_agent.work_keys import (
     DEFAULT_CACHE_PATH,
@@ -264,14 +264,15 @@ async def _export_profile(profile: Profile, out: Path, name: str, settings: Sett
     if open_library is None:
         print(f"error: {NO_CONTACT}: covers need it (or pass --no-covers)")
         return EXIT_ERROR
-    store = SqliteStore(settings.demo_db_path)
-    try:
-        async with open_library, httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S) as google:
-            covers = await export_covers(
-                profile, OpenLibraryCovers(open_library), store, build_book_search(settings, google)
-            )
-    finally:
-        store.close()
+    async with (
+        open_stores(settings) as stores,  # the cover cache the API uses too
+        open_library,
+        httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S) as google,
+    ):
+        covers = await export_covers(
+            profile, OpenLibraryCovers(open_library), stores.covers,
+            build_book_search(settings, google),
+        )  # fmt: skip
     return _write_owner(profile, out, name, covers)
 
 
