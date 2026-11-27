@@ -106,7 +106,7 @@ async def list_profile_books(
     """The library view: every book with cover, rating (none when picked) and shelf, and
     how many cover lookups are still queued."""
     stored = await _get(services, profile_id)
-    pending = services.covers.pending(profile_id) if services.covers else 0
+    pending = await services.covers.pending(profile_id) if services.covers else 0
     return LibraryPage(
         profile_id=profile_id, books=library_books(stored, shelf), covers_pending=pending
     )

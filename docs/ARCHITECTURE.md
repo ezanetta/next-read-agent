@@ -64,9 +64,18 @@ flowchart TB
 | Library retrieval | `library_enrichment.py`, `library_retrieval.py`, `embedding_index.py`, `llm/gemini_embeddings.py`, `domain/library.py` | Describes the read books once (Open Library, then Google Books), embeds them, and for each request retrieves the 8 most related ones for agent_v4's prompt. The index is generic, so a catalog can reuse it (D-040, D-041). |
 | Demo API | `api/` (app, routes, schemas), `demo_profiles.py`, `demo_search.py`, `recommendation_stream.py` | Temporary profiles (manual list, Goodreads upload, samples, owner), cached book search, a library view, and a recommendation streamed as Server-Sent Events from the agent's own trace (D-043). |
 | Stores | `adapters/postgres_store.py`, `adapters/sqlite_store.py`, `migrations/` | `ProfileStore`, `SearchCache` and `CoverCache` are async ports with two adapters: Postgres with a psycopg async pool (production, `DATABASE_URL`) and SQLite (local and tests). Numbered SQL migrations per dialect, covers in their own table (D-048, D-049, R-008). |
-| Covers | `covers.py`, `domain/covers.py`, `OpenLibraryCovers` | One server-wide queue resolves books to Open Library cover ids, one request a second, read books first: the edition's cover by ISBN, else search by title and author preferring a matching edition title. A cache shared by every profile; never cover URLs by ISBN. The owner export adds a Google Books fallback (D-046, F-023). |
+| Covers | `covers.py`, `domain/covers.py`, `OpenLibraryCovers`, `CoverJobStore` | Uploads only enqueue persisted cover jobs; one worker in the app process claims due jobs with a lease and resolves them to Open Library cover ids, one request a second, read books first: the edition's cover by ISBN, else search by title and author preferring a matching edition title. Failures are retried with backoff, then given up. A cache shared by every profile; never cover URLs by ISBN, and never Google Books for uploads. The owner export adds a Google Books fallback (D-046, F-023, R-001). |
 | Web UI | `web/` (Vite, React, TypeScript, Tailwind) | Choose a library, see it, ask with live progress, read the results. A typed client is generated from the API's OpenAPI schema; the recommendation stream is reduced into steps by a pure reducer (D-045). |
 | Eval harness | `evals/` | Frozen case sets, a resumable runner that records but never scores, reports computed from the records, an LLM judge with a calibration workflow, and a parser eval (D-021 to D-039), plus library citation diversity (D-041). |
+
+## Cover jobs and scale to zero
+
+The app runs as one replica that scales to zero when idle (D-047). Cover jobs live in the database, not in memory, so:
+
+- **While the app is down, pending covers pause.** Nothing is lost: the jobs wait in `cover_jobs`.
+- **On the next start, the worker resumes them** before any request arrives (`CoverQueue.start` in the app's startup). A job a stopped process had claimed comes back when its 2-minute lease expires.
+- **The library view's `covers_pending` is read from the database**, so it's right after a restart too, and the UI keeps polling until it's 0.
+- **Shutdown order:** the worker stops first, then the database pool closes.
 
 ## Request flow
 

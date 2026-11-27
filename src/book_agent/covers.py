@@ -1,9 +1,10 @@
 """Resolving covers to Open Library cover ids, politely (D-046).
 
 - `CoverQueue`: one per server. Uploaded profiles are saved first, then their books
-  without a cover wait here; a single worker looks them up one request per second, read
-  books first, and saves each cover id URL on the profile as it's found. Concurrent
-  uploads share the queue, so they never raise the request rate.
+  without a cover become persisted jobs (R-001); a single worker looks them up one
+  request per second, read books first, and saves each cover as it's found. Concurrent
+  uploads share the queue, so they never raise the request rate, and a restart only
+  pauses the jobs.
 - `resolve_covers`: the same lookups for a whole profile in one go, for the owner export,
   and `google_covers`: the export's fallback for books Open Library has no cover for.
 
@@ -14,16 +15,18 @@ request.
 """
 
 import asyncio
+import contextlib
 import logging
 import time
-from collections import Counter
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from book_agent.domain.covers import (
     SHELF_PRIORITY,
     CachedCover,
+    CoverJob,
+    NewCoverJob,
     book_isbn13,
     cover_id_url,
     cover_key,
@@ -38,6 +41,7 @@ from book_agent.ports import (
     BookSearchError,
     CoverCache,
     CoverFinder,
+    CoverJobStore,
     CoverLookupError,
     ProfileStore,
 )
@@ -141,21 +145,28 @@ async def known_covers(
     return found
 
 
-@dataclass(order=True, frozen=True)
-class _Item:
-    priority: int
-    seq: int
-    profile_id: str = field(compare=False)
-    index: int = field(compare=False)
-    book: Book = field(compare=False)
+LEASE = timedelta(minutes=2)  # covers the pacer's longest wait plus two timed-out requests
+MAX_ATTEMPTS = 5
+RETRY_BASE = timedelta(seconds=30)
+RETRY_MAX = timedelta(hours=1)
+IDLE_POLL_S = 30.0  # with nothing due, look again this often (retries come due later)
+
+
+def retry_delay(attempts: int) -> timedelta:
+    """30 s after the first failure, doubling each time, at most an hour."""
+    doublings = min(max(attempts - 1, 0), 16)  # past RETRY_MAX long before; no overflow
+    return min(RETRY_BASE * 2**doublings, RETRY_MAX)
 
 
 class CoverQueue:
-    """The server's single queue of cover lookups.
+    """The server's cover worker, over persisted jobs (R-001, D-047).
 
-    The worker starts with the first submission (in the server's event loop) and is
-    cancelled by `aclose`. Pending lookups live in memory: a restart drops them, and those
-    books keep the placeholder (D-046).
+    Uploads enqueue jobs and return; the worker claims due jobs one at a time, looks each
+    book up at the pacer's rate (kept in memory: one replica), saves the cover, and
+    completes the job. A failed lookup is retried with backoff, then given up. Jobs live
+    in the store, so a restart or scale to zero only pauses them: `start` resumes them, and
+    a job a dead process had claimed comes back when its lease expires. Pending counts
+    come from the store, never from memory.
     """
 
     def __init__(
@@ -163,93 +174,111 @@ class CoverQueue:
         finder: CoverFinder,
         cache: CoverCache,
         store: ProfileStore,
+        jobs: CoverJobStore,
         *,
         pacer: Pacer | None = None,
         clock: Clock,
+        idle_poll_s: float = IDLE_POLL_S,
     ) -> None:
         self._finder = finder
         self._cache = cache
         self._store = store
+        self._jobs = jobs
         self._pacer = pacer or Pacer()
         self._clock = clock
-        self._queue: asyncio.PriorityQueue[_Item] | None = None
+        self._idle_poll_s = idle_poll_s
+        self._wake = asyncio.Event()
         self._worker: asyncio.Task[None] | None = None
-        self._pending: Counter[str] = Counter()
-        self._seq = 0
 
     async def known(self, profile: Profile, covers: dict[int, str]) -> dict[int, str]:
         return await known_covers(profile, covers, self._cache, self._clock())
 
     async def submit(self, stored: StoredProfile) -> int:
-        """Queue the books with no cover that the cache can't answer; returns how many."""
+        """Queue the books with no cover that the cache can't answer; returns how many.
+        Never waits for a lookup."""
         now = self._clock()
-        queued = 0
+        new: list[NewCoverJob] = []
         for index in in_priority_order(stored.profile):
             book = stored.profile.books[index]
             if index in stored.covers or not await _needs_lookup(self._cache, book, now):
                 continue
-            self._seq += 1
-            self._ensure_worker().put_nowait(
-                _Item(SHELF_PRIORITY[book.status], self._seq, stored.id, index, book)
-            )
-            queued += 1
-        self._pending[stored.id] += queued
-        return queued
+            new.append(NewCoverJob(book_index=index, priority=SHELF_PRIORITY[book.status]))
+        added = await self._jobs.enqueue(stored.id, new, now) if new else 0
+        if added:
+            self._wake.set()
+        return added
 
-    def pending(self, profile_id: str) -> int:
-        """Lookups still waiting for this profile; 0 when its covers are done."""
-        return self._pending[profile_id]
+    async def pending(self, profile_id: str) -> int:
+        """Lookups left for this profile, from the store; 0 when its covers are done."""
+        return await self._jobs.pending(profile_id, self._clock())
 
-    async def join(self) -> None:
-        """Wait until every queued lookup is done (tests and shutdown)."""
-        if self._queue is not None:
-            await self._queue.join()
+    def start(self) -> None:
+        """Run the worker in the background: it resumes jobs left from before a restart."""
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.get_running_loop().create_task(self._run())
 
     async def aclose(self) -> None:
+        """Stop the worker. A job it was working on keeps its lease and is claimed again
+        when the lease expires."""
         if self._worker is not None:
             self._worker.cancel()
             await asyncio.gather(self._worker, return_exceptions=True)
             self._worker = None
 
-    def _ensure_worker(self) -> asyncio.PriorityQueue[_Item]:
-        if self._queue is None:
-            self._queue = asyncio.PriorityQueue()
-        if self._worker is None or self._worker.done():
-            self._worker = asyncio.get_running_loop().create_task(self._run())
-        return self._queue
+    async def run_until_idle(self) -> int:
+        """Work through every job due now (tests, and the worker's inner loop). Returns how
+        many jobs were handled."""
+        handled = 0
+        while await self.work_once():
+            handled += 1
+        return handled
+
+    async def work_once(self) -> bool:
+        """Claim and handle one due job; False when none is due."""
+        job = await self._jobs.claim(self._clock(), LEASE)
+        if job is None:
+            return False
+        try:
+            await self._handle(job)
+        except CoverLookupError as e:
+            await self._retry_or_give_up(job, f"{e}")  # a CoverLookupError has no user data
+        except Exception as e:  # one bad job must never stop the worker
+            logger.error(
+                "cover job failed unexpectedly (profile %s, book %d): %s\n%s",
+                ref(job.profile_id), job.book_index, type(e).__name__, frames(e),
+            )  # fmt: skip
+            await self._retry_or_give_up(job, type(e).__name__)
+        return True
 
     async def _run(self) -> None:
-        assert self._queue is not None
         while True:
-            item = await self._queue.get()
-            try:
-                await self._process(item)
-            except Exception as e:  # one bad book must never stop the worker
-                logger.error(
-                    "cover lookup failed unexpectedly (profile %s, book %d): %s\n%s",
-                    ref(item.profile_id), item.index, type(e).__name__, frames(e),
-                )  # fmt: skip
-            finally:
-                self._pending[item.profile_id] -= 1
-                if self._pending[item.profile_id] <= 0:
-                    del self._pending[item.profile_id]
-                self._queue.task_done()
+            await self.run_until_idle()
+            self._wake.clear()
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(self._idle_poll_s):
+                    await self._wake.wait()
 
-    async def _process(self, item: _Item) -> None:
-        if await self._store.get(item.profile_id, self._clock()) is None:
-            return  # deleted or expired while waiting: don't spend a request
-        url = await cached_url(self._cache, item.book, self._clock())  # another profile found it
-        if url is None and await _needs_lookup(self._cache, item.book, self._clock()):
-            try:
-                url = await _look_up(self._finder, self._cache, self._pacer, item.book, self._clock)
-            except CoverLookupError as e:
-                logger.warning(
-                    "cover lookup failed (profile %s, book %d): %s",
-                    ref(item.profile_id), item.index, e,  # a CoverLookupError has no user data
-                )  # fmt: skip
-                return
+    async def _handle(self, job: CoverJob) -> None:
+        stored = await self._store.get(job.profile_id, self._clock())
+        if stored is None or job.book_index >= len(stored.profile.books):
+            await self._jobs.complete(job.id)  # deleted or expired: don't spend a request
+            return
+        book = stored.profile.books[job.book_index]
+        url = await cached_url(self._cache, book, self._clock())  # another profile found it
+        if url is None and await _needs_lookup(self._cache, book, self._clock()):
+            url = await _look_up(self._finder, self._cache, self._pacer, book, self._clock)
         if url is not None:  # one row, not the whole profile; a deleted one stays deleted
-            await self._store.add_cover(item.profile_id, item.index, url)
+            await self._store.add_cover(job.profile_id, job.book_index, url)
+        await self._jobs.complete(job.id)
+
+    async def _retry_or_give_up(self, job: CoverJob, reason: str) -> None:
+        retry_at = self._clock() + retry_delay(job.attempts)
+        retrying = await self._jobs.fail(job.id, retry_at, MAX_ATTEMPTS)
+        logger.warning(
+            "cover lookup failed (profile %s, book %d, attempt %d): %s; %s",
+            ref(job.profile_id), job.book_index, job.attempts, reason,
+            "will retry" if retrying else "giving up",
+        )  # fmt: skip
 
 
 @dataclass

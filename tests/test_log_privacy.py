@@ -53,13 +53,13 @@ async def test_an_upload_and_its_cover_lookups_log_no_library_content(
         created = await c.post("/profiles/goodreads", files={"file": ("x.csv", secret_csv())})
         profile_id = created.json()["id"]
         await c.get(f"/profiles/{profile_id}/books")
-        await api.covers.join()
+        await api.covers.run_until_idle()
         await api.covers.aclose()
 
     assert created.status_code == 201
     assert "Skipping row" in caplog.text  # the parser's warnings were captured
     assert "cover lookup failed (profile" in caplog.text  # the expected failure
-    assert "cover lookup failed unexpectedly" in caplog.text  # and the bug
+    assert "cover job failed unexpectedly" in caplog.text  # and the bug
     assert log_privacy.ref(profile_id) in caplog.text  # ids appear only as hashes
     assert_private(caplog, profile_id)
 

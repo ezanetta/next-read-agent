@@ -34,7 +34,7 @@ def services(
     if covers is not None:
         time = covers.time or FakeTime()
         pacer = Pacer(sleep=time.sleep, monotonic=time.monotonic)
-        queue = CoverQueue(covers, store, store, pacer=pacer, clock=lambda: NOW)
+        queue = CoverQueue(covers, store, store, store, pacer=pacer, clock=lambda: NOW)
     return ApiServices(
         profiles=store,
         search_cache=SearchCacheView(store),

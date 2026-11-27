@@ -129,7 +129,7 @@ async def test_an_upload_returns_at_once_and_its_covers_arrive_by_cover_id() -> 
         profile_id = created.json()["id"]
         first = (await c.get(f"/profiles/{profile_id}/books")).json()
         gate.set()
-        await api.covers.join()
+        await api.covers.run_until_idle()
         done = (await c.get(f"/profiles/{profile_id}/books")).json()
         await api.covers.aclose()
 
