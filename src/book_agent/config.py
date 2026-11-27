@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     gemini_thinking_level: GeminiThinkingLevel | None = None  # None = the model's default
     # Library retrieval (D-041). Changing it re-embeds the library on the next index build.
     gemini_embedding_model: str = "gemini-embedding-2"
+    # Deadlines (R-003): one LLM request (generation or embedding), and one whole
+    # recommendation in the demo API. A run makes up to about 10 requests.
+    llm_timeout_s: float = Field(default=60.0, gt=0, le=600)
+    run_deadline_s: float = Field(default=180.0, gt=0, le=1800)
     anthropic_api_key: SecretStr | None = None
     google_books_api_key: SecretStr | None = None
     # Contact details for Open Library's User-Agent (an email or a project URL). Never

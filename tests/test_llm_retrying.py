@@ -13,6 +13,7 @@ from book_agent.llm.base import (
 )
 from book_agent.llm.gemini import GeminiClient
 from book_agent.llm.retrying import RETRY_DELAY_S, RetryingLLM
+from book_agent.llm.timeouts import TimeoutLLM
 from book_agent.wiring import build_llm, build_provider
 from tests.fakes import FakeLLM, text_response
 
@@ -94,5 +95,7 @@ async def test_other_failures_are_not_retried(failure: Exception) -> None:
 
 def test_wiring_wraps_the_bare_provider_for_every_caller() -> None:
     settings = Settings(gemini_api_key=SecretStr("test-key"))
-    assert isinstance(build_provider(settings), GeminiClient)
+    provider = build_provider(settings)
+    assert isinstance(provider, TimeoutLLM)  # every request has a deadline (R-003)
+    assert isinstance(provider._inner, GeminiClient)  # pyright: ignore[reportPrivateUsage]
     assert isinstance(build_llm(settings), RetryingLLM)

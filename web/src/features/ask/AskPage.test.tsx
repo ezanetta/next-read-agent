@@ -2,6 +2,7 @@ import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { json, MANUAL, mockApi, RESULT, renderApp, sse } from "../../test/api";
+import { CLIENT_TIMEOUT_MS } from "./useRecommendationStream";
 
 const START = { type: "started", run_id: "run-1", prompt_id: "agent_v3" };
 const INTERPRETED = {
@@ -137,5 +138,59 @@ describe("asking, with live progress", () => {
     expect(signal?.aborted).toBe(false);
     await router.navigate("/");
     await waitFor(() => expect(signal?.aborted).toBe(true));
+  });
+
+  it("turns a stream that ends without a final event into a failure with a retry", async () => {
+    const requests = mockApi({
+      "GET /profiles/p": () => json(MANUAL),
+      "POST /recommendations": () => sse([START, INTERPRETED]), // the server went away
+    });
+    const user = userEvent.setup();
+    renderApp("/p/p/ask");
+    await user.click(await screen.findByRole("button", { name: "Recommend" }));
+    expect(
+      await screen.findByRole("heading", { name: "The connection was lost" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("The agent is working")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(requests.filter((r) => r.method === "POST")).toHaveLength(2));
+  });
+
+  it("stops waiting after the client timeout and offers a retry", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let signal: AbortSignal | undefined;
+      mockApi({ "GET /profiles/p": () => json(MANUAL) });
+      const original = globalThis.fetch;
+      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/recommendations")) {
+          signal = init?.signal ?? undefined;
+          const body = new ReadableStream({
+            start(controller) {
+              // Started, then silence: no final event, and the stream never closes.
+              controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(START)}\n\n`));
+            },
+          });
+          return Promise.resolve(
+            new Response(body, { headers: { "Content-Type": "text/event-stream" } }),
+          );
+        }
+        return original(input, init);
+      });
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      renderApp("/p/p/ask");
+      await user.click(await screen.findByRole("button", { name: "Recommend" }));
+      await waitFor(() => expect(signal).toBeDefined());
+
+      await vi.advanceTimersByTimeAsync(CLIENT_TIMEOUT_MS);
+      expect(
+        await screen.findByRole("heading", { name: "This is taking too long" }),
+      ).toBeInTheDocument();
+      expect(signal?.aborted).toBe(true); // the server cancels the run
+      expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

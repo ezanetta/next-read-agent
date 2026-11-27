@@ -7,7 +7,9 @@ import type {
 } from "../../api/client";
 
 type SearchStep = Schemas["SearchStep"];
-export type FailureKind = Schemas["FailedEvent"]["kind"];
+/** The server's failure kinds, plus two the client detects itself (R-004): the stream
+ * ended without a final event, or no final event came within the client's timeout. */
+export type FailureKind = Schemas["FailedEvent"]["kind"] | "connection" | "timeout";
 
 export type Submission = { titles: string[]; problems: ProblemView[] | null };
 

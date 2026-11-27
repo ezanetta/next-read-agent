@@ -110,6 +110,16 @@
               }
             }
           },
+          "413": {
+            "description": "The request body is over its size limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -154,6 +164,16 @@
           },
           "400": {
             "description": "The profile can't be made from this",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request body is over its size limit",
             "content": {
               "application/json": {
                 "schema": {
@@ -420,6 +440,16 @@
               }
             }
           },
+          "413": {
+            "description": "The request body is over 64 KB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -471,7 +501,8 @@
               "not_found",
               "preset",
               "search_unavailable",
-              "invalid_query"
+              "invalid_query",
+              "too_large"
             ],
             "title": "Error"
           },

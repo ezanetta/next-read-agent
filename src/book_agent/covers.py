@@ -32,6 +32,7 @@ from book_agent.domain.covers import (
 from book_agent.domain.matching import same_work, titles_match
 from book_agent.domain.models import Book, CatalogBook, Profile
 from book_agent.domain.profiles import StoredProfile
+from book_agent.log_privacy import frames, ref
 from book_agent.ports import (
     BookSearch,
     BookSearchError,
@@ -223,8 +224,11 @@ class CoverQueue:
             item = await self._queue.get()
             try:
                 await self._process(item)
-            except Exception:  # one bad book must never stop the worker
-                logger.exception("cover lookup for %r failed", item.book.title)
+            except Exception as e:  # one bad book must never stop the worker
+                logger.error(
+                    "cover lookup failed unexpectedly (profile %s, book %d): %s\n%s",
+                    ref(item.profile_id), item.index, type(e).__name__, frames(e),
+                )  # fmt: skip
             finally:
                 self._pending[item.profile_id] -= 1
                 if self._pending[item.profile_id] <= 0:
@@ -239,7 +243,10 @@ class CoverQueue:
             try:
                 url = await _look_up(self._finder, self._cache, self._pacer, item.book, self._clock)
             except CoverLookupError as e:
-                logger.warning("cover lookup for %r failed: %s", item.book.title, e)
+                logger.warning(
+                    "cover lookup failed (profile %s, book %d): %s",
+                    ref(item.profile_id), item.index, e,  # a CoverLookupError has no user data
+                )  # fmt: skip
                 return
         if url is None:
             return

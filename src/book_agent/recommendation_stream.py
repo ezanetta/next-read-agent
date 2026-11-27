@@ -8,6 +8,7 @@ Closing the generator early (the client went away) cancels the run.
 
 import asyncio
 import contextlib
+import logging
 import re
 import secrets
 from collections.abc import AsyncGenerator, Collection
@@ -37,9 +38,12 @@ from book_agent.domain.recommendations import (
 )
 from book_agent.domain.requests import FilterName
 from book_agent.llm.base import LLMClient
+from book_agent.log_privacy import frames, ref
 from book_agent.ports import BookSearch, WorkResolver
 from book_agent.prompts.agent_prompt import AgentPrompt
 from book_agent.tools import SEARCH_BOOKS
+
+logger = logging.getLogger(__name__)
 
 MAX_REQUEST_CHARS = 500
 Shelf = Literal["read", "to_read", "currently_reading"]
@@ -179,6 +183,14 @@ RecommendationEvent = Annotated[
 # --- The stream ---------------------------------------------------------------------------
 
 
+RESTARTING = "the server is restarting: try again in a moment"
+# What the stream waits on: the next event, the run, or the stop signal.
+_Waited = (
+    asyncio.Future[RecommendationEvent] | asyncio.Future[AgentRun] | asyncio.Future[Literal[True]]
+)
+UNEXPECTED = "something went wrong on our side: try again"
+
+
 async def recommendation_events(
     stored: StoredProfile,
     request: str | None,
@@ -189,8 +201,14 @@ async def recommendation_events(
     works: WorkResolver | None,
     prompt: AgentPrompt,
     ignore_filters: Collection[FilterName] = (),
+    deadline_s: float | None = None,
+    stop: asyncio.Event | None = None,
 ) -> AsyncGenerator[RecommendationEvent]:
-    """Yield the run's events as they happen, ending with `done` or `failed`.
+    """Yield the run's events as they happen, ending with exactly one terminal event,
+    `done` or `failed`, whatever happens (R-004): the run finishes or fails, passes
+    `deadline_s` (R-003), raises something unexpected, is cancelled, or `stop` is set
+    (the server is shutting down). The one case without a terminal event is the consumer
+    leaving: closing the generator cancels the run and there's no one to tell.
     `ignore_filters` drops interpreted filters the user removed (a rerun, D-045)."""
     queue: asyncio.Queue[RecommendationEvent] = asyncio.Queue()
 
@@ -213,24 +231,64 @@ async def recommendation_events(
             ignore_filters=ignore_filters,
         )
     )
+    stopping = asyncio.ensure_future(stop.wait()) if stop is not None else None
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + deadline_s if deadline_s is not None else None
     try:
-        while True:
+        terminal: RecommendationEvent | None = None
+        while terminal is None:
             getter = asyncio.ensure_future(queue.get())
-            done, _ = await asyncio.wait({getter, task}, return_when=asyncio.FIRST_COMPLETED)
+            waiting: set[_Waited] = {getter, task}
+            if stopping is not None:
+                waiting.add(stopping)
+            timeout = max(0.0, deadline - loop.time()) if deadline is not None else None
+            done, _ = await asyncio.wait(
+                waiting, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
             if getter in done:
                 yield getter.result()
                 continue
             getter.cancel()
-            break
-        while not queue.empty():
-            yield queue.get_nowait()
-        run = task.result()
-        yield final_event(stored, run, perf_counter() - started)
+            if task in done:
+                while not queue.empty():  # events sent just before the run ended
+                    yield queue.get_nowait()
+                terminal = outcome(stored, task, perf_counter() - started)
+            elif stopping is not None and stopping in done:
+                terminal = FailedEvent(kind="unavailable", message=RESTARTING)
+            else:
+                message = f"the recommendation took longer than {deadline_s:g} s"
+                terminal = FailedEvent(kind="unavailable", message=message)
+            if not task.done():  # stop spending quota before saying so
+                await _cancel(task)
+        yield terminal
     finally:
+        if stopping is not None:
+            stopping.cancel()
         if not task.done():  # the consumer left early: stop spending quota
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            await _cancel(task)
+
+
+async def _cancel(task: asyncio.Task[AgentRun]) -> None:
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError, Exception):
+        await task
+
+
+def outcome(
+    stored: StoredProfile, task: asyncio.Task[AgentRun], duration_s: float
+) -> RecommendationEvent:
+    """The terminal event of a finished run task, never raising: a cancelled task or an
+    unexpected exception (in the run or in building the result) becomes `failed`."""
+    if task.cancelled():
+        return FailedEvent(kind="unavailable", message="the recommendation was cancelled")
+    try:
+        return final_event(stored, task.result(), duration_s)
+    except Exception as e:
+        logger.error(
+            "recommendation run failed unexpectedly (profile %s): %s\n%s",
+            ref(stored.id), type(e).__name__, frames(e),
+        )  # fmt: skip
+        return FailedEvent(kind="agent", message=UNEXPECTED)
 
 
 def to_events(event: AgentEvent) -> list[RecommendationEvent]:

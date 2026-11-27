@@ -15,6 +15,14 @@ const COPY: Record<FailureKind, { title: string; body: string }> = {
     body: "The agent ran out of turns before three picks passed the checks. Try again, or loosen the request.",
   },
   demo_limit: { title: "Demo limit reached", body: "Today's recommendations are taken." },
+  connection: {
+    title: "The connection was lost",
+    body: "The connection to the agent closed before it finished, maybe because the server restarted. Try again.",
+  },
+  timeout: {
+    title: "This is taking too long",
+    body: "The agent didn't finish in time, so we stopped waiting. Try again in a minute.",
+  },
 };
 
 export function FailurePanel({

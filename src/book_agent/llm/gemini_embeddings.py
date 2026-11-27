@@ -33,11 +33,13 @@ class GeminiEmbedder:
         dimensions: int = DEFAULT_DIMENSIONS,
         batch_size: int = DEFAULT_BATCH_SIZE,
         min_interval_s: float = 0.0,
+        timeout_s: float | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         """`min_interval_s` spaces requests out, to stay under a tokens-per-minute limit
-        when embedding many texts (the library index); queries need none."""
+        when embedding many texts (the library index); queries need none. `timeout_s`
+        fails a request that takes longer with LLMNetworkError (R-003)."""
         if batch_size < 1:
             raise ValueError("batch_size must be at least 1")
         self._client = client
@@ -45,6 +47,7 @@ class GeminiEmbedder:
         self._dimensions = dimensions
         self._batch_size = batch_size
         self._min_interval_s = min_interval_s
+        self._timeout_s = timeout_s
         self._sleep = sleep
         self._clock = clock
         self._last_request: float | None = None
@@ -65,12 +68,17 @@ class GeminiEmbedder:
             await self._wait_turn()
             self.requests += 1
             try:
-                # The SDK's `contents` union mentions types from optional deps (e.g. PIL).
-                response = await self._client.aio.models.embed_content(  # pyright: ignore[reportUnknownMemberType]
-                    model=self._model,
-                    contents=to_embed_contents(batch),
-                    config=types.EmbedContentConfig(output_dimensionality=self._dimensions),
-                )
+                async with asyncio.timeout(self._timeout_s):
+                    # The SDK's `contents` union mentions types from optional deps (PIL).
+                    response = await self._client.aio.models.embed_content(  # pyright: ignore[reportUnknownMemberType]
+                        model=self._model,
+                        contents=to_embed_contents(batch),
+                        config=types.EmbedContentConfig(output_dimensionality=self._dimensions),
+                    )
+            except TimeoutError as e:
+                raise LLMNetworkError(
+                    f"Gemini embedding timed out after {self._timeout_s:g} s"
+                ) from e
             except errors.APIError as e:
                 raise to_llm_error(e) from e
             except httpx2.TransportError as e:

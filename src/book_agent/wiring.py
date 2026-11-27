@@ -28,6 +28,7 @@ from book_agent.llm.base import LLMClient
 from book_agent.llm.gemini import GeminiClient
 from book_agent.llm.gemini_embeddings import GeminiEmbedder
 from book_agent.llm.retrying import RetryingLLM
+from book_agent.llm.timeouts import TimeoutLLM
 from book_agent.ports import BookSearch, WorkDescriptions, WorkResolver
 from book_agent.work_keys import (
     DEFAULT_CACHE_PATH,
@@ -54,12 +55,14 @@ def with_retries(llm: LLMClient) -> LLMClient:
 
 
 def build_provider(settings: Settings) -> LLMClient:
-    """The bare adapter selected by LLM_PROVIDER, with no retries (D-027)."""
+    """The adapter selected by LLM_PROVIDER, with no retries (D-027) but with a timeout on
+    every request (R-003): callers add retries and pacing around it."""
     if settings.llm_provider == "gemini":
         client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
-        return GeminiClient(
+        gemini = GeminiClient(
             client, model=settings.gemini_model, thinking_level=settings.gemini_thinking_level
         )
+        return TimeoutLLM(gemini, timeout_s=settings.llm_timeout_s)
     raise ValueError(f"LLM_PROVIDER={settings.llm_provider!r} is not implemented yet")
 
 
@@ -140,7 +143,10 @@ def build_embedder(settings: Settings, *, min_interval_s: float = 0.0) -> Gemini
     """The embedder for library retrieval (D-041). Gemini only, whatever LLM_PROVIDER says."""
     client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
     return GeminiEmbedder(
-        client, model=settings.gemini_embedding_model, min_interval_s=min_interval_s
+        client,
+        model=settings.gemini_embedding_model,
+        min_interval_s=min_interval_s,
+        timeout_s=settings.llm_timeout_s,
     )
 
 
@@ -208,6 +214,7 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
                 covers=covers,
                 presets=presets,
                 profile_ttl=timedelta(days=settings.profile_ttl_days),
+                run_deadline_s=settings.run_deadline_s,
             )
         finally:
             if covers is not None:  # stop the worker before its store closes

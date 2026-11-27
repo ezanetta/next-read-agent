@@ -47,6 +47,7 @@ class RecommendationRequest(BaseModel):
             },
         },
         404: {"model": ErrorBody, "description": "No such profile, or it expired"},
+        413: {"model": ErrorBody, "description": "The request body is over 64 KB"},
     },
 )
 async def stream_recommendation(
@@ -65,6 +66,8 @@ async def stream_recommendation(
         works=services.works,
         prompt=services.prompt,
         ignore_filters=body.ignore_filters,
+        deadline_s=services.run_deadline_s,
+        stop=services.draining,
     )
     return StreamingResponse(
         sse(events),

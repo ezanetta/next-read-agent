@@ -179,7 +179,13 @@ export interface components {
        * Error
        * @enum {string}
        */
-      error: "invalid_profile" | "not_found" | "preset" | "search_unavailable" | "invalid_query";
+      error:
+        | "invalid_profile"
+        | "not_found"
+        | "preset"
+        | "search_unavailable"
+        | "invalid_query"
+        | "too_large";
       /** Message */
       message: string;
     };
@@ -657,6 +663,15 @@ export interface operations {
           "application/json": components["schemas"]["ErrorBody"];
         };
       };
+      /** @description The request body is over its size limit */
+      413: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
       /** @description Validation Error */
       422: {
         headers: {
@@ -692,6 +707,15 @@ export interface operations {
       };
       /** @description The profile can't be made from this */
       400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The request body is over its size limit */
+      413: {
         headers: {
           [name: string]: unknown;
         };
@@ -883,6 +907,15 @@ export interface operations {
       };
       /** @description No such profile, or it expired */
       404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ErrorBody"];
+        };
+      };
+      /** @description The request body is over 64 KB */
+      413: {
         headers: {
           [name: string]: unknown;
         };
