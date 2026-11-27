@@ -12,13 +12,18 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 
+from book_agent.api.body_limit import BodySizeLimit
 from book_agent.api.routes import books, profiles, recommendations
 from book_agent.api.services import ApiServices
 from book_agent.api.shutdown import drain_on_signals
-from book_agent.demo_profiles import ProfileError
+from book_agent.demo_profiles import CSV_MAX_BYTES, ProfileError
 from book_agent.recommendation_stream import RecommendationEvent
 
 ServicesFactory = Callable[[], AbstractAsyncContextManager[ApiServices]]
+# The upload's limit is the CSV's plus room for the multipart framing; every other body
+# gets BodySizeLimit's default, the 64 KB JSON limit (R-005, D-043).
+MULTIPART_OVERHEAD = 16 * 1024
+BODY_LIMITS = {"/profiles/goodreads": CSV_MAX_BYTES + MULTIPART_OVERHEAD}
 
 
 def create_app(
@@ -51,6 +56,8 @@ def create_app(
     )
     if services is not None:
         app.state.services = services
+    # Before CORS, so CORS stays outermost and a 413 still carries its headers.
+    app.add_middleware(BodySizeLimit, limits=BODY_LIMITS)
     if cors_origins:
         app.add_middleware(
             CORSMiddleware,

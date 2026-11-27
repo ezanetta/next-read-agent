@@ -28,7 +28,8 @@ router = APIRouter(prefix="/profiles", tags=["profiles"])
 Responses = dict[int | str, dict[str, Any]]
 NOT_FOUND: Responses = {404: {"model": ErrorBody, "description": "No such profile, or it expired"}}
 INVALID: Responses = {
-    400: {"model": ErrorBody, "description": "The profile can't be made from this"}
+    400: {"model": ErrorBody, "description": "The profile can't be made from this"},
+    413: {"model": ErrorBody, "description": "The request body is over its size limit"},
 }
 
 

@@ -19,7 +19,10 @@ Shelf = Literal["read", "to_read", "currently_reading"]
 class ErrorBody(BaseModel):
     """Every error the API returns on purpose."""
 
-    error: Literal["invalid_profile", "not_found", "preset", "search_unavailable", "invalid_query"]
+    error: Literal[
+        "invalid_profile", "not_found", "preset", "search_unavailable", "invalid_query",
+        "too_large",
+    ]  # fmt: skip
     message: str
 
 
