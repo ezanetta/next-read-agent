@@ -96,7 +96,7 @@ def goodreads_profile(content: bytes) -> Profile:
     return profile
 
 
-def store_temporary(
+async def store_temporary(
     store: ProfileStore,
     source: ProfileSource,
     profile: Profile,
@@ -113,7 +113,7 @@ def store_temporary(
         created_at=now,
         expires_at=now + ttl,
     )
-    store.save(stored)
+    await store.save(stored)
     return stored
 
 
@@ -159,10 +159,10 @@ def load_presets(
     return presets
 
 
-def find_profile(
+async def find_profile(
     profile_id: str, presets: dict[str, StoredProfile], store: ProfileStore, now: datetime
 ) -> StoredProfile | None:
-    return presets.get(profile_id) or store.get(profile_id, now)
+    return presets.get(profile_id) or await store.get(profile_id, now)
 
 
 def cover_url(stored: StoredProfile, index: int) -> str | None:

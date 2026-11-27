@@ -30,7 +30,7 @@ async def test_an_upload_declared_over_the_limit_is_rejected_before_it_is_read()
     }
     store = api.profiles
     assert isinstance(store, SqliteStore)
-    assert store.purge_expired(NOW.replace(year=2100)) == 0  # no profile was created
+    assert await store.purge_expired(NOW.replace(year=2100)) == 0  # no profile was created
 
 
 async def test_a_chunked_upload_stops_being_read_once_it_passes_the_limit() -> None:

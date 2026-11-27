@@ -29,9 +29,9 @@ async def search_books_cached(
     key = normalize_query(query)
     if not MIN_QUERY <= len(key) <= MAX_QUERY:
         raise ValueError(f"the query must be {MIN_QUERY} to {MAX_QUERY} characters")
-    cached = cache.get(key, now, CACHE_MAX_AGE)
+    cached = await cache.get(key, now, CACHE_MAX_AGE)
     if cached is not None:
         return cached, True
     books = await search.search(key, max_results=SEARCH_RESULTS)
-    cache.put(key, books, now)
+    await cache.put(key, books, now)
     return books, False

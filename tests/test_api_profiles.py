@@ -120,7 +120,7 @@ async def test_an_upload_returns_at_once_and_its_covers_arrive_by_cover_id() -> 
     # Another profile already resolved Book 2: it's known before any request.
     store = api.profiles
     assert isinstance(store, SqliteStore)
-    store.put_cover(
+    await store.put_cover(
         cover_key(Book(title="Book 2", author="Author 2", status=ReadingStatus.READ)),
         CachedCover(cover_id_url(200), NOW),
     )

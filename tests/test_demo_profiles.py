@@ -79,16 +79,16 @@ def test_uploads_have_a_row_limit_and_need_read_books() -> None:
         goodreads_profile(upload(4))
 
 
-def test_temporary_profiles_get_a_random_id_and_expire() -> None:
+async def test_temporary_profiles_get_a_random_id_and_expire() -> None:
     store = SqliteStore(":memory:")
-    stored = store_temporary(store, "manual", PROFILE, NOW, covers={1: "c"})
+    stored = await store_temporary(store, "manual", PROFILE, NOW, covers={1: "c"})
     assert len(stored.id) >= 22 and stored.id != new_profile_id()
     assert stored.expires_at == NOW + DEFAULT_TTL
-    assert find_profile(stored.id, {}, store, NOW + timedelta(days=1)) == stored
-    assert find_profile(stored.id, {}, store, NOW + timedelta(days=4)) is None
+    assert await find_profile(stored.id, {}, store, NOW + timedelta(days=1)) == stored
+    assert await find_profile(stored.id, {}, store, NOW + timedelta(days=4)) is None
 
 
-def test_presets_load_samples_and_the_owner(tmp_path: Path) -> None:
+async def test_presets_load_samples_and_the_owner(tmp_path: Path) -> None:
     samples = tmp_path / "profiles"
     samples.mkdir()
     (samples / "sample-classics.json").write_text(
@@ -102,7 +102,7 @@ def test_presets_load_samples_and_the_owner(tmp_path: Path) -> None:
     assert presets["owner"].covers == {1: "https://covers.openlibrary.org/b/id/7-M.jpg"}
     assert load_presets(tmp_path / "none", None, NOW) == {}
     store = SqliteStore(":memory:")
-    assert find_profile("owner", presets, store, NOW) == presets["owner"]
+    assert await find_profile("owner", presets, store, NOW) == presets["owner"]
 
 
 def test_owner_files_in_the_old_plain_profile_format_ask_for_a_new_export(
@@ -114,10 +114,10 @@ def test_owner_files_in_the_old_plain_profile_format_ask_for_a_new_export(
         load_presets(tmp_path / "none", owner, NOW)
 
 
-def test_covers_are_only_known_ones_never_by_isbn() -> None:
+async def test_covers_are_only_known_ones_never_by_isbn() -> None:
     # Pick 0 has an ISBN: no ISBN cover URL, Open Library rate-limits those (F-023).
     profile, covers = manual_profile([pick(i) for i in range(5)])
-    stored = store_temporary(
+    stored = await store_temporary(
         SqliteStore(":memory:"), "manual", profile, NOW, covers={2: "https://c/2"}
     )
     assert cover_url(stored, 2) == "https://c/2"

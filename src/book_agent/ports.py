@@ -110,19 +110,19 @@ class LibraryRetriever(Protocol):
 
 
 class ProfileStore(Protocol):
-    """Keeps the demo's temporary profiles (D-043). Fast local storage: calls are sync."""
+    """Keeps the demo's temporary profiles (D-043). Async: Postgres is a network call (D-048)."""
 
-    def save(self, stored: StoredProfile) -> None: ...
+    async def save(self, stored: StoredProfile) -> None: ...
 
-    def get(self, profile_id: str, now: datetime) -> StoredProfile | None:
+    async def get(self, profile_id: str, now: datetime) -> StoredProfile | None:
         """The profile, or None when it doesn't exist or has expired (then it's deleted)."""
         ...
 
-    def delete(self, profile_id: str) -> bool:
+    async def delete(self, profile_id: str) -> bool:
         """Delete now; False when there was nothing to delete."""
         ...
 
-    def purge_expired(self, now: datetime) -> int:
+    async def purge_expired(self, now: datetime) -> int:
         """Delete every expired profile; returns how many."""
         ...
 
@@ -130,11 +130,11 @@ class ProfileStore(Protocol):
 class SearchCache(Protocol):
     """Book search results by normalized query, so repeated searches cost no quota."""
 
-    def get(self, query: str, now: datetime, max_age: timedelta) -> list[CatalogBook] | None:
+    async def get(self, query: str, now: datetime, max_age: timedelta) -> list[CatalogBook] | None:
         """Cached results younger than `max_age`, or None."""
         ...
 
-    def put(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None: ...
+    async def put(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None: ...
 
 
 class CoverLookupError(Exception):
@@ -159,6 +159,6 @@ class CoverFinder(Protocol):
 class CoverCache(Protocol):
     """Cover lookups by cover_key, shared by every profile and the owner export."""
 
-    def get_cover(self, key: str) -> CachedCover | None: ...
+    async def get_cover(self, key: str) -> CachedCover | None: ...
 
-    def put_cover(self, key: str, cover: CachedCover) -> None: ...
+    async def put_cover(self, key: str, cover: CachedCover) -> None: ...

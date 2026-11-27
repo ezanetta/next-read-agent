@@ -18,46 +18,48 @@ def stored(profile_id: str, expires_at: datetime | None) -> StoredProfile:
                          created_at=NOW, expires_at=expires_at)  # fmt: skip
 
 
-def test_profiles_round_trip_and_expire(tmp_path: Path) -> None:
+async def test_profiles_round_trip_and_expire(tmp_path: Path) -> None:
     store = SqliteStore(tmp_path / "demo" / "demo.sqlite3")
     _: ProfileStore = store  # pyright checks the Protocols here
     __: CoverCache = store
-    store.save(stored("live", NOW + timedelta(days=3)))
-    store.save(stored("old", NOW + timedelta(hours=1)))
-    assert store.get("live", NOW) == stored("live", NOW + timedelta(days=3))
-    assert store.get("old", NOW + timedelta(hours=2)) is None  # expired: gone
-    assert store.get("old", NOW) is None
-    assert store.get("missing", NOW) is None
+    await store.save(stored("live", NOW + timedelta(days=3)))
+    await store.save(stored("old", NOW + timedelta(hours=1)))
+    assert await store.get("live", NOW) == stored("live", NOW + timedelta(days=3))
+    assert await store.get("old", NOW + timedelta(hours=2)) is None  # expired: gone
+    assert await store.get("old", NOW) is None
+    assert await store.get("missing", NOW) is None
 
 
-def test_purge_and_delete() -> None:
+async def test_purge_and_delete() -> None:
     store = SqliteStore(":memory:")
-    store.save(stored("a", NOW + timedelta(days=1)))
-    store.save(stored("b", NOW - timedelta(seconds=1)))
-    store.save(stored("preset", None))
-    assert store.purge_expired(NOW) == 1
-    assert store.delete("a") and not store.delete("a")
-    assert store.get("preset", NOW + timedelta(days=999)) is not None
+    await store.save(stored("a", NOW + timedelta(days=1)))
+    await store.save(stored("b", NOW - timedelta(seconds=1)))
+    await store.save(stored("preset", None))
+    assert await store.purge_expired(NOW) == 1
+    assert await store.delete("a") and not await store.delete("a")
+    assert await store.get("preset", NOW + timedelta(days=999)) is not None
 
 
-def test_search_cache_respects_max_age() -> None:
+async def test_search_cache_respects_max_age() -> None:
     cache = SqliteSearchCache(SqliteStore(":memory:"))
     _: SearchCache = cache
     book = CatalogBook(source_id="x", title="Dune", authors=("Frank Herbert",),
                        link=HttpUrl("https://example.com"))  # fmt: skip
-    cache.put("dune", [book], NOW)
-    assert cache.get("dune", NOW + timedelta(days=6), timedelta(days=7)) == [book]
-    assert cache.get("dune", NOW + timedelta(days=8), timedelta(days=7)) is None
-    assert cache.get("other", NOW, timedelta(days=7)) is None
+    await cache.put("dune", [book], NOW)
+    assert await cache.get("dune", NOW + timedelta(days=6), timedelta(days=7)) == [book]
+    assert await cache.get("dune", NOW + timedelta(days=8), timedelta(days=7)) is None
+    assert await cache.get("other", NOW, timedelta(days=7)) is None
 
 
-def test_cover_lookups_are_cached_with_their_time_and_survive_reopening(tmp_path: Path) -> None:
+async def test_cover_lookups_are_cached_with_their_time_and_survive_reopening(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "demo.sqlite3"
     store = SqliteStore(path)
-    assert store.get_cover("dune|frank herbert") is None
-    store.put_cover("dune|frank herbert", CachedCover("https://c/42", NOW))
-    store.put_cover("lost|someone", CachedCover(None, NOW))
+    assert await store.get_cover("dune|frank herbert") is None
+    await store.put_cover("dune|frank herbert", CachedCover("https://c/42", NOW))
+    await store.put_cover("lost|someone", CachedCover(None, NOW))
     store.close()
     reopened = SqliteStore(path)
-    assert reopened.get_cover("dune|frank herbert") == CachedCover("https://c/42", NOW)
-    assert reopened.get_cover("lost|someone") == CachedCover(None, NOW)
+    assert await reopened.get_cover("dune|frank herbert") == CachedCover("https://c/42", NOW)
+    assert await reopened.get_cover("lost|someone") == CachedCover(None, NOW)

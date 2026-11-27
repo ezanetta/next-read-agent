@@ -1,8 +1,9 @@
 """SQLite storage for the demo: ProfileStore, SearchCache and CoverCache in one file (D-043).
 
-stdlib sqlite3, one connection, one table per port. Needs a persistent disk and a single
-instance; other hosting gets another implementation behind the same ports. Values are
-stored as the models' JSON, so the schema is a few tables and nothing to migrate.
+stdlib sqlite3, one connection, one table per port. The port methods are async (D-048)
+but call SQLite inline: it is local and fast, so there is no thread hop. Used for local
+development and tests; production uses the Postgres adapter. Values are stored as the
+models' JSON, so the schema is a few tables.
 """
 
 import sqlite3
@@ -58,7 +59,7 @@ class SqliteStore:
 
     # --- ProfileStore ---------------------------------------------------------------
 
-    def save(self, stored: StoredProfile) -> None:
+    async def save(self, stored: StoredProfile) -> None:
         expires = stored.expires_at.isoformat() if stored.expires_at else None
         with self._lock, self._db:
             self._db.execute(
@@ -66,7 +67,7 @@ class SqliteStore:
                 (stored.id, stored.model_dump_json(), expires),
             )
 
-    def get(self, profile_id: str, now: datetime) -> StoredProfile | None:
+    async def get(self, profile_id: str, now: datetime) -> StoredProfile | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT body FROM profiles WHERE id = ?", (profile_id,)
@@ -75,16 +76,16 @@ class SqliteStore:
             return None
         stored = StoredProfile.model_validate_json(row[0])
         if stored.expired(now):
-            self.delete(profile_id)
+            await self.delete(profile_id)
             return None
         return stored
 
-    def delete(self, profile_id: str) -> bool:
+    async def delete(self, profile_id: str) -> bool:
         with self._lock, self._db:
             cursor = self._db.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))
         return cursor.rowcount > 0
 
-    def purge_expired(self, now: datetime) -> int:
+    async def purge_expired(self, now: datetime) -> int:
         with self._lock, self._db:
             cursor = self._db.execute(
                 "DELETE FROM profiles WHERE expires_at IS NOT NULL AND expires_at <= ?",
@@ -94,7 +95,9 @@ class SqliteStore:
 
     # --- SearchCache ----------------------------------------------------------------
 
-    def get_search(self, query: str, now: datetime, max_age: timedelta) -> list[CatalogBook] | None:
+    async def get_search(
+        self, query: str, now: datetime, max_age: timedelta
+    ) -> list[CatalogBook] | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT body, cached_at FROM search_cache WHERE query = ?", (query,)
@@ -103,7 +106,7 @@ class SqliteStore:
             return None
         return _BOOKS.validate_json(row[0])
 
-    def put_search(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None:
+    async def put_search(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None:
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO search_cache (query, body, cached_at) VALUES (?, ?, ?)",
@@ -112,7 +115,7 @@ class SqliteStore:
 
     # --- CoverCache -----------------------------------------------------------------
 
-    def get_cover(self, key: str) -> CachedCover | None:
+    async def get_cover(self, key: str) -> CachedCover | None:
         with self._lock:
             row = self._db.execute(
                 "SELECT url, checked_at FROM cover_lookups WHERE key = ?", (key,)
@@ -121,7 +124,7 @@ class SqliteStore:
             return None
         return CachedCover(url=row[0], checked_at=datetime.fromisoformat(row[1]))
 
-    def put_cover(self, key: str, cover: CachedCover) -> None:
+    async def put_cover(self, key: str, cover: CachedCover) -> None:
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO cover_lookups (key, url, checked_at) VALUES (?, ?, ?)",
@@ -135,8 +138,8 @@ class SqliteSearchCache:
     def __init__(self, store: SqliteStore) -> None:
         self._store = store
 
-    def get(self, query: str, now: datetime, max_age: timedelta) -> list[CatalogBook] | None:
-        return self._store.get_search(query, now, max_age)
+    async def get(self, query: str, now: datetime, max_age: timedelta) -> list[CatalogBook] | None:
+        return await self._store.get_search(query, now, max_age)
 
-    def put(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None:
-        self._store.put_search(query, books, now)
+    async def put(self, query: str, books: Sequence[CatalogBook], now: datetime) -> None:
+        await self._store.put_search(query, books, now)

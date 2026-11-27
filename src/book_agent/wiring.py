@@ -190,7 +190,7 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
     """
     store = SqliteStore(settings.demo_db_path)
     now = utc_now()
-    store.purge_expired(now)
+    await store.purge_expired(now)
     presets = load_presets(SAMPLES_DIR, settings.owner_profile_path, now)
     async with AsyncExitStack() as stack:
         http = await stack.enter_async_context(httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S))
