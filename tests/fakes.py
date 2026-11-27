@@ -321,3 +321,30 @@ class FakeCoverFinder:
     @property
     def searched(self) -> list[str]:
         return [value for kind, value in self.calls if kind == "search"]
+
+
+class HangingLLM:
+    """LLMClient whose requests never answer, like a stalled connection. Records how many
+    requests started and how many were cancelled."""
+
+    def __init__(self) -> None:
+        self.started = 0
+        self.cancelled = 0
+
+    async def complete(
+        self,
+        *,
+        system: str,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSpec] = (),
+        max_tokens: int,
+        temperature: float | None = None,
+        tool_choice: ToolChoice | None = None,
+    ) -> LLMResponse:
+        self.started += 1
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
+        raise AssertionError("unreachable")

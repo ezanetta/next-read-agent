@@ -26,4 +26,5 @@ class ApiServices:
     covers: CoverQueue | None = None  # None without OPEN_LIBRARY_CONTACT: placeholders
     presets: dict[str, StoredProfile] = field(default_factory=dict[str, StoredProfile])
     profile_ttl: timedelta = timedelta(days=3)
+    run_deadline_s: float = 180.0  # one recommendation, start to finish (R-003)
     clock: Callable[[], datetime] = utc_now

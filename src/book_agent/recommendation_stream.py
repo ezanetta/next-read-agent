@@ -189,9 +189,11 @@ async def recommendation_events(
     works: WorkResolver | None,
     prompt: AgentPrompt,
     ignore_filters: Collection[FilterName] = (),
+    deadline_s: float | None = None,
 ) -> AsyncGenerator[RecommendationEvent]:
     """Yield the run's events as they happen, ending with `done` or `failed`.
-    `ignore_filters` drops interpreted filters the user removed (a rerun, D-045)."""
+    `ignore_filters` drops interpreted filters the user removed (a rerun, D-045). A run
+    still going after `deadline_s` is cancelled and ends with `failed` (R-003)."""
     queue: asyncio.Queue[RecommendationEvent] = asyncio.Queue()
 
     def sink(event: AgentEvent) -> None:
@@ -213,14 +215,26 @@ async def recommendation_events(
             ignore_filters=ignore_filters,
         )
     )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + deadline_s if deadline_s is not None else None
     try:
         while True:
             getter = asyncio.ensure_future(queue.get())
-            done, _ = await asyncio.wait({getter, task}, return_when=asyncio.FIRST_COMPLETED)
+            timeout = max(0.0, deadline - loop.time()) if deadline is not None else None
+            done, _ = await asyncio.wait(
+                {getter, task}, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
             if getter in done:
                 yield getter.result()
                 continue
             getter.cancel()
+            if task not in done:  # the deadline passed
+                task.cancel()
+                yield FailedEvent(
+                    kind="unavailable",
+                    message=f"the recommendation took longer than {deadline_s:g} s",
+                )
+                return
             break
         while not queue.empty():
             yield queue.get_nowait()
