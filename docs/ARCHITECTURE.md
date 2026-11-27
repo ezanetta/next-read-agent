@@ -75,7 +75,8 @@ The app runs as one replica that scales to zero when idle (D-047). Cover jobs li
 - **While the app is down, pending covers pause.** Nothing is lost: the jobs wait in `cover_jobs`.
 - **On the next start, the worker resumes them** before any request arrives (`CoverQueue.start` in the app's startup). A job a stopped process had claimed comes back when its 2-minute lease expires.
 - **The library view's `covers_pending` is read from the database**, so it's right after a restart too, and the UI keeps polling until it's 0.
-- **Shutdown order:** the worker stops first, then the database pool closes.
+- **Expiry:** reads never return an expired profile, its covers or its jobs, whether or not purge has run. Purge deletes expired profiles at startup and every `PURGE_INTERVAL_S` (an hour), and their covers and jobs go with them (R-011).
+- **Shutdown order:** the purge task and the worker stop first, then the database pool closes.
 
 ## Request flow
 

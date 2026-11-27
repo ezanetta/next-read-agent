@@ -3,6 +3,7 @@
 The CLIs use these factories today; FastAPI dependencies will use the same ones.
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -40,6 +41,7 @@ from book_agent.ports import (
     WorkDescriptions,
     WorkResolver,
 )
+from book_agent.purge import purge_once, purge_periodically
 from book_agent.work_keys import (
     DEFAULT_CACHE_PATH,
     CachedWorkResolver,
@@ -233,7 +235,10 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
     presets = load_presets(SAMPLES_DIR, settings.owner_profile_path, now)
     async with AsyncExitStack() as stack:
         stores = await stack.enter_async_context(open_stores(settings))
-        await stores.profiles.purge_expired(now)
+        await purge_once(stores.profiles, now)
+        purging = asyncio.get_running_loop().create_task(
+            purge_periodically(stores.profiles, interval_s=settings.purge_interval_s, clock=utc_now)
+        )
         http = await stack.enter_async_context(httpx.AsyncClient(timeout=GOOGLE_BOOKS_TIMEOUT_S))
         works: WorkResolver | None = None
         covers: CoverQueue | None = None
@@ -265,7 +270,10 @@ async def api_services(settings: Settings) -> AsyncGenerator[ApiServices]:
                 run_deadline_s=settings.run_deadline_s,
             )
         finally:
-            if covers is not None:  # stop the worker before the stores close
+            # Stop the background work before the stores close.
+            purging.cancel()
+            await asyncio.gather(purging, return_exceptions=True)
+            if covers is not None:
                 await covers.aclose()
 
 

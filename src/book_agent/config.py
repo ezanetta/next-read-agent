@@ -41,6 +41,8 @@ class Settings(BaseSettings):
     db_pool_max_size: int = Field(default=4, ge=1, le=20)
     owner_profile_path: Path | None = None  # cli export-profile's file; never committed
     profile_ttl_days: int = Field(default=3, ge=1, le=30)
+    # Expired profiles are deleted at startup and then this often (R-011).
+    purge_interval_s: float = Field(default=3600.0, ge=60, le=86400)
     frontend_origins: str = ""  # comma-separated origins allowed by CORS
 
     @field_validator("open_library_contact")

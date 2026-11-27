@@ -112,3 +112,28 @@ async def test_concurrent_claims_never_return_the_same_job(stores: Stores) -> No
     claimed = await asyncio.gather(*(stores.jobs.claim(NOW, LEASE) for _ in range(8)))
     ids = [job.id for job in claimed if job is not None]
     assert len(ids) == 5 and len(set(ids)) == 5
+
+
+# --- Expiry (R-011): invisible at once, removed by purge ---------------------------------
+
+
+async def test_an_expired_profiles_jobs_are_never_claimed_or_counted_before_purge(
+    stores: Stores,
+) -> None:
+    await live_profile(stores, "old", expires=NOW + timedelta(hours=1))
+    await stores.jobs.enqueue("old", jobs((0, 0), (1, 0)), NOW)
+    later = NOW + timedelta(hours=1)  # expired, and nothing has purged it
+    assert await stores.jobs.claim(later, LEASE) is None
+    assert await stores.jobs.pending("old", later) == 0
+    assert await stores.jobs.pending("old", NOW) == 2  # still there before expiry
+
+
+async def test_purge_removes_an_expired_profile_with_its_covers_and_jobs(stores: Stores) -> None:
+    await live_profile(stores, "old", expires=NOW + timedelta(hours=1))
+    await stores.profiles.add_cover("old", 0, "https://c/0")
+    await stores.jobs.enqueue("old", jobs((1, 0)), NOW)
+    assert await stores.profiles.purge_expired(NOW + timedelta(hours=1)) == 1
+    await live_profile(stores, "old")  # the same id again: nothing left behind
+    stored = await stores.profiles.get("old", NOW)
+    assert stored is not None and stored.covers == {}
+    assert await stores.jobs.pending("old", NOW) == 0
