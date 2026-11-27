@@ -9,7 +9,7 @@ models' JSON, so the schema is a few tables.
 import sqlite3
 import threading
 from collections.abc import Sequence
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from pydantic import TypeAdapter
@@ -60,7 +60,7 @@ class SqliteStore:
     # --- ProfileStore ---------------------------------------------------------------
 
     async def save(self, stored: StoredProfile) -> None:
-        expires = stored.expires_at.isoformat() if stored.expires_at else None
+        expires = _utc(stored.expires_at) if stored.expires_at else None
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO profiles (id, body, expires_at) VALUES (?, ?, ?)",
@@ -89,7 +89,7 @@ class SqliteStore:
         with self._lock, self._db:
             cursor = self._db.execute(
                 "DELETE FROM profiles WHERE expires_at IS NOT NULL AND expires_at <= ?",
-                (now.isoformat(),),
+                (_utc(now),),
             )
         return cursor.rowcount
 
@@ -110,7 +110,7 @@ class SqliteStore:
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO search_cache (query, body, cached_at) VALUES (?, ?, ?)",
-                (query, _BOOKS.dump_json(list(books)).decode(), now.isoformat()),
+                (query, _BOOKS.dump_json(list(books)).decode(), _utc(now)),
             )
 
     # --- CoverCache -----------------------------------------------------------------
@@ -128,8 +128,13 @@ class SqliteStore:
         with self._lock, self._db:
             self._db.execute(
                 "INSERT OR REPLACE INTO cover_lookups (key, url, checked_at) VALUES (?, ?, ?)",
-                (key, cover.url, cover.checked_at.isoformat()),
+                (key, cover.url, _utc(cover.checked_at)),
             )
+
+
+def _utc(moment: datetime) -> str:
+    """Timestamps are stored as UTC ISO text, so comparing the text compares instants."""
+    return moment.astimezone(UTC).isoformat()
 
 
 class SqliteSearchCache:
