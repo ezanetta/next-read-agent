@@ -1,0 +1,24 @@
+# Local Postgres for development and the Postgres contract tests (D-048).
+# No app container yet: that comes with the deploy (C3).
+#
+#   docker compose up -d postgres
+#   POSTGRES_TEST_URL=postgresql://book_agent:book_agent@127.0.0.1:5433/book_agent uv run pytest tests/contracts tests/test_migrations.py
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_USER: book_agent
+      POSTGRES_PASSWORD: book_agent # local development only
+      POSTGRES_DB: book_agent
+    ports:
+      - "127.0.0.1:5433:5432" # 5433: doesn't clash with a Postgres already on 5432
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U book_agent -d book_agent"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  postgres-data:

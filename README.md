@@ -144,6 +144,23 @@ uv run python -m book_agent.api.openapi --out openapi.json   # schema for the UI
 
 Profiles are temporary (no accounts), search results are cached, and recommendations stream their progress as Server-Sent Events ([D-043](docs/DECISIONS.md)).
 
+The stores use a local SQLite file by default. Set `DATABASE_URL` to use Postgres instead, as production does; migrations are applied on startup ([D-048](docs/DECISIONS.md), [D-049](docs/DECISIONS.md)). For a local Postgres (Docker; no app container yet):
+
+```bash
+docker compose up -d postgres                       # Postgres 17 on 127.0.0.1:5433
+DATABASE_URL=postgresql://book_agent:book_agent@127.0.0.1:5433/book_agent uv run fastapi dev src/book_agent/main.py
+```
+
+### Postgres contract tests
+
+Every store adapter must pass the same contract tests (`tests/contracts/`). SQLite runs in every `uv run pytest`; the Postgres cases, and the check that both schemas match, run only when `POSTGRES_TEST_URL` is set, and are skipped with that reason otherwise. Each test uses its own schema, dropped afterwards, so development data is never touched.
+
+```bash
+docker compose up -d postgres
+POSTGRES_TEST_URL=postgresql://book_agent:book_agent@127.0.0.1:5433/book_agent uv run pytest tests/contracts tests/test_migrations.py tests/test_wiring_stores.py
+docker compose down                                 # add -v to delete the data volume
+```
+
 ### Running the UI
 
 The web UI (`web/`: Vite, React, TypeScript, Tailwind) talks to the API through a dev proxy. Run the API in one terminal and the UI in another; Node 24 or newer.

@@ -62,7 +62,8 @@ flowchart TB
 | Acceptance policy | `domain/acceptance.py` | Decides which validation results may reach the reader. It rejects violations and unverifiable books, and stops on catalog outages the model can't fix (D-014). |
 | LLM adapters | `llm/gemini.py`, `llm/retrying.py` | Gemini translation in pure functions, so it can be tested without network. One retry on 5xx and network errors, in a wrapper (D-027, D-030). The Claude adapter is planned. |
 | Library retrieval | `library_enrichment.py`, `library_retrieval.py`, `embedding_index.py`, `llm/gemini_embeddings.py`, `domain/library.py` | Describes the read books once (Open Library, then Google Books), embeds them, and for each request retrieves the 8 most related ones for agent_v4's prompt. The index is generic, so a catalog can reuse it (D-040, D-041). |
-| Demo API | `api/` (app, routes, schemas), `demo_profiles.py`, `demo_search.py`, `recommendation_stream.py`, `adapters/sqlite_store.py` | Temporary profiles (manual list, Goodreads upload, samples, owner), cached book search, a library view, and a recommendation streamed as Server-Sent Events from the agent's own trace. SQLite behind `ProfileStore` and `SearchCache` (D-043). |
+| Demo API | `api/` (app, routes, schemas), `demo_profiles.py`, `demo_search.py`, `recommendation_stream.py` | Temporary profiles (manual list, Goodreads upload, samples, owner), cached book search, a library view, and a recommendation streamed as Server-Sent Events from the agent's own trace (D-043). |
+| Stores | `adapters/postgres_store.py`, `adapters/sqlite_store.py`, `migrations/` | `ProfileStore`, `SearchCache` and `CoverCache` are async ports with two adapters: Postgres with a psycopg async pool (production, `DATABASE_URL`) and SQLite (local and tests). Numbered SQL migrations per dialect, covers in their own table (D-048, D-049, R-008). |
 | Covers | `covers.py`, `domain/covers.py`, `OpenLibraryCovers` | One server-wide queue resolves books to Open Library cover ids, one request a second, read books first: the edition's cover by ISBN, else search by title and author preferring a matching edition title. A cache shared by every profile; never cover URLs by ISBN. The owner export adds a Google Books fallback (D-046, F-023). |
 | Web UI | `web/` (Vite, React, TypeScript, Tailwind) | Choose a library, see it, ask with live progress, read the results. A typed client is generated from the API's OpenAPI schema; the recommendation stream is reduced into steps by a pure reducer (D-045). |
 | Eval harness | `evals/` | Frozen case sets, a resumable runner that records but never scores, reports computed from the records, an LLM judge with a calibration workflow, and a parser eval (D-021 to D-039), plus library citation diversity (D-041). |
@@ -129,6 +130,7 @@ sequenceDiagram
 ## Testing
 
 - Every module has tests. Fakes implement the Protocols.
+- **Contract tests** (`tests/contracts/`): one suite per store port that every adapter must pass, SQLite always and Postgres when `POSTGRES_TEST_URL` is set (D-048).
 - Tests that hit real APIs are marked `@pytest.mark.live` and excluded by default (`addopts = -m "not live"`).
 - Recorded Google Books responses (`tests/fixtures/google_books/`) reproduce real retrieval failures offline (F-007, F-012).
 - CI runs ruff, the format check, pyright (strict) and pytest on every push and pull request (`.github/workflows/ci.yml`).
