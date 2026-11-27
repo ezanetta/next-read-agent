@@ -1,5 +1,6 @@
 """What the API's routes need, built once by wiring (or by tests, with fakes)."""
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -28,3 +29,5 @@ class ApiServices:
     profile_ttl: timedelta = timedelta(days=3)
     run_deadline_s: float = 180.0  # one recommendation, start to finish (R-003)
     clock: Callable[[], datetime] = utc_now
+    # Set when the server is shutting down: open streams end with `failed` (R-004).
+    draining: asyncio.Event = field(default_factory=asyncio.Event)

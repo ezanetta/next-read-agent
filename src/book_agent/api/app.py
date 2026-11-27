@@ -14,6 +14,7 @@ from pydantic import TypeAdapter
 
 from book_agent.api.routes import books, profiles, recommendations
 from book_agent.api.services import ApiServices
+from book_agent.api.shutdown import drain_on_signals
 from book_agent.demo_profiles import ProfileError
 from book_agent.recommendation_stream import RecommendationEvent
 
@@ -36,7 +37,11 @@ def create_app(
             return
         async with services_factory() as built:
             app.state.services = built
-            yield
+            restore = drain_on_signals(built.draining)
+            try:
+                yield
+            finally:
+                restore()
 
     app = FastAPI(
         title="Book Recommendation Agent",

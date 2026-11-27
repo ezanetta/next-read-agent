@@ -66,6 +66,7 @@ async def stream_recommendation(
         prompt=services.prompt,
         ignore_filters=body.ignore_filters,
         deadline_s=services.run_deadline_s,
+        stop=services.draining,
     )
     return StreamingResponse(
         sse(events),
